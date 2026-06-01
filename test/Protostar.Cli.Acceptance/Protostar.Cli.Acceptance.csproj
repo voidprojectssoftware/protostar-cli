@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <!-- Test project: never packed, never shipped. -->
+    <IsPackable>false</IsPackable>
+    <IsPublishable>false</IsPublishable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+    <!-- Reqnroll.xUnit pins xUnit v2 (xunit.core 2.8.1); use the matching v2 runner. -->
+    <PackageReference Include="Reqnroll.xUnit" Version="3.3.4" />
+    <PackageReference Include="xunit" Version="2.9.3" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />
+    <!-- Drives the real built binary as a child process. -->
+    <PackageReference Include="CliWrap" Version="3.10.1" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Build the CLI before the tests so its binary is available for the black-box runner. -->
+    <ProjectReference Include="..\..\src\Protostar.Cli\Protostar.Cli.csproj" />
+  </ItemGroup>
+
+</Project>
