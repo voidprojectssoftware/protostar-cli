@@ -1,0 +1,67 @@
+name: release-please
+
+# Release automation. On every push to main, release-please maintains a "Release PR" that bumps the
+# version (from Conventional Commits) and updates the changelog. Merging that Release PR creates the
+# vX.Y.Z tag and a GitHub Release; the build job below then attaches the self-contained binaries.
+# MinVer reads the tag release-please creates and stamps it into the binaries — the two compose.
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+
+jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    outputs:
+      release_created: ${{ steps.rp.outputs.release_created }}
+      tag_name: ${{ steps.rp.outputs.tag_name }}
+    steps:
+      # Manifest-driven config (release-please-config.json + .release-please-manifest.json).
+      # Uses the default GITHUB_TOKEN: the build job runs in this same workflow run (gated on
+      # release_created), so the "GITHUB_TOKEN does not trigger downstream workflows" limitation
+      # does not apply and no PAT is needed.
+      - uses: googleapis/release-please-action@v4
+        id: rp
+
+  build:
+    needs: release-please
+    if: ${{ needs.release-please.outputs.release_created }}
+    strategy:
+      matrix:
+        include:
+          - { rid: win-x64,   os: windows-latest, ext: .exe }
+          - { rid: win-arm64, os: windows-latest, ext: .exe }
+          - { rid: linux-x64, os: ubuntu-latest,  ext: '' }
+          - { rid: osx-arm64, os: macos-latest,   ext: '' }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0          # MinVer needs full history + the tag release-please just created.
+
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Publish
+        run: >
+          dotnet publish src/Protostar.Cli/Protostar.Cli.csproj
+          -c Release -r ${{ matrix.rid }} --self-contained true
+          -p:PublishSingleFile=true -p:EnableCompressionInSingleFile=true
+          -o publish
+
+      # Raw, uncompressed binary named exactly as scripts/install.{ps1,sh} expect to fetch from
+      # releases/latest/download/ : protostar-<rid>[.exe].
+      - name: Stage asset
+        shell: bash
+        run: mv "publish/protostar${{ matrix.ext }}" "protostar-${{ matrix.rid }}${{ matrix.ext }}"
+
+      - name: Upload asset to release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "${{ needs.release-please.outputs.tag_name }}" "protostar-${{ matrix.rid }}${{ matrix.ext }}" --clobber
