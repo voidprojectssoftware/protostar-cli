@@ -13,6 +13,10 @@ internal sealed class UninstallCommand : Command<UninstallCommand.Settings>
         [CommandOption("-d|--dir <DIR>")]
         [Description("Install directory to remove from. Defaults to the per-user location.")]
         public string? Dir { get; init; }
+
+        [CommandOption("--no-modify-path")]
+        [Description("Do not remove the install directory from PATH.")]
+        public bool NoModifyPath { get; init; }
     }
 
     protected override int Execute(CommandContext context, Settings settings, CancellationToken cancellation)
@@ -39,7 +43,8 @@ internal sealed class UninstallCommand : Command<UninstallCommand.Settings>
             return 1;
         }
 
-        PathManager.RemoveFromPath(dir);
+        if (!settings.NoModifyPath)
+            PathManager.RemoveFromPath(dir);
         AnsiConsole.MarkupLine($"Removed [aqua]protostar[/] from [grey]{Markup.Escape(dir)}[/].");
         return 0;
     }
