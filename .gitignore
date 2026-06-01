@@ -5,6 +5,10 @@ obj/
 [Rr]elease/
 publish/
 artifacts/
+out/
+
+# Local dev scratch (e.g. throwaway harness via PROTOSTAR_HARNESS_ROOT, test installs)
+.dev/
 
 # Native AOT / native build intermediates
 *.ilk
