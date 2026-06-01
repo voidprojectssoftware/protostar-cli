@@ -4,11 +4,20 @@
 #
 #   curl -fsSL https://raw.githubusercontent.com/voidprojectssoftware/protostar/main/scripts/install.sh | sh
 #
-# Any extra args are forwarded to `protostar install` (e.g. --dir, --no-modify-path) when the
+# Pass --channel stable|edge (default stable) as the first argument to pick the release track:
+#   stable = the latest tagged release; edge = the rolling prerelease built from the tip of main.
+# Any other args are forwarded to `protostar install` (e.g. --dir, --no-modify-path) when the
 # script is run directly (not via the piped one-liner).
 set -e
 
 repo="voidprojectssoftware/protostar"
+
+# Channel selector (first arg). Everything else is forwarded to `protostar install`.
+channel="stable"
+case "$1" in
+  --channel) channel="$2"; shift 2 ;;
+  --channel=*) channel="${1#*=}"; shift ;;
+esac
 
 os=$(uname -s)
 arch=$(uname -m)
@@ -26,7 +35,11 @@ case "$arch" in
 esac
 
 asset="protostar-${rid_os}-${rid_arch}"
-url="https://github.com/${repo}/releases/latest/download/${asset}"
+case "$channel" in
+  stable) url="https://github.com/${repo}/releases/latest/download/${asset}" ;;
+  edge)   url="https://github.com/${repo}/releases/download/edge/${asset}" ;;
+  *) echo "Unknown channel: $channel (use 'stable' or 'edge')" >&2; exit 1 ;;
+esac
 
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
