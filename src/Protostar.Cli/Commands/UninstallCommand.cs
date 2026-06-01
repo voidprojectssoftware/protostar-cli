@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using Protostar.Cli.Hooks;
 using Protostar.Cli.Install;
 using Spectre.Console;
 using Spectre.Console.Cli;
@@ -17,12 +18,32 @@ internal sealed class UninstallCommand : Command<UninstallCommand.Settings>
         [CommandOption("--no-modify-path")]
         [Description("Do not remove the install directory from PATH.")]
         public bool NoModifyPath { get; init; }
+
+        [CommandOption("--no-hooks")]
+        [Description("Do not remove capture hooks from detected harnesses.")]
+        public bool NoHooks { get; init; }
+
+        [CommandOption("--harness-home <DIR>")]
+        [Description("Override the harness config root when removing hooks.")]
+        public string? HarnessHome { get; init; }
     }
 
     protected override int Execute(CommandContext context, Settings settings, CancellationToken cancellation)
     {
         var dir = settings.Dir ?? InstallLocations.DefaultDir();
         var dest = Path.Combine(dir, InstallLocations.ExecutableName);
+
+        // Remove the capture hooks first: they point at the binary we are about to delete, so
+        // leaving them would dangle. Opt out with --no-hooks.
+        if (!settings.NoHooks)
+        {
+            new HookInstallService().Uninstall(new HookInstallService.Options
+            {
+                RootOverride = settings.HarnessHome,
+                All = true,
+                NonInteractive = true,
+            });
+        }
 
         if (!File.Exists(dest))
         {
@@ -32,10 +53,22 @@ internal sealed class UninstallCommand : Command<UninstallCommand.Settings>
 
         try
         {
-            File.Delete(dest);
-            // Remove the directory only if we created it and it is now empty.
-            if (Directory.Exists(dir) && !Directory.EnumerateFileSystemEntries(dir).Any())
-                Directory.Delete(dir);
+            if (OwnsDirectory(dir))
+            {
+                // A protostar-dedicated directory: clear it entirely (a multi-file install left its
+                // .dll and runtime config here too).
+                Directory.Delete(dir, recursive: true);
+            }
+            else
+            {
+                // A shared or custom directory: remove only protostar's own files so we never delete
+                // unrelated binaries that happen to live alongside it.
+                foreach (var file in OwnFiles(dir))
+                    if (File.Exists(file))
+                        File.Delete(file);
+                if (Directory.Exists(dir) && !Directory.EnumerateFileSystemEntries(dir).Any())
+                    Directory.Delete(dir);
+            }
         }
         catch (Exception ex)
         {
@@ -47,5 +80,25 @@ internal sealed class UninstallCommand : Command<UninstallCommand.Settings>
             PathManager.RemoveFromPath(dir);
         AnsiConsole.MarkupLine($"Removed [aqua]protostar[/] from [grey]{Markup.Escape(dir)}[/].");
         return 0;
+    }
+
+    // True when the directory is protostar's own (the default location, or a dir literally named
+    // "protostar"), so clearing it wholesale is safe.
+    private static bool OwnsDirectory(string dir)
+    {
+        var comparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+        if (string.Equals(Path.GetFullPath(dir), Path.GetFullPath(InstallLocations.DefaultDir()), comparison))
+            return true;
+        var leaf = new DirectoryInfo(dir).Name;
+        return string.Equals(leaf, "protostar", comparison);
+    }
+
+    // The files a protostar install owns: the launcher plus the framework-dependent companions.
+    private static IEnumerable<string> OwnFiles(string dir)
+    {
+        var name = Path.GetFileNameWithoutExtension(InstallLocations.ExecutableName);
+        yield return Path.Combine(dir, InstallLocations.ExecutableName);
+        foreach (var ext in new[] { ".dll", ".deps.json", ".runtimeconfig.json", ".pdb" })
+            yield return Path.Combine(dir, name + ext);
     }
 }
