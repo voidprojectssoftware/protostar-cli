@@ -1,0 +1,83 @@
+name: edge
+
+# Rolling prerelease channel. On every code change to main, build the tip of main and replace the
+# single `edge` prerelease (a fixed, moving tag). The version comes for free from MinVer
+# (e.g. 0.1.0-alpha.0.N) — the `edge` tag does not start with `v`, so MinVer ignores it. Stable
+# releases are handled separately by release-please. Install the edge build with:
+#   scripts/install.sh --channel edge   (or install.ps1 -Channel edge)
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'src/**'
+      - '**/*.csproj'
+      - 'Directory.Build.props'
+      - '.github/workflows/edge.yml'
+
+permissions:
+  contents: write
+
+# Only the newest edge run matters; cancel older in-flight runs so they don't fight over the release.
+concurrency:
+  group: edge
+  cancel-in-progress: true
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - { rid: win-x64,   os: windows-latest, ext: .exe }
+          - { rid: win-arm64, os: windows-latest, ext: .exe }
+          - { rid: linux-x64, os: ubuntu-latest,  ext: '' }
+          - { rid: osx-arm64, os: macos-latest,   ext: '' }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0          # MinVer needs full history to compute the prerelease version.
+
+      - uses: actions/setup-dotnet@9a946fdbd5fb07b82b2f5a4466058b876ab72bb2 # v5
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Publish
+        run: >
+          dotnet publish src/Protostar.Cli/Protostar.Cli.csproj
+          -c Release -r ${{ matrix.rid }} --self-contained true
+          -p:PublishSingleFile=true -p:EnableCompressionInSingleFile=true
+          -o publish
+
+      # Same raw-binary asset names as the stable release, so install.{ps1,sh} fetch them identically.
+      - name: Stage asset
+        shell: bash
+        run: mv "publish/protostar${{ matrix.ext }}" "protostar-${{ matrix.rid }}${{ matrix.ext }}"
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: protostar-${{ matrix.rid }}
+          path: protostar-${{ matrix.rid }}${{ matrix.ext }}
+
+  edge-release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      # Re-point the moving `edge` tag at this commit and replace its prerelease assets. Delete +
+      # recreate keeps the download URLs stable (releases/download/edge/<asset>) while moving the tag.
+      - name: Publish edge release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          gh release delete edge --cleanup-tag --yes || true
+          gh release create edge dist/* \
+            --prerelease \
+            --target "$GITHUB_SHA" \
+            --title "Edge (latest main)" \
+            --notes "Rolling prerelease built from the tip of \`main\` (commit ${GITHUB_SHA:0:7}). Run \`protostar --version\` for the exact version. Install with \`--channel edge\`."

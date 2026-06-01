@@ -10,9 +10,17 @@
     irm https://raw.githubusercontent.com/voidprojectssoftware/protostar/main/scripts/install.ps1 | iex
 
   Or download and run directly to pass options (e.g. -Dir), which are forwarded to `protostar install`.
+
+.PARAMETER Channel
+  Release track: `stable` (default, the latest tagged release) or `edge` (the rolling prerelease
+  built from the tip of main).
 #>
 [CmdletBinding()]
-param([Parameter(ValueFromRemainingArguments = $true)] [string[]]$InstallArgs)
+param(
+    [ValidateSet('stable', 'edge')]
+    [string]$Channel = 'stable',
+    [Parameter(ValueFromRemainingArguments = $true)] [string[]]$InstallArgs
+)
 
 $ErrorActionPreference = 'Stop'
 $repo = 'voidprojectssoftware/protostar'
@@ -25,7 +33,8 @@ switch ($arch) {
 }
 
 $asset = "protostar-$rid.exe"
-$url = "https://github.com/$repo/releases/latest/download/$asset"
+$base = if ($Channel -eq 'edge') { "https://github.com/$repo/releases/download/edge" } else { "https://github.com/$repo/releases/latest/download" }
+$url = "$base/$asset"
 
 $tmp = Join-Path ([System.IO.Path]::GetTempPath()) ("protostar-download-" + [System.IO.Path]::GetRandomFileName())
 New-Item -ItemType Directory -Force -Path $tmp | Out-Null
