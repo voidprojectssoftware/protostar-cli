@@ -14,15 +14,24 @@ Built incrementally, one ticket at a time (Jira project `PROT`). The first compo
 
 ## Install the CLI
 
-Requires the .NET 10 SDK to build. From the repo root:
+The CLI is a self-contained binary — no .NET runtime needed to run it. Install the latest release
+with a one-liner:
+
+**Windows (PowerShell)**
 
 ```powershell
-./install.ps1
+irm https://raw.githubusercontent.com/voidprojectssoftware/protostar/main/scripts/install.ps1 | iex
 ```
 
-This publishes a self-contained, single-file `protostar.exe`, installs it to
-`%LOCALAPPDATA%\Programs\protostar`, and adds that directory to your user PATH. Restart your shell,
-then:
+**Linux / macOS**
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/voidprojectssoftware/protostar/main/scripts/install.sh | sh
+```
+
+These download the right binary from the latest [GitHub release](https://github.com/voidprojectssoftware/protostar/releases)
+and run `protostar install`, which places `protostar` in a per-user directory and adds it to PATH.
+Restart your shell, then:
 
 ```console
 $ protostar
@@ -35,17 +44,34 @@ $ protostar --version
 0.1.0
 ```
 
-The installer takes `-Rid` (e.g. `win-arm64`, `linux-x64`), `-Configuration`, and `-InstallDir`.
-The published binary needs no .NET runtime on the target machine.
+> Requires a published release. (The CI that builds and publishes release binaries is upcoming work.)
+
+### Already have the binary?
+
+If you downloaded `protostar` directly, it installs itself:
+
+```console
+$ protostar install              # copy into a per-user dir + add to PATH
+$ protostar install --dir <DIR>  # custom location
+$ protostar install --no-modify-path
+$ protostar uninstall            # remove it
+```
 
 > Startup is currently JIT (self-contained, untrimmed); making the binary lean and fast is tracked
 > as a separate performance-tuning unit of work.
 
 ## Build from source
 
+Requires the .NET 10 SDK.
+
 ```bash
 dotnet build                              # build the solution
 dotnet run --project src/Protostar.Cli    # run the CLI in place
+
+# produce a self-contained binary and self-install it:
+dotnet publish src/Protostar.Cli -c Release -r win-x64 --self-contained true \
+  -p:PublishSingleFile=true -o out
+./out/protostar install
 ```
 
 ## Repository layout
@@ -53,7 +79,9 @@ dotnet run --project src/Protostar.Cli    # run the CLI in place
 ```text
 protostar/
 ├─ src/
-│  └─ Protostar.Cli/    # the `protostar` CLI (Spectre.Console.Cli)
-├─ install.ps1          # self-contained build + install
+│  └─ Protostar.Cli/    # the `protostar` CLI (Spectre.Console.Cli); `install`/`uninstall` commands
+├─ scripts/
+│  ├─ install.ps1       # curl-able release installer (Windows)
+│  └─ install.sh        # curl-able release installer (Linux/macOS)
 └─ protostar.sln
 ```
