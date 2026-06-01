@@ -8,6 +8,9 @@
   -->
   <PropertyGroup>
     <MinVerTagPrefix>v</MinVerTagPrefix>
+    <!-- Before the first v0.1.0 tag exists, floor untagged (edge) builds at 0.1.0-alpha.0.N instead
+         of 0.0.0-alpha, so the edge channel matches the upcoming first stable release. -->
+    <MinVerMinimumMajorMinor>0.1</MinVerMinimumMajorMinor>
   </PropertyGroup>
 
   <ItemGroup>
