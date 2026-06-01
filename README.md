@@ -44,7 +44,9 @@ $ protostar --version
 0.1.0
 ```
 
-> Requires a published release. (The CI that builds and publishes release binaries is upcoming work.)
+> The version is derived from git tags at build time (via MinVer), not hardcoded. A binary built
+> from a tagged commit reports that tag (e.g. `0.1.0`); a local build from an untagged commit reports
+> a pre-release like `0.1.0-alpha.0.4`. See [Releasing](#releasing).
 
 ### Already have the binary?
 
@@ -74,14 +76,45 @@ dotnet publish src/Protostar.Cli -c Release -r win-x64 --self-contained true \
 ./out/protostar install
 ```
 
+## Releasing
+
+Releases are automated with [release-please](https://github.com/googleapis/release-please). You never
+tag by hand — you just write [Conventional Commits](https://www.conventionalcommits.org) and merge a
+Release PR.
+
+**The version flows like this:** Conventional Commit messages (`feat:`, `fix:`, `feat!:` for
+breaking) tell release-please how to bump the version. release-please keeps an open "Release PR" that
+bumps `version.txt` + `CHANGELOG.md`. Merging that Release PR creates the `vMAJOR.MINOR.PATCH` tag and
+a GitHub Release; [MinVer](https://github.com/adamralph/minver) reads that tag at build time and
+stamps it into the binaries, which the workflow attaches to the release.
+
+**Day-to-day:**
+
+1. Open a PR for your change. Give it a [Conventional Commit](https://www.conventionalcommits.org)
+   title (e.g. `feat: add sync command`, `fix: handle missing config`).
+2. **Squash-merge** it into `main`. The squash commit takes the PR title, so the title is what
+   release-please reads — keep it conventional.
+3. release-please opens or updates a **Release PR** ("chore: release X.Y.Z"). Review it.
+4. **Merge the Release PR** when you want to ship. That tags `main`, creates the GitHub Release, and
+   the `release-please` workflow builds and attaches the `win-x64`, `win-arm64`, `linux-x64`, and
+   `osx-arm64` binaries. The released binaries self-report the version via `protostar --version`.
+
+> Tags are created by release-please on `main`, so they are always reachable through history — this
+> is what makes MinVer reliable regardless of squash/rebase merges. Do not tag manually.
+
 ## Repository layout
 
 ```text
 protostar/
 ├─ src/
-│  └─ Protostar.Cli/    # the `protostar` CLI (Spectre.Console.Cli); `install`/`uninstall` commands
+│  └─ Protostar.Cli/       # the `protostar` CLI (Spectre.Console.Cli); `install`/`uninstall` commands
 ├─ scripts/
-│  ├─ install.ps1       # curl-able release installer (Windows)
-│  └─ install.sh        # curl-able release installer (Linux/macOS)
+│  ├─ install.ps1          # curl-able release installer (Windows)
+│  └─ install.sh           # curl-able release installer (Linux/macOS)
+├─ .github/workflows/
+│  └─ release-please.yml   # release-please: Release PR -> tag -> build + attach binaries
+├─ release-please-config.json      # release-please configuration
+├─ .release-please-manifest.json   # release-please version tracker
+├─ Directory.Build.props   # MinVer git-tag versioning
 └─ protostar.sln
 ```
