@@ -127,7 +127,7 @@ internal sealed class LoginCommand : Command<LoginCommand.Settings>
         var info = await client.GetUserInfoAsync(token.AccessToken!, cancellation);
         var login = info?.PreferredUsername ?? info?.GitHubLogin;
 
-        new TokenStore().Save(new StoredToken
+        var saved = new TokenStore().Save(new StoredToken
         {
             Registry = RegistryEndpoint.CredentialKey(registry),
             AccessToken = token.AccessToken!,
@@ -137,6 +137,12 @@ internal sealed class LoginCommand : Command<LoginCommand.Settings>
             Login = login,
             Name = info?.Name,
         });
+
+        if (!saved)
+        {
+            AnsiConsole.MarkupLine("[red]Signed in, but could not save the session to the OS credential store.[/]");
+            return 1;
+        }
 
         var who = login is { Length: > 0 } ? $" as [aqua]{Markup.Escape(login)}[/]" : string.Empty;
         AnsiConsole.MarkupLine($"[green]Signed in[/] to [grey]{Markup.Escape(registry.GetLeftPart(UriPartial.Authority))}[/]{who}.");

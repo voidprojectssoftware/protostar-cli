@@ -6,30 +6,62 @@ namespace Protostar.Cli.Auth;
 /// <summary>
 /// Reads and writes <see cref="StoredToken"/> sessions in the OS credential store (Windows
 /// Credential Manager / macOS Keychain / Linux Secret Service) via Devlooped.CredentialManager.
+/// Degrades gracefully when no backend is available (e.g. a headless Linux box with no Secret
+/// Service): reads report "no session" rather than throwing, and <see cref="Save"/> returns false.
 /// </summary>
 internal sealed class TokenStore
 {
-    private readonly ICredentialStore _store = CredentialManager.Create(AuthConstants.CredentialService);
+    private readonly Lazy<ICredentialStore?> _store = new(CreateStore);
 
-    public void Save(StoredToken token)
+    private static ICredentialStore? CreateStore()
     {
-        var json = JsonSerializer.Serialize(token, AuthJson.Default);
-        _store.AddOrUpdate(
-            RegistryEndpoint.CredentialKey(new Uri(token.Registry)),
-            AuthConstants.CredentialAccount,
-            json);
+        try { return CredentialManager.Create(AuthConstants.CredentialService); }
+        catch { return null; }
+    }
+
+    /// <summary>Persists the session. Returns false if the credential backend is unavailable.</summary>
+    public bool Save(StoredToken token)
+    {
+        if (_store.Value is not { } store)
+            return false;
+
+        try
+        {
+            store.AddOrUpdate(
+                RegistryEndpoint.CredentialKey(new Uri(token.Registry)),
+                AuthConstants.CredentialAccount,
+                JsonSerializer.Serialize(token, AuthJson.Default));
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     public StoredToken? Load(Uri registry)
     {
-        var secret = _store.Get(RegistryEndpoint.CredentialKey(registry), AuthConstants.CredentialAccount)?.Password;
-        if (string.IsNullOrEmpty(secret))
+        if (_store.Value is not { } store)
             return null;
 
-        try { return JsonSerializer.Deserialize<StoredToken>(secret, AuthJson.Default); }
-        catch (JsonException) { return null; }
+        try
+        {
+            var secret = store.Get(RegistryEndpoint.CredentialKey(registry), AuthConstants.CredentialAccount)?.Password;
+            return string.IsNullOrEmpty(secret) ? null : JsonSerializer.Deserialize<StoredToken>(secret, AuthJson.Default);
+        }
+        catch
+        {
+            // Backend unavailable or unreadable payload: treat as no stored session.
+            return null;
+        }
     }
 
-    public void Delete(Uri registry) =>
-        _store.Remove(RegistryEndpoint.CredentialKey(registry), AuthConstants.CredentialAccount);
+    public void Delete(Uri registry)
+    {
+        if (_store.Value is not { } store)
+            return;
+
+        try { store.Remove(RegistryEndpoint.CredentialKey(registry), AuthConstants.CredentialAccount); }
+        catch { /* backend unavailable or nothing to remove */ }
+    }
 }
