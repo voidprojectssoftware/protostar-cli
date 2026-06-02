@@ -1,5 +1,6 @@
 using Protostar.Cli;
 using Protostar.Cli.Commands;
+using Protostar.Cli.Commands.Auth;
 using Spectre.Console.Cli;
 
 // Spectre.Console.Cli command app. `protostar` runs DefaultCommand; `--version`/`-v` and `--help`
@@ -19,6 +20,17 @@ app.Configure(config =>
     config.AddCommand<CaptureCommand>("capture")
         .WithDescription("Capture a harness hook event (invoked by installed hooks).")
         .IsHidden();
+
+    config.AddBranch("auth", auth =>
+    {
+        auth.SetDescription("Authenticate to the protostar registry.");
+        auth.AddCommand<LoginCommand>("login")
+            .WithDescription("Sign in to the registry via your browser and store the session.");
+        auth.AddCommand<LogoutCommand>("logout")
+            .WithDescription("Remove the stored session for the registry.");
+        auth.AddCommand<StatusCommand>("status")
+            .WithDescription("Show whether you are signed in to the registry.");
+    });
 });
 
 return app.Run(args);
