@@ -10,7 +10,7 @@ namespace Protostar.Cli.Commands.Auth;
 /// flow with PKCE over a loopback redirect, then stores the resulting tokens in the OS credential
 /// store. The actual sign-in happens in the browser (the registry federates it to GitHub).
 /// </summary>
-internal sealed class LoginCommand : Command<LoginCommand.Settings>
+internal sealed class LoginCommand : AsyncCommand<LoginCommand.Settings>
 {
     public sealed class Settings : AuthSettings
     {
@@ -27,8 +27,8 @@ internal sealed class LoginCommand : Command<LoginCommand.Settings>
         public int TimeoutSeconds { get; init; } = 300;
     }
 
-    protected override int Execute(CommandContext context, Settings settings, CancellationToken cancellation) =>
-        RunAsync(settings, cancellation).GetAwaiter().GetResult();
+    protected override Task<int> ExecuteAsync(CommandContext context, Settings settings, CancellationToken cancellation) =>
+        RunAsync(settings, cancellation);
 
     private static async Task<int> RunAsync(Settings settings, CancellationToken cancellation)
     {

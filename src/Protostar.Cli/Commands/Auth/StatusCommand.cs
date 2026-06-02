@@ -9,12 +9,12 @@ namespace Protostar.Cli.Commands.Auth;
 /// if reachable, verifies it by calling the userinfo endpoint (refreshing an expired access token
 /// when possible). Works offline: with no stored session it simply reports "Not logged in".
 /// </summary>
-internal sealed class StatusCommand : Command<StatusCommand.Settings>
+internal sealed class StatusCommand : AsyncCommand<StatusCommand.Settings>
 {
     public sealed class Settings : AuthSettings;
 
-    protected override int Execute(CommandContext context, Settings settings, CancellationToken cancellation) =>
-        RunAsync(settings, cancellation).GetAwaiter().GetResult();
+    protected override Task<int> ExecuteAsync(CommandContext context, Settings settings, CancellationToken cancellation) =>
+        RunAsync(settings, cancellation);
 
     private static async Task<int> RunAsync(Settings settings, CancellationToken cancellation)
     {
