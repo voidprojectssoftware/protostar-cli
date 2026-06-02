@@ -108,6 +108,9 @@ variable. Use `--no-browser` on a headless machine to print the sign-in URL inst
 browser. The CLI checks API compatibility with the registry on connect and refuses to proceed
 against an unsupported major version.
 
+Sessions are stored in `~/.protostar/credentials.json` (owner-only permissions: `0600` on
+Unix, the per-user profile ACL on Windows). Override the directory with `PROTOSTAR_CONFIG_DIR`.
+
 ## Build from source
 
 Requires the .NET 10 SDK.

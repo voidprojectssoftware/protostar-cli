@@ -1,67 +1,44 @@
-using System.Text.Json;
-using GitCredentialManager;
-
 namespace Protostar.Cli.Auth;
 
 /// <summary>
-/// Reads and writes <see cref="StoredToken"/> sessions in the OS credential store (Windows
-/// Credential Manager / macOS Keychain / Linux Secret Service) via Devlooped.CredentialManager.
-/// Degrades gracefully when no backend is available (e.g. a headless Linux box with no Secret
-/// Service): reads report "no session" rather than throwing, and <see cref="Save"/> returns false.
+/// Reads and writes <see cref="StoredToken"/> sessions in the on-disk <see cref="CredentialFile"/>
+/// (<c>~/.protostar/credentials.json</c>), one per registry. Degrades gracefully when the file
+/// can't be written: <see cref="Save"/> returns false rather than throwing.
 /// </summary>
 internal sealed class TokenStore
 {
-    private readonly Lazy<ICredentialStore?> _store = new(CreateStore);
-
-    private static ICredentialStore? CreateStore()
-    {
-        try { return CredentialManager.Create(AuthConstants.CredentialService); }
-        catch { return null; }
-    }
-
-    /// <summary>Persists the session. Returns false if the credential backend is unavailable.</summary>
+    /// <summary>Persists the session. Returns false if the store can't be written.</summary>
     public bool Save(StoredToken token)
     {
-        if (_store.Value is not { } store)
-            return false;
-
         try
         {
-            store.AddOrUpdate(
-                RegistryEndpoint.CredentialKey(new Uri(token.Registry)),
-                AuthConstants.CredentialAccount,
-                JsonSerializer.Serialize(token, AuthJson.Default));
+            var file = CredentialFile.Read();
+            file.Registries[Key(new Uri(token.Registry))] = token;
+            file.Write();
             return true;
         }
-        catch
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException)
         {
             return false;
         }
     }
 
-    public StoredToken? Load(Uri registry)
-    {
-        if (_store.Value is not { } store)
-            return null;
-
-        try
-        {
-            var secret = store.Get(RegistryEndpoint.CredentialKey(registry), AuthConstants.CredentialAccount)?.Password;
-            return string.IsNullOrEmpty(secret) ? null : JsonSerializer.Deserialize<StoredToken>(secret, AuthJson.Default);
-        }
-        catch
-        {
-            // Backend unavailable or unreadable payload: treat as no stored session.
-            return null;
-        }
-    }
+    public StoredToken? Load(Uri registry) =>
+        CredentialFile.Read().Registries.TryGetValue(Key(registry), out var token) ? token : null;
 
     public void Delete(Uri registry)
     {
-        if (_store.Value is not { } store)
-            return;
-
-        try { store.Remove(RegistryEndpoint.CredentialKey(registry), AuthConstants.CredentialAccount); }
-        catch { /* backend unavailable or nothing to remove */ }
+        try
+        {
+            var file = CredentialFile.Read();
+            if (file.Registries.Remove(Key(registry)))
+                file.Write();
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // Nothing persisted / unwritable: treat as already gone.
+        }
     }
+
+    private static string Key(Uri registry) => RegistryEndpoint.CredentialKey(registry);
 }
