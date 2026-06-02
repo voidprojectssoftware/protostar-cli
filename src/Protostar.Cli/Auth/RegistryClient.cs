@@ -19,7 +19,7 @@ internal sealed class RegistryClient(Uri registry) : IDisposable
     {
         using var response = await _http.GetAsync("/v1/meta", cancellationToken);
         return response.IsSuccessStatusCode
-            ? await response.Content.ReadFromJsonAsync<RegistryMeta>(AuthJson.Default, cancellationToken)
+            ? await ReadJsonAsync<RegistryMeta>(response, cancellationToken)
             : null;
     }
 
@@ -47,7 +47,7 @@ internal sealed class RegistryClient(Uri registry) : IDisposable
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
         using var response = await _http.SendAsync(request, cancellationToken);
         return response.IsSuccessStatusCode
-            ? await response.Content.ReadFromJsonAsync<UserInfo>(AuthJson.Default, cancellationToken)
+            ? await ReadJsonAsync<UserInfo>(response, cancellationToken)
             : null;
     }
 
@@ -56,9 +56,29 @@ internal sealed class RegistryClient(Uri registry) : IDisposable
         using var content = new FormUrlEncodedContent(form);
         using var response = await _http.PostAsync("/connect/token", content, cancellationToken);
 
-        var payload = await response.Content.ReadFromJsonAsync<TokenResponse>(AuthJson.Default, cancellationToken)
-            ?? new TokenResponse { Error = "invalid_response", ErrorDescription = "The registry returned no token payload." };
-        return payload;
+        return await ReadJsonAsync<TokenResponse>(response, cancellationToken)
+            ?? new TokenResponse
+            {
+                Error = "invalid_response",
+                ErrorDescription = "The registry returned an unexpected (non-JSON) response.",
+            };
+    }
+
+    // Parses a JSON body, returning default when the response isn't JSON (e.g. an HTML error page
+    // from pointing at the wrong URL) instead of throwing a cryptic parser exception.
+    private static async Task<T?> ReadJsonAsync<T>(HttpResponseMessage response, CancellationToken cancellationToken)
+    {
+        if (response.Content.Headers.ContentType?.MediaType is not "application/json")
+            return default;
+
+        try
+        {
+            return await response.Content.ReadFromJsonAsync<T>(AuthJson.Default, cancellationToken);
+        }
+        catch (JsonException)
+        {
+            return default;
+        }
     }
 
     public void Dispose() => _http.Dispose();

@@ -59,7 +59,8 @@ internal sealed class LoginCommand : Command<LoginCommand.Settings>
 
         if (meta is null)
         {
-            AnsiConsole.MarkupLine($"[red]The registry at[/] [grey]{Markup.Escape(registry.ToString())}[/] [red]did not respond to /v1/meta.[/]");
+            AnsiConsole.MarkupLine($"[red]{Markup.Escape(registry.GetLeftPart(UriPartial.Authority))} is not a protostar registry[/] (no valid /v1/meta response).");
+            AnsiConsole.MarkupLine("[grey]If the registry runs under .NET Aspire, use the 'api' resource URL from the dashboard, not the dashboard URL.[/]");
             return 1;
         }
 
