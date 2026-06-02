@@ -11,6 +11,15 @@ public static class CliRunner
 {
     private static readonly Lazy<string> LazyBinary = new(ResolveBinary);
 
+    // Redirect protostar's config dir at a throwaway temp folder so acceptance runs never read or
+    // write the real ~/.protostar (credentials, etc.).
+    private static readonly Lazy<string> LazyConfigDir = new(() =>
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "protostar-accept-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        return dir;
+    });
+
     /// <summary>Absolute path to the protostar binary under test.</summary>
     public static string BinaryPath => LazyBinary.Value;
 
@@ -18,6 +27,7 @@ public static class CliRunner
     {
         return await CliWrap.Cli.Wrap(BinaryPath)
             .WithArguments(args)
+            .WithEnvironmentVariables(env => env.Set("PROTOSTAR_CONFIG_DIR", LazyConfigDir.Value).Build())
             // Non-zero exits are expected in some scenarios; assert on them rather than throwing.
             .WithValidation(CommandResultValidation.None)
             .ExecuteBufferedAsync();
