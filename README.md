@@ -81,6 +81,30 @@ $ protostar uninstall            # remove it
 > Startup is currently JIT (self-contained, untrimmed); making the binary lean and fast is tracked
 > as a separate performance-tuning unit of work.
 
+## Authenticate to the registry
+
+Sign in so your synced skills are tagged to you. `protostar auth login` opens your browser,
+you sign in (the registry federates this to GitHub), and the resulting session is stored in your
+OS credential store. The flow uses the OAuth Authorization Code grant with PKCE over a loopback
+redirect — no secret is kept on disk.
+
+```console
+$ protostar auth login
+Opening your browser to sign in. Complete the sign-in there, then return here.
+Signed in to https://registry.example as alice.
+
+$ protostar auth status
+Logged in to https://registry.example as alice.
+
+$ protostar auth logout
+Signed out of https://registry.example.
+```
+
+Point the CLI at a registry with `--registry <url>` or the `PROTOSTAR_REGISTRY_URL` environment
+variable. Use `--no-browser` on a headless machine to print the sign-in URL instead of opening a
+browser. The CLI checks API compatibility with the registry on connect and refuses to proceed
+against an unsupported major version.
+
 ## Build from source
 
 Requires the .NET 10 SDK.
