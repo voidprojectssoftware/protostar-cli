@@ -14,6 +14,10 @@ internal sealed class LoginCommand : Command<LoginCommand.Settings>
 {
     public sealed class Settings : AuthSettings
     {
+        [CommandOption("--provider <NAME>")]
+        [Description("Skip the registry's sign-in chooser and go straight to this provider (e.g. github).")]
+        public string? Provider { get; init; }
+
         [CommandOption("--no-browser")]
         [Description("Print the sign-in URL instead of opening a browser automatically.")]
         public bool NoBrowser { get; init; }
@@ -70,7 +74,7 @@ internal sealed class LoginCommand : Command<LoginCommand.Settings>
         var state = Pkce.CreateState();
 
         using var loopback = new LoopbackServer();
-        var authorizeUrl = BuildAuthorizeUrl(registry, loopback.RedirectUri, challenge, state);
+        var authorizeUrl = BuildAuthorizeUrl(registry, loopback.RedirectUri, challenge, state, settings.Provider);
 
         if (!settings.NoBrowser && BrowserLauncher.TryOpen(authorizeUrl))
         {
@@ -149,7 +153,7 @@ internal sealed class LoginCommand : Command<LoginCommand.Settings>
         return 0;
     }
 
-    private static string BuildAuthorizeUrl(Uri registry, string redirectUri, string challenge, string state)
+    private static string BuildAuthorizeUrl(Uri registry, string redirectUri, string challenge, string state, string? provider)
     {
         var query = new Dictionary<string, string>
         {
@@ -161,6 +165,10 @@ internal sealed class LoginCommand : Command<LoginCommand.Settings>
             ["code_challenge_method"] = "S256",
             ["state"] = state,
         };
+
+        // A provider hint lets the registry skip its chooser and forward straight to that provider.
+        if (!string.IsNullOrWhiteSpace(provider))
+            query["identity_provider"] = provider.Trim();
 
         var encoded = string.Join('&', query.Select(p => $"{Uri.EscapeDataString(p.Key)}={Uri.EscapeDataString(p.Value)}"));
         return new Uri(registry, "/connect/authorize") + "?" + encoded;

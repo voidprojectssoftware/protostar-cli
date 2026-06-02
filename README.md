@@ -100,6 +100,9 @@ $ protostar auth logout
 Signed out of https://registry.example.
 ```
 
+By default the registry shows a sign-in chooser so you can pick how to authenticate. Pass
+`--provider <name>` (e.g. `--provider github`) to skip the chooser and go straight to that provider.
+
 Point the CLI at a registry with `--registry <url>` or the `PROTOSTAR_REGISTRY_URL` environment
 variable. Use `--no-browser` on a headless machine to print the sign-in URL instead of opening a
 browser. The CLI checks API compatibility with the registry on connect and refuses to proceed
