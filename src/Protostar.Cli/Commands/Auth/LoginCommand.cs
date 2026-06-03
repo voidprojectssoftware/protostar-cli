@@ -1,4 +1,6 @@
 using System.ComponentModel;
+using Duende.IdentityModel.Client;
+using Duende.IdentityModel.OidcClient;
 using Protostar.Cli.Auth;
 using Spectre.Console;
 using Spectre.Console.Cli;
@@ -6,9 +8,9 @@ using Spectre.Console.Cli;
 namespace Protostar.Cli.Commands.Auth;
 
 /// <summary>
-/// <c>protostar auth login</c> — authenticates to the registry via the OAuth Authorization Code
-/// flow with PKCE over a loopback redirect, then stores the resulting tokens in the OS credential
-/// store. The actual sign-in happens in the browser (the registry federates it to GitHub).
+/// <c>protostar auth login</c> — authenticates to the registry with OidcClient (Authorization Code +
+/// PKCE over a loopback redirect, RFC 8252), then stores the resulting tokens in the file-based
+/// credential store. The actual sign-in happens in the browser (the registry federates it to GitHub).
 /// </summary>
 internal sealed class LoginCommand : AsyncCommand<LoginCommand.Settings>
 {
@@ -43,13 +45,59 @@ internal sealed class LoginCommand : AsyncCommand<LoginCommand.Settings>
             return 1;
         }
 
-        using var client = new RegistryClient(registry);
-
         // Fail fast on an unreachable or incompatible registry before opening a browser.
-        RegistryMeta? meta;
+        using (var client = new RegistryClient(registry))
+        {
+            RegistryMeta? meta;
+            try
+            {
+                meta = await client.GetMetaAsync(cancellation);
+            }
+            catch (HttpRequestException ex)
+            {
+                AnsiConsole.MarkupLine($"[red]Could not reach the registry at[/] [grey]{Markup.Escape(registry.ToString())}[/]: {Markup.Escape(ex.Message)}");
+                return 1;
+            }
+
+            if (meta is null)
+            {
+                AnsiConsole.MarkupLine($"[red]{Markup.Escape(registry.GetLeftPart(UriPartial.Authority))} is not a protostar registry[/] (no valid /v1/meta response).");
+                AnsiConsole.MarkupLine("[grey]If the registry runs under .NET Aspire, use the 'api' resource URL from the dashboard, not the dashboard URL.[/]");
+                return 1;
+            }
+
+            if (ApiCompatibility.Check(meta) is { } incompatibility)
+            {
+                AnsiConsole.MarkupLine($"[red]{Markup.Escape(incompatibility)}[/]");
+                return 1;
+            }
+        }
+
+        var browser = new LoopbackBrowser(openBrowser: !settings.NoBrowser);
+        var oidc = OidcClientFactory.Create(registry, browser);
+
+        var request = new LoginRequest();
+        // A provider hint lets the registry skip its chooser and forward straight to that provider.
+        if (!string.IsNullOrWhiteSpace(settings.Provider))
+        {
+            request.FrontChannelExtraParameters = new Parameters
+            {
+                new KeyValuePair<string, string>("identity_provider", settings.Provider.Trim()),
+            };
+        }
+
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellation);
+        timeout.CancelAfter(TimeSpan.FromSeconds(Math.Max(30, settings.TimeoutSeconds)));
+
+        LoginResult result;
         try
         {
-            meta = await client.GetMetaAsync(cancellation);
+            result = await oidc.LoginAsync(request, timeout.Token);
+        }
+        catch (OperationCanceledException)
+        {
+            AnsiConsole.MarkupLine("[red]Timed out waiting for the browser sign-in.[/]");
+            return 1;
         }
         catch (HttpRequestException ex)
         {
@@ -57,121 +105,37 @@ internal sealed class LoginCommand : AsyncCommand<LoginCommand.Settings>
             return 1;
         }
 
-        if (meta is null)
+        if (result.IsError)
         {
-            AnsiConsole.MarkupLine($"[red]{Markup.Escape(registry.GetLeftPart(UriPartial.Authority))} is not a protostar registry[/] (no valid /v1/meta response).");
-            AnsiConsole.MarkupLine("[grey]If the registry runs under .NET Aspire, use the 'api' resource URL from the dashboard, not the dashboard URL.[/]");
+            var detail = result.ErrorDescription is { Length: > 0 } d ? d : result.Error ?? "the registry rejected the sign-in.";
+            AnsiConsole.MarkupLine($"[red]Sign-in failed:[/] {Markup.Escape(detail)}");
             return 1;
         }
 
-        if (ApiCompatibility.Check(meta) is { } incompatibility)
-        {
-            AnsiConsole.MarkupLine($"[red]{Markup.Escape(incompatibility)}[/]");
-            return 1;
-        }
-
-        var verifier = Pkce.CreateVerifier();
-        var challenge = Pkce.Challenge(verifier);
-        var state = Pkce.CreateState();
-
-        using var loopback = new LoopbackServer();
-        var authorizeUrl = BuildAuthorizeUrl(registry, loopback.RedirectUri, challenge, state, settings.Provider);
-
-        if (!settings.NoBrowser && BrowserLauncher.TryOpen(authorizeUrl))
-        {
-            AnsiConsole.MarkupLine("Opening your browser to sign in. Complete the sign-in there, then return here.");
-        }
-        else
-        {
-            AnsiConsole.MarkupLine("Open this URL to sign in:");
-            // Write the URL raw (not through Spectre) so it is never word-wrapped and stays copy-pasteable.
-            Console.WriteLine(authorizeUrl);
-        }
-
-        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellation);
-        timeout.CancelAfter(TimeSpan.FromSeconds(Math.Max(30, settings.TimeoutSeconds)));
-
-        CallbackResult callback;
-        try
-        {
-            callback = await loopback.WaitForCallbackAsync(timeout.Token);
-        }
-        catch (OperationCanceledException)
-        {
-            AnsiConsole.MarkupLine("[red]Timed out waiting for the browser sign-in.[/]");
-            return 1;
-        }
-
-        if (callback.Error is not null)
-        {
-            var detail = callback.ErrorDescription is { Length: > 0 } d ? $": {d}" : ".";
-            AnsiConsole.MarkupLine($"[red]Sign-in failed ({Markup.Escape(callback.Error)}){Markup.Escape(detail)}[/]");
-            return 1;
-        }
-
-        if (!string.Equals(callback.State, state, StringComparison.Ordinal))
-        {
-            AnsiConsole.MarkupLine("[red]State mismatch on the sign-in response (possible CSRF). Aborting.[/]");
-            return 1;
-        }
-
-        if (string.IsNullOrEmpty(callback.Code))
-        {
-            AnsiConsole.MarkupLine("[red]The registry did not return an authorization code.[/]");
-            return 1;
-        }
-
-        var token = await client.ExchangeCodeAsync(callback.Code, verifier, loopback.RedirectUri, cancellation);
-        if (!token.IsSuccess)
-        {
-            var detail = token.ErrorDescription ?? token.Error ?? "the registry rejected the token request.";
-            AnsiConsole.MarkupLine($"[red]Token exchange failed:[/] {Markup.Escape(detail)}");
-            return 1;
-        }
-
-        var info = await client.GetUserInfoAsync(token.AccessToken!, cancellation);
-        var login = info?.PreferredUsername ?? info?.GitHubLogin;
+        // With LoadProfile enabled, OidcClient has already merged the userinfo claims (including the
+        // custom github_login) onto the principal, so no extra round trip is needed.
+        var user = result.User;
+        var login = user?.FindFirst("preferred_username")?.Value ?? user?.FindFirst("github_login")?.Value;
 
         var saved = new TokenStore().Save(new StoredToken
         {
             Registry = RegistryEndpoint.CredentialKey(registry),
-            AccessToken = token.AccessToken!,
-            RefreshToken = token.RefreshToken,
-            ExpiresAtUtc = DateTimeOffset.UtcNow.AddSeconds(token.ExpiresIn),
-            Subject = info?.Sub,
+            AccessToken = result.AccessToken!,
+            RefreshToken = result.RefreshToken,
+            ExpiresAtUtc = result.AccessTokenExpiration,
+            Subject = user?.FindFirst("sub")?.Value,
             Login = login,
-            Name = info?.Name,
+            Name = user?.FindFirst("name")?.Value,
         });
 
         if (!saved)
         {
-            AnsiConsole.MarkupLine("[red]Signed in, but could not save the session to the OS credential store.[/]");
+            AnsiConsole.MarkupLine("[red]Signed in, but could not save the session to the credential store.[/]");
             return 1;
         }
 
         var who = login is { Length: > 0 } ? $" as [aqua]{Markup.Escape(login)}[/]" : string.Empty;
         AnsiConsole.MarkupLine($"[green]Signed in[/] to [grey]{Markup.Escape(registry.GetLeftPart(UriPartial.Authority))}[/]{who}.");
         return 0;
-    }
-
-    private static string BuildAuthorizeUrl(Uri registry, string redirectUri, string challenge, string state, string? provider)
-    {
-        var query = new Dictionary<string, string>
-        {
-            ["response_type"] = "code",
-            ["client_id"] = AuthConstants.ClientId,
-            ["redirect_uri"] = redirectUri,
-            ["scope"] = AuthConstants.Scopes,
-            ["code_challenge"] = challenge,
-            ["code_challenge_method"] = "S256",
-            ["state"] = state,
-        };
-
-        // A provider hint lets the registry skip its chooser and forward straight to that provider.
-        if (!string.IsNullOrWhiteSpace(provider))
-            query["identity_provider"] = provider.Trim();
-
-        var encoded = string.Join('&', query.Select(p => $"{Uri.EscapeDataString(p.Key)}={Uri.EscapeDataString(p.Value)}"));
-        return new Uri(registry, "/connect/authorize") + "?" + encoded;
     }
 }
