@@ -15,6 +15,11 @@ app.Configure(config =>
         .WithDescription("Install protostar to a per-user directory and add it to PATH.");
     config.AddCommand<UninstallCommand>("uninstall")
         .WithDescription("Remove an installed protostar binary.");
+    config.AddCommand<InstallHooksCommand>("install-hooks")
+        .WithDescription("Detect supported harnesses and install protostar capture hooks idempotently.");
+    config.AddCommand<CaptureCommand>("capture")
+        .WithDescription("Capture a harness hook event (invoked by installed hooks).")
+        .IsHidden();
 
     config.AddBranch("auth", auth =>
     {

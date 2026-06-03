@@ -34,9 +34,20 @@ specific binary instead (for example a published self-contained build), set `PRO
 PROTOSTAR_BIN=/path/to/protostar dotnet test
 ```
 
-### Extending to harness integrations
+### Harness integrations
 
-When the CLI gains harness integration (hook install, skill discovery), make every harness path
-(config dir, settings file, skills dir) redirectable via an environment variable or flag, then add
-a `Support/Harness` fixture beside `Sandbox` that builds a fake harness layout in a temp dir. Use a
-Gherkin `Scenario Outline` with one Examples row per harness. See PROT-41 for the full plan.
+Hook install (PROT-8) follows the redirectable-root pattern PROT-41 planned for:
+
+- `Support/HarnessSandbox.cs` — a throwaway fake harness layout (a `.claude/` config dir) in a temp
+  dir, the harness analogue of `Sandbox`. Scenarios point the CLI at it with `--harness-home`, so
+  hook scenarios assert on the produced `settings.json` without touching the real harness.
+- `Features/InstallHooks.feature` — uses a `Scenario Outline` with one Examples row per harness
+  (just `claude-code` today) so the same template validates every supported harness as more are
+  added.
+- The CLI resolves the harness config dir from `--harness-home` > `PROTOSTAR_HARNESS_ROOT` >
+  `CLAUDE_CONFIG_DIR` > `~/.claude`. Tests use `--harness-home`; the env vars exist for real use.
+- Binary install/uninstall scenarios pass `--no-hooks` so they stay pure binary tests; the
+  hook-wiring done by `install`/`uninstall` is covered by its own scenarios pointed at the fixture.
+
+Assertions check that the written config has the expected shape (schema conformance). Actually
+launching Claude Code to confirm the hook fires is a separate manual smoke, out of scope here.

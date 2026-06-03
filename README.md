@@ -125,6 +125,46 @@ dotnet publish src/Protostar.Cli -c Release -r win-x64 --self-contained true \
 ./out/protostar install
 ```
 
+## Develop
+
+For manual testing there is a thin dev runner so you do not retype the project path. `pstar <args>`
+is equivalent to `protostar <args>`, building in place first:
+
+```powershell
+.\pstar.ps1 --help                          # Windows / PowerShell
+.\pstar.ps1 install-hooks --yes --dry-run
+```
+
+```bash
+./pstar.sh --help                           # Linux / macOS
+./pstar.sh install-hooks --yes --dry-run
+```
+
+**Installing a dev build.** `protostar install` from a local build (what `pstar` runs) copies the
+whole build output and produces a *framework-dependent* install: it works on any machine with the
+.NET runtime (so, your dev box), but is not portable. For a standalone binary that needs no runtime,
+publish a self-contained single file first (see "Build from source"), then `install` that.
+
+**Testing hook/install commands safely.** `install-hooks` (and `install`) write into your real
+`~/.claude` by default. To exercise them without touching it, point the harness at a throwaway
+scratch dir — the CLI resolves every harness path from `PROTOSTAR_HARNESS_ROOT` (and you can also
+pass `--harness-home <DIR>` per command):
+
+```powershell
+$env:PROTOSTAR_HARNESS_ROOT = "$PWD\.dev\harness"   # scratch; .dev/ is gitignored
+.\pstar.ps1 install-hooks --yes
+Get-Content .dev\harness\settings.json              # inspect what was written
+.\pstar.ps1 install-hooks --yes --remove            # tear it back out
+```
+
+`.dev/` is gitignored, so scratch installs and harness fixtures never get committed. To run the
+acceptance suite, `dotnet test` from the repo root.
+
+> The `capture` command is invoked by an installed hook (the real binary) and reads its payload
+> from stdin. Piping stdin through the dev runner can hang, because `dotnet run` does not forward
+> stdin's end-of-input. To test `capture` by hand, run the built binary directly, e.g.
+> `echo '{}' | ./src/Protostar.Cli/bin/Debug/net10.0/protostar capture --hook PostToolUse`.
+
 ## Releasing
 
 Releases are automated with [release-please](https://github.com/googleapis/release-please). You never
