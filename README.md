@@ -7,6 +7,10 @@ inside your harness — without the friction of version-control deploys.
 
 The loop: **use → sync → refine → suggest → adopt → use.**
 
+> **Full documentation** lives at the unified Protostar docs site. The CLI docs
+> in [`docs/`](docs/) are the canonical source and are lifted into that site at
+> build time, so edit them here, next to the code.
+
 ## Status
 
 Built incrementally, one ticket at a time (Jira project `PROT`). The first component is the
