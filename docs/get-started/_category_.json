@@ -1,0 +1,10 @@
+{
+  "label": "Get started",
+  "position": 2,
+  "collapsed": false,
+  "link": {
+    "type": "generated-index",
+    "title": "Get started with the Protostar CLI",
+    "description": "Install the binary, connect it to your AI harness, and sign in to a registry. Three short steps take you from nothing to a fully wired-up CLI."
+  }
+}
