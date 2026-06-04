@@ -89,8 +89,8 @@ $ protostar uninstall            # remove it
 
 Sign in so your synced skills are tagged to you. `protostar auth login` opens your browser,
 you sign in (the registry federates this to GitHub), and the resulting session is stored in your
-OS credential store. The flow uses the OAuth Authorization Code grant with PKCE over a loopback
-redirect — no secret is kept on disk.
+local credential file (see below). The flow uses the OAuth Authorization Code grant with PKCE over a
+loopback redirect, driven by a certified OIDC client library, so no secret is kept on disk.
 
 ```console
 $ protostar auth login
@@ -108,9 +108,11 @@ By default the registry shows a sign-in chooser so you can pick how to authentic
 `--provider <name>` (e.g. `--provider github`) to skip the chooser and go straight to that provider.
 
 Point the CLI at a registry with `--registry <url>` or the `PROTOSTAR_REGISTRY_URL` environment
-variable. Use `--no-browser` on a headless machine to print the sign-in URL instead of opening a
-browser. The CLI checks API compatibility with the registry on connect and refuses to proceed
-against an unsupported major version.
+variable. On a display-less Linux session the CLI detects there is no browser and prints the sign-in
+URL automatically; `--no-browser` forces that behavior anywhere. Either way the printed URL still
+redirects to a loopback address, so the browser must run on the same host as the CLI (open the URL in
+a local browser, or forward the callback port over SSH). The CLI checks API compatibility with the
+registry on connect and refuses to proceed against an unsupported major version.
 
 Sessions are stored in `~/.protostar/credentials.json` (owner-only permissions: `0600` on
 Unix, the per-user profile ACL on Windows). Override the directory with `PROTOSTAR_CONFIG_DIR`.

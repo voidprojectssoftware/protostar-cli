@@ -1,3 +1,4 @@
+using System.Security.Claims;
 using Protostar.Cli.Auth;
 using Spectre.Console;
 using Spectre.Console.Cli;
@@ -39,21 +40,21 @@ internal sealed class StatusCommand : AsyncCommand<StatusCommand.Settings>
             return 0;
         }
 
-        using var client = new RegistryClient(registry);
+        var oidc = OidcClientFactory.Create(registry);
 
         // Refresh a stale access token if we can, so a verified status survives short sessions.
         if (stored.IsExpired && stored.RefreshToken is { Length: > 0 } refreshToken)
         {
             try
             {
-                var refreshed = await client.RefreshAsync(refreshToken, cancellation);
-                if (refreshed.IsSuccess)
+                var refreshed = await oidc.RefreshTokenAsync(refreshToken, backChannelParameters: null, scope: null, cancellation);
+                if (!refreshed.IsError && !string.IsNullOrEmpty(refreshed.AccessToken))
                 {
                     stored = stored with
                     {
-                        AccessToken = refreshed.AccessToken!,
-                        RefreshToken = refreshed.RefreshToken ?? stored.RefreshToken,
-                        ExpiresAtUtc = DateTimeOffset.UtcNow.AddSeconds(refreshed.ExpiresIn),
+                        AccessToken = refreshed.AccessToken,
+                        RefreshToken = string.IsNullOrEmpty(refreshed.RefreshToken) ? stored.RefreshToken : refreshed.RefreshToken,
+                        ExpiresAtUtc = refreshed.AccessTokenExpiration,
                     };
                     store.Save(stored);
                 }
@@ -64,19 +65,23 @@ internal sealed class StatusCommand : AsyncCommand<StatusCommand.Settings>
             }
         }
 
-        UserInfo? info = null;
+        IEnumerable<Claim>? claims = null;
         try
         {
-            info = await client.GetUserInfoAsync(stored.AccessToken, cancellation);
+            var info = await oidc.GetUserInfoAsync(stored.AccessToken, cancellation);
+            if (!info.IsError)
+                claims = info.Claims;
         }
         catch (HttpRequestException)
         {
             // Registry unreachable; show the stored identity instead.
         }
 
-        var login = info?.PreferredUsername ?? info?.GitHubLogin ?? stored.Login ?? "(unknown)";
+        var verifiedLogin = claims?.FirstOrDefault(c => c.Type == "preferred_username")?.Value
+            ?? claims?.FirstOrDefault(c => c.Type == "github_login")?.Value;
+        var login = verifiedLogin ?? stored.Login ?? "(unknown)";
 
-        if (info is not null)
+        if (claims is not null)
         {
             AnsiConsole.MarkupLine($"[green]Logged in[/] to [grey]{Markup.Escape(authority)}[/] as [aqua]{Markup.Escape(login)}[/].");
         }

@@ -20,9 +20,4 @@ internal static class AuthConstants
     // Dev default: the registry's pinned local Aspire port. Override with --registry or
     // PROTOSTAR_REGISTRY_URL (this becomes the deployed URL once a registry is hosted).
     public const string DefaultRegistryUrl = "https://localhost:7443";
-
-    // Credential storage. Tokens are keyed by the registry's authority (a URI), so logging into
-    // different registries keeps separate sessions.
-    public const string CredentialService = "protostar";
-    public const string CredentialAccount = "protostar";
 }
