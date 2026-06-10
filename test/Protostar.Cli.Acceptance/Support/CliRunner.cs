@@ -23,9 +23,17 @@ public static class CliRunner
     /// <summary>Absolute path to the protostar binary under test.</summary>
     public static string BinaryPath => LazyBinary.Value;
 
-    public static async Task<BufferedCommandResult> RunAsync(IEnumerable<string> args)
+    public static Task<BufferedCommandResult> RunAsync(IEnumerable<string> args) =>
+        RunBinaryAsync(BinaryPath, args);
+
+    /// <summary>
+    /// Runs an arbitrary protostar binary (e.g. one a prior step installed into a sandbox) as a
+    /// child process. Used to exercise self-uninstall, where the running binary must be the one
+    /// being removed.
+    /// </summary>
+    public static async Task<BufferedCommandResult> RunBinaryAsync(string binaryPath, IEnumerable<string> args)
     {
-        return await CliWrap.Cli.Wrap(BinaryPath)
+        return await CliWrap.Cli.Wrap(binaryPath)
             .WithArguments(args)
             .WithEnvironmentVariables(env => env.Set("PROTOSTAR_CONFIG_DIR", LazyConfigDir.Value).Build())
             // Non-zero exits are expected in some scenarios; assert on them rather than throwing.

@@ -11,6 +11,14 @@ Feature: Uninstalling protostar
     And the output contains "Removed"
     And no protostar binary exists in the install dir
 
+  Scenario: A self-uninstall removes the binary that is currently running
+    Given a clean install sandbox
+    When I run protostar with "install --dir {installDir} --no-modify-path --no-hooks"
+    And I run the installed protostar with "uninstall --dir {installDir} --no-modify-path --no-hooks"
+    Then the exit code is 0
+    And the output contains "Removed"
+    And within 20 seconds no protostar binary exists in the install dir
+
   Scenario: Uninstalling when nothing is installed is a no-op
     Given a clean install sandbox
     When I run protostar with "uninstall --dir {installDir} --no-modify-path --no-hooks"

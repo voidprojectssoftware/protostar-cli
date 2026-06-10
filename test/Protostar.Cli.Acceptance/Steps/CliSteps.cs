@@ -38,11 +38,17 @@ public sealed class CliSteps : IDisposable
         _result = await CliRunner.RunAsync([]);
 
     [When("I run protostar with {string}")]
-    public async Task WhenIRunWith(string argLine)
-    {
-        // Split on spaces, then substitute placeholders as whole tokens so a sandbox path
-        // containing spaces still arrives as a single argument.
-        var args = argLine
+    public async Task WhenIRunWith(string argLine) =>
+        _result = await CliRunner.RunAsync(SubstituteArgs(argLine));
+
+    [When("I run the installed protostar with {string}")]
+    public async Task WhenIRunTheInstalledProtostarWith(string argLine) =>
+        _result = await CliRunner.RunBinaryAsync(Sandbox.InstalledBinary, SubstituteArgs(argLine));
+
+    // Split on spaces, then substitute placeholders as whole tokens so a sandbox path containing
+    // spaces still arrives as a single argument.
+    private List<string> SubstituteArgs(string argLine) =>
+        argLine
             .Split(' ', StringSplitOptions.RemoveEmptyEntries)
             .Select(token => token switch
             {
@@ -51,8 +57,6 @@ public sealed class CliSteps : IDisposable
                 _ => token,
             })
             .ToList();
-        _result = await CliRunner.RunAsync(args);
-    }
 
     [Given(@"a fake (\S+) harness")]
     public void GivenAFakeHarness(string harness)
@@ -106,6 +110,19 @@ public sealed class CliSteps : IDisposable
     public void ThenNoBinaryExists() =>
         Assert.False(File.Exists(Sandbox.InstalledBinary),
             $"Did not expect a binary at '{Sandbox.InstalledBinary}'.");
+
+    [Then("within {int} seconds no protostar binary exists in the install dir")]
+    public async Task ThenWithinSecondsNoBinaryExists(int seconds)
+    {
+        // A self-uninstall on Windows finishes deleting its own locked binary from a detached helper
+        // after the process exits, so removal is asynchronous; poll until it lands.
+        var deadline = DateTime.UtcNow.AddSeconds(seconds);
+        while (DateTime.UtcNow < deadline && File.Exists(Sandbox.InstalledBinary))
+            await Task.Delay(250);
+
+        Assert.False(File.Exists(Sandbox.InstalledBinary),
+            $"Expected the self-uninstall to remove '{Sandbox.InstalledBinary}' within {seconds}s.");
+    }
 
     public void Dispose()
     {
