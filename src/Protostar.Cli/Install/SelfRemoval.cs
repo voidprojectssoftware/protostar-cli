@@ -73,31 +73,38 @@ internal static class SelfRemoval
     /// </summary>
     internal static string BuildScript(IReadOnlyList<string> retryTargets, string? pruneEmptyDir)
     {
-        var sb = new StringBuilder();
-        sb.Append("@echo off\r\n");
-        sb.Append("setlocal\r\n");
-        sb.Append("set /a tries=0\r\n");
-        sb.Append(":retry\r\n");
-        foreach (var target in retryTargets)
-            sb.Append(DeleteCommand(target)).Append("\r\n");
-        foreach (var target in retryTargets)
-            sb.Append($"if exist \"{target}\" goto wait\r\n");
-        sb.Append("goto done\r\n");
-        sb.Append(":wait\r\n");
-        sb.Append("set /a tries+=1\r\n");
-        sb.Append($"if %tries% geq {MaxTries} goto done\r\n");
-        // ping is a reliable ~1s sleep when detached without a console; `timeout` errors there
-        // because it cannot read the (redirected) console input.
-        sb.Append("ping -n 2 127.0.0.1 >nul 2>&1\r\n");
-        sb.Append("goto retry\r\n");
-        sb.Append(":done\r\n");
-        if (pruneEmptyDir is not null)
-            // Non-recursive: succeeds only if our files left the directory empty; harmless otherwise.
-            sb.Append($"rmdir \"{pruneEmptyDir}\" 2>nul\r\n");
-        // Reliable self-delete: `(goto)` with no label pops the batch context so cmd stops reading
-        // this file, then `&` deletes it.
-        sb.Append("(goto) 2>nul & del /F /Q \"%~f0\"\r\n");
-        return sb.ToString();
+        // The only per-run lines are one delete and one "is it still there?" check per target,
+        // because the target count varies; everything else is fixed below.
+        var deletes = string.Join("\n", retryTargets.Select(DeleteCommand));
+        var existsChecks = string.Join("\n", retryTargets.Select(target => $"if exist \"{target}\" goto wait"));
+        // Only when clearing loose files out of a directory we do not own wholesale: a non-recursive
+        // rmdir that succeeds only if those files left the directory empty, and is harmless otherwise.
+        var prune = pruneEmptyDir is null ? "" : $"rmdir \"{pruneEmptyDir}\" 2>nul\n";
+
+        // Notes on the fixed parts:
+        //  - ping is a reliable ~1s sleep when detached without a console; `timeout` errors there
+        //    because it cannot read the (redirected) console input.
+        //  - `(goto)` with no label pops the batch context so cmd stops reading this file, after
+        //    which `&` deletes the script itself.
+        var script = $"""
+            @echo off
+            setlocal
+            set /a tries=0
+            :retry
+            {deletes}
+            {existsChecks}
+            goto done
+            :wait
+            set /a tries+=1
+            if %tries% geq {MaxTries} goto done
+            ping -n 2 127.0.0.1 >nul 2>&1
+            goto retry
+            :done
+            {prune}(goto) 2>nul & del /F /Q "%~f0"
+            """;
+
+        // cmd.exe wants CRLF line endings; normalise regardless of how this source file is checked out.
+        return script.ReplaceLineEndings("\r\n");
     }
 
     // rmdir for a directory, del for a file; both decided now, while the target still exists.
