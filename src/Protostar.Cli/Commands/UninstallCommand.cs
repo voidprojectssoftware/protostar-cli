@@ -51,6 +51,32 @@ internal sealed class UninstallCommand : Command<UninstallCommand.Settings>
             return 0;
         }
 
+        // On Windows the running image is locked, so a self-uninstall — the common case, where the
+        // user typed `protostar uninstall` and PATH resolved to the installed binary — cannot delete
+        // its own protostar.exe in-process; it fails with "Access to the path is denied". Hand that
+        // one case to a detached helper that finishes the removal once we exit. Everywhere else (and
+        // on Unix, where a running binary can be unlinked) we delete in-process below.
+        if (OperatingSystem.IsWindows() && SelfRemoval.IsRunningExecutable(dest))
+        {
+            try
+            {
+                var owns = OwnsDirectory(dir);
+                var targets = owns ? new[] { dir } : OwnFiles(dir).Where(File.Exists).ToArray();
+                SelfRemoval.ScheduleAfterExit(targets, pruneEmptyDir: owns ? null : dir);
+            }
+            catch (Exception ex)
+            {
+                AnsiConsole.MarkupLine($"[red]Uninstall failed:[/] {Markup.Escape(ex.Message)}");
+                return 1;
+            }
+
+            if (!settings.NoModifyPath)
+                PathManager.RemoveFromPath(dir);
+            AnsiConsole.MarkupLine($"Removed [aqua]protostar[/] from [grey]{Markup.Escape(dir)}[/].");
+            AnsiConsole.MarkupLine("[grey]The running executable finishes deleting itself as this process exits.[/]");
+            return 0;
+        }
+
         try
         {
             if (OwnsDirectory(dir))
