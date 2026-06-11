@@ -3,13 +3,6 @@ sidebar_position: 1
 title: Install protostar
 ---
 
-:::warning AI-generated and not yet reviewed
-This page was drafted by AI and has not been reviewed by a human. Protostar is in
-early development with limited maintainer bandwidth, so content may be incomplete
-or inaccurate. Treat it as a starting point, verify anything important against the
-source, and please report any problems you hit.
-:::
-
 # Install protostar
 
 The CLI ships as a **self-contained binary**, so there is no .NET runtime to set

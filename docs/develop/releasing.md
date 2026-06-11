@@ -3,13 +3,6 @@ sidebar_position: 2
 title: Releasing
 ---
 
-:::warning AI-generated and not yet reviewed
-This page was drafted by AI and has not been reviewed by a human. Protostar is in
-early development with limited maintainer bandwidth, so content may be incomplete
-or inaccurate. Treat it as a starting point, verify anything important against the
-source, and please report any problems you hit.
-:::
-
 # Releasing
 
 Releases are automated with
