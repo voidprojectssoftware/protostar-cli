@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.1](https://github.com/voidprojectssoftware/protostar-cli/compare/v0.1.0...v0.1.1) (2026-06-11)
+
+
+### Bug Fixes
+
+* **uninstall:** delete own running binary on Windows (PROT-52) ([#11](https://github.com/voidprojectssoftware/protostar-cli/issues/11)) ([0fb554c](https://github.com/voidprojectssoftware/protostar-cli/commit/0fb554c543937d5f3f730dc4491fe2db424a7943))
+
 ## [0.1.0](https://github.com/voidprojectssoftware/protostar-cli/compare/v0.0.1...v0.1.0) (2026-06-04)
 
 
