@@ -1,5 +1,5 @@
 ---
-sidebar_position: 5
+sidebar_position: 2
 title: Releasing
 ---
 
@@ -28,18 +28,18 @@ stamps it into the binaries, which the workflow attaches to the release.
    Review it.
 4. **Merge the Release PR** when you want to ship. That tags `main`, creates the
    GitHub Release, and the `release-please` workflow builds and attaches the
-   `win-x64`, `win-arm64`, `linux-x64`, and `osx-arm64` binaries.
+   `win-x64`, `win-arm64`, `linux-x64`, and `osx-arm64` binaries. The released
+   binaries self-report their version via `protostar --version`.
 
-:::note
-Tags are created by release-please on `main`, so they are always reachable
-through history — this is what makes MinVer reliable regardless of squash/rebase
-merges. Do not tag manually.
+:::note Never tag manually
+Tags are created by release-please on `main`, so they are always reachable through
+history — this is what makes MinVer reliable regardless of squash/rebase merges.
 :::
 
 ## Two channels
 
-protostar ships on two tracks (see [Channels](./channels.md) for how to install
-each):
+protostar ships on two tracks (see [Choose a channel](../guides/choose-a-channel.md)
+for how to install each):
 
 - **stable** — the release-please flow above. Tagged `vX.Y.Z`, published as a
   normal GitHub Release (so it is the `releases/latest` the default installer

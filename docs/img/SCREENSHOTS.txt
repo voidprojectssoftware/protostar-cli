@@ -1,0 +1,26 @@
+Screenshot slots for the Protostar CLI docs
+============================================
+
+Drop real screenshots into this folder, then replace the matching ":::info
+Screenshot slot" admonition in the doc with the image markdown noted there.
+
+Expected images (filename -> what it shows -> referenced from):
+
+  install-verify.png
+    Terminal: `protostar --version` + the banner after a successful install.
+    get-started/installation.md
+
+  install-hooks-prompt.png
+    The interactive harness picker (space-to-toggle list).
+    get-started/connect-your-harness.md
+
+  auth-signin-chooser.png
+    The registry's browser sign-in chooser (pick GitHub).
+    get-started/authenticate.md
+
+Conventions:
+  - Reference images with a relative path from the doc, e.g. from a file in
+    get-started/ use: ![alt text](../img/install-verify.png)
+  - Keep images reasonably sized (PNG, dark or light terminal both fine).
+  - Assets live here under docs/ so they are lifted into the unified docs site
+    along with the Markdown.

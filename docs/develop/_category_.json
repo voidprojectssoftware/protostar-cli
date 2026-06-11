@@ -1,0 +1,10 @@
+{
+  "label": "Develop",
+  "position": 5,
+  "collapsed": true,
+  "link": {
+    "type": "generated-index",
+    "title": "Develop the CLI",
+    "description": "For contributors: build protostar from source and understand how releases and versions flow."
+  }
+}

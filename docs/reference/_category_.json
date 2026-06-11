@@ -1,0 +1,10 @@
+{
+  "label": "Reference",
+  "position": 4,
+  "collapsed": true,
+  "link": {
+    "type": "generated-index",
+    "title": "Reference",
+    "description": "Look things up: every command and flag, the environment variables and file locations protostar uses, and fixes for common errors."
+  }
+}
