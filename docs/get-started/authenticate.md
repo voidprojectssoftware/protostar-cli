@@ -3,6 +3,13 @@ sidebar_position: 3
 title: Authenticate to a registry
 ---
 
+:::warning AI-generated and not yet reviewed
+This page was drafted by AI and has not been reviewed by a human. Protostar is in
+early development with limited maintainer bandwidth, so content may be incomplete
+or inaccurate. Treat it as a starting point, verify anything important against the
+source, and please report any problems you hit.
+:::
+
 # Authenticate to a registry
 
 Signing in tags your synced skills to **you**, so the registry knows whose usage
