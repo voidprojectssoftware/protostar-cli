@@ -19,7 +19,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <InternalsVisibleTo Include="Protostar.Cli.Acceptance" />
+    <InternalsVisibleTo Include="Protostar.Cli.Unit" />
   </ItemGroup>
 
 </Project>

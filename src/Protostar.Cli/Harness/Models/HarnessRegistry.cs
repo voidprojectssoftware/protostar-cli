@@ -1,8 +1,11 @@
+using Protostar.Cli.Harness.ClaudeCode;
+
 namespace Protostar.Cli.Harness;
 
 /// <summary>
 /// The set of harnesses protostar knows how to wire. This is the single extension point: to
-/// support a new harness, implement <see cref="IHarness"/> and add it to <see cref="All"/>.
+/// support a new harness, implement <see cref="IHarness"/> (plus whichever capability interfaces it
+/// supports) and add it to <see cref="All"/>.
 /// </summary>
 internal static class HarnessRegistry
 {

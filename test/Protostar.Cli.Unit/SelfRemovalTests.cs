@@ -1,7 +1,7 @@
 using Protostar.Cli.Install;
 using Xunit;
 
-namespace Protostar.Cli.Acceptance;
+namespace Protostar.Cli.Unit;
 
 /// <summary>
 /// In-process tests for <see cref="SelfRemoval"/>: the helper that lets a Windows self-uninstall

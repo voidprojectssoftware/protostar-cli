@@ -4,14 +4,12 @@ using System.Text;
 namespace Protostar.Cli.Install;
 
 /// <summary>
-/// Removes protostar's own files when an uninstall is deleting the binary that is currently running.
+/// Removes protostar's own files when an uninstall is deleting the currently running binary.
 ///
 /// On Windows a running executable's image is locked, so a self-uninstall cannot delete its own
-/// <c>protostar.exe</c> in-process — the delete fails with "Access to the path is denied". (On Unix
-/// a running binary can be unlinked freely, so this is only needed on Windows.) The fix is to hand
-/// the deletion to a short-lived, detached <c>cmd.exe</c> that retries removing the files until the
-/// lock is released — i.e. the moment we exit — then deletes its own script. No admin rights, no
-/// reboot, no residue.
+/// <c>protostar.exe</c> in-process (it fails with "Access to the path is denied"). The fix: hand the
+/// deletion to a detached <c>cmd.exe</c> that retries until the lock releases as we exit, then deletes
+/// its own script. Unix can unlink a running binary, so this is Windows-only.
 /// </summary>
 internal static class SelfRemoval
 {

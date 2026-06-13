@@ -1,7 +1,7 @@
 using Protostar.Cli.Auth;
 using Xunit;
 
-namespace Protostar.Cli.Acceptance;
+namespace Protostar.Cli.Unit;
 
 /// <summary>
 /// In-process tests for the file-based credential store. Each test redirects

@@ -2,21 +2,17 @@ using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 
-namespace Protostar.Cli.Harness;
+namespace Protostar.Cli.Harness.ClaudeCode;
 
 /// <summary>
-/// Claude Code integration. Capture hooks live in <c>settings.json</c> under <c>hooks</c>: a
-/// <c>PostToolUse</c> hook matching the <c>Skill</c> tool (fires after each skill use — the capture
-/// trigger) and a <c>SessionStart</c> hook (the seam for the future suggestion/push-back loop).
-/// Every edit is surgical (via <see cref="JsonNode"/>) so unrelated user settings and hooks are
-/// preserved, and re-running is idempotent: protostar-managed entries are recognised by a marker in
-/// their command and replaced rather than duplicated.
+/// Claude Code's hook capability. Capture hooks live in <c>settings.json</c> under <c>hooks</c>: a
+/// <c>PostToolUse</c> hook matching the <c>Skill</c> tool (the capture trigger) and a
+/// <c>SessionStart</c> hook (the seam for the future suggestion loop). Edits are surgical (via
+/// <see cref="JsonNode"/>) so unrelated settings survive, and re-running is idempotent: managed
+/// entries are recognised by a marker in their command and replaced rather than duplicated.
 /// </summary>
-internal sealed class ClaudeCodeHarness : IHarness
+internal sealed partial class ClaudeCodeHarness : IHookCapability
 {
-    public string Id => "claude-code";
-    public string DisplayName => "Claude Code";
-
     /// <summary>Hook commands containing this token are protostar-managed and safe to replace/remove.</summary>
     private const string Marker = "capture --hook";
 
@@ -24,36 +20,6 @@ internal sealed class ClaudeCodeHarness : IHarness
     // matching how Claude Code writes its own settings.json.
     private static readonly JsonSerializerOptions WriteOptions =
         new() { WriteIndented = true, Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping };
-
-    public bool TryLocate(string? rootOverride, out HarnessLocation location)
-    {
-        var (configDir, explicitSource) = ResolveConfigDir(rootOverride);
-        location = new HarnessLocation(configDir, Path.Combine(configDir, "settings.json"));
-        // An explicitly chosen root (flag or env var) signals intent, so treat it as present even if
-        // the directory does not exist yet. Only the default ~/.claude requires real detection.
-        return explicitSource || Directory.Exists(configDir);
-    }
-
-    // Resolution order: --harness-home > PROTOSTAR_HARNESS_ROOT > CLAUDE_CONFIG_DIR > ~/.claude.
-    // The redirectable roots are what make harness integration testable without touching the real
-    // harness (see the acceptance suite). The bool reports whether the root came from an explicit
-    // source rather than the ~/.claude default.
-    private static (string dir, bool explicitSource) ResolveConfigDir(string? rootOverride)
-    {
-        if (!string.IsNullOrWhiteSpace(rootOverride))
-            return (rootOverride, true);
-
-        var generic = Environment.GetEnvironmentVariable("PROTOSTAR_HARNESS_ROOT");
-        if (!string.IsNullOrWhiteSpace(generic))
-            return (generic, true);
-
-        var claude = Environment.GetEnvironmentVariable("CLAUDE_CONFIG_DIR");
-        if (!string.IsNullOrWhiteSpace(claude))
-            return (claude, true);
-
-        var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-        return (Path.Combine(home, ".claude"), false);
-    }
 
     public HookChangeSet InstallHooks(HarnessLocation location, string exePath, bool dryRun)
     {

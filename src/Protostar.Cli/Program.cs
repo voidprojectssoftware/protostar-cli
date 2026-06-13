@@ -20,6 +20,8 @@ app.Configure(config =>
     config.AddCommand<CaptureCommand>("capture")
         .WithDescription("Capture a harness hook event (invoked by installed hooks).")
         .IsHidden();
+    config.AddCommand<SkillsCommand>("skills")
+        .WithDescription("List skills discovered on disk (global and project) across supported harnesses.");
 
     config.AddBranch("auth", auth =>
     {

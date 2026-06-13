@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using Protostar.Cli.Hooks;
+using Spectre.Console;
 using Spectre.Console.Cli;
 
 namespace Protostar.Cli.Commands;
@@ -48,13 +49,20 @@ internal sealed class InstallHooksCommand : Command<InstallHooksCommand.Settings
         {
             RootOverride = settings.HarnessHome,
             HarnessIds = settings.Harness,
-            All = settings.All,
-            NonInteractive = settings.Yes || settings.Harness is { Length: > 0 },
             DryRun = settings.DryRun,
             ExePathOverride = settings.ExePath,
         };
 
+        // Prompt only when nothing forced a selection: no --yes, no --all, no explicit --harness ids,
+        // and an actual TTY to prompt into. Otherwise act on every detected harness.
+        var interactive = !settings.Yes
+            && !settings.All
+            && settings.Harness is not { Length: > 0 }
+            && AnsiConsole.Profile.Capabilities.Interactive;
+        HookInstallService.HarnessSelector? selector = interactive ? HookInstallPresenter.Prompt : null;
+
         var service = new HookInstallService();
-        return settings.Remove ? service.Uninstall(options) : service.Install(options);
+        var result = settings.Remove ? service.Uninstall(options, selector) : service.Install(options, selector);
+        return HookInstallPresenter.Render(result, settings.DryRun);
     }
 }

@@ -37,12 +37,12 @@ internal sealed class UninstallCommand : Command<UninstallCommand.Settings>
         // leaving them would dangle. Opt out with --no-hooks.
         if (!settings.NoHooks)
         {
-            new HookInstallService().Uninstall(new HookInstallService.Options
+            // Hook removal is best-effort: render its outcome but never let it fail the uninstall.
+            var hooks = new HookInstallService().Uninstall(new HookInstallService.Options
             {
                 RootOverride = settings.HarnessHome,
-                All = true,
-                NonInteractive = true,
             });
+            HookInstallPresenter.Render(hooks, dryRun: false);
         }
 
         if (!File.Exists(dest))

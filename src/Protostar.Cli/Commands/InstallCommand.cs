@@ -7,11 +7,10 @@ using Spectre.Console.Cli;
 namespace Protostar.Cli.Commands;
 
 /// <summary>
-/// Self-installs the running binary: copies it into a per-user directory and (unless told not to)
-/// ensures that directory is on PATH. A published self-contained single-file binary is copied as
-/// one file; a framework-dependent build (e.g. a local `dotnet build`, where the .exe is just an
-/// apphost that needs its .dll beside it) has its whole build output copied so the install actually
-/// runs. Then capture hooks are wired into detected harnesses (opt out with --no-hooks).
+/// Self-installs the running binary: copies it into a per-user directory, ensures that directory is
+/// on PATH (unless --no-modify-path), then wires capture hooks into detected harnesses (unless
+/// --no-hooks). A single-file publish is copied alone; a framework-dependent build has its whole
+/// output copied so the launcher can find its .dll.
 /// </summary>
 internal sealed class InstallCommand : Command<InstallCommand.Settings>
 {
@@ -106,13 +105,12 @@ internal sealed class InstallCommand : Command<InstallCommand.Settings>
 
         AnsiConsole.WriteLine();
         AnsiConsole.MarkupLine("[grey]Installing capture hooks into detected harnesses...[/]");
-        return new HookInstallService().Install(new HookInstallService.Options
+        var result = new HookInstallService().Install(new HookInstallService.Options
         {
             RootOverride = settings.HarnessHome,
-            All = true,
-            NonInteractive = true,
             ExePathOverride = dest,
         });
+        return HookInstallPresenter.Render(result, dryRun: false);
     }
 
     private static void ReportPath(string dir, bool noModifyPath)
