@@ -1,8 +1,7 @@
 using Protostar.Cli.Harness;
-using Protostar.Cli.Hooks;
 using Spectre.Console;
 
-namespace Protostar.Cli.Commands;
+namespace Protostar.Cli.Hooks;
 
 /// <summary>
 /// The console face of <see cref="HookInstallService"/>: the interactive harness picker (the service's
