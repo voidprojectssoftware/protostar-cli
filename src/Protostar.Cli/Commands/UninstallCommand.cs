@@ -9,6 +9,10 @@ namespace Protostar.Cli.Commands;
 /// <summary>Removes an installed protostar binary and (on Windows) its PATH entry.</summary>
 internal sealed class UninstallCommand : Command<UninstallCommand.Settings>
 {
+    private readonly IHookInstallService _hooks;
+
+    public UninstallCommand(IHookInstallService hooks) => _hooks = hooks;
+
     public sealed class Settings : CommandSettings
     {
         [CommandOption("-d|--dir <DIR>")]
@@ -38,7 +42,7 @@ internal sealed class UninstallCommand : Command<UninstallCommand.Settings>
         if (!settings.NoHooks)
         {
             // Hook removal is best-effort: render its outcome but never let it fail the uninstall.
-            var hooks = new HookInstallService().Uninstall(new HookInstallService.Options
+            var hooks = _hooks.Uninstall(new HookInstallOptions
             {
                 RootOverride = settings.HarnessHome,
             });

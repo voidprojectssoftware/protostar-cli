@@ -12,6 +12,10 @@ namespace Protostar.Cli.Commands;
 /// </summary>
 internal sealed class InstallHooksCommand : Command<InstallHooksCommand.Settings>
 {
+    private readonly IHookInstallService _hooks;
+
+    public InstallHooksCommand(IHookInstallService hooks) => _hooks = hooks;
+
     public sealed class Settings : CommandSettings
     {
         [CommandOption("-H|--harness <ID>")]
@@ -45,7 +49,7 @@ internal sealed class InstallHooksCommand : Command<InstallHooksCommand.Settings
 
     protected override int Execute(CommandContext context, Settings settings, CancellationToken cancellation)
     {
-        var options = new HookInstallService.Options
+        var options = new HookInstallOptions
         {
             RootOverride = settings.HarnessHome,
             HarnessIds = settings.Harness,
@@ -59,10 +63,9 @@ internal sealed class InstallHooksCommand : Command<InstallHooksCommand.Settings
             && !settings.All
             && settings.Harness is not { Length: > 0 }
             && AnsiConsole.Profile.Capabilities.Interactive;
-        HookInstallService.HarnessSelector? selector = interactive ? HookInstallPresenter.Prompt : null;
+        HarnessSelector? selector = interactive ? HookInstallPresenter.Prompt : null;
 
-        var service = new HookInstallService();
-        var result = settings.Remove ? service.Uninstall(options, selector) : service.Install(options, selector);
+        var result = settings.Remove ? _hooks.Uninstall(options, selector) : _hooks.Install(options, selector);
         return HookInstallPresenter.Render(result, settings.DryRun);
     }
 }

@@ -32,14 +32,9 @@ internal sealed record SkillDiscoveryResult(
 /// or ordering. The harness capability (<see cref="ISkillCapability"/>) is the data source; this is
 /// the orchestration over it. Returns data only, never console markup.
 /// </summary>
-internal sealed class SkillService
+internal sealed class SkillService : ISkillService
 {
-    /// <summary>
-    /// Discover skills across the selected harness(es). <paramref name="harnessId"/> limits the query
-    /// to one harness (null = every harness that supports discovery); <paramref name="harnessHome"/>
-    /// overrides the config root; <paramref name="projectStart"/> is where to begin the project-scope
-    /// walk-up (null skips project scope). Results are ordered by scope then name for stable display.
-    /// </summary>
+    /// <inheritdoc />
     public SkillDiscoveryResult Discover(string? harnessId, string? harnessHome, string? projectStart)
     {
         var harnesses = ResolveHarnesses(harnessId, out var failure);

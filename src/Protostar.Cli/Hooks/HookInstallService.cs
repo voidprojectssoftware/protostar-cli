@@ -5,18 +5,18 @@ namespace Protostar.Cli.Hooks;
 /// <summary>One harness to act on, with its resolved config location.</summary>
 internal sealed record HarnessTarget(IHarness Harness, HarnessLocation Location);
 
+/// <summary>Narrow the detected targets, e.g. via an interactive prompt. Returns the chosen subset.</summary>
+internal delegate IReadOnlyList<HarnessTarget> HarnessSelector(IReadOnlyList<HarnessTarget> detected);
+
 /// <summary>Why target resolution stopped before any harness was touched.</summary>
 internal enum HookRunFailure
 {
     /// <summary>No failure; <see cref="HookRunResult.Results"/> is authoritative.</summary>
     None,
-
     /// <summary>An explicit <c>--harness</c> id matched no registered harness.</summary>
     UnknownHarness,
-
     /// <summary>The named harness exists but does not support capture hooks.</summary>
     Unsupported,
-
     /// <summary>Installing, but the protostar binary the hooks would invoke could not be located.</summary>
     MissingExecutable,
 }
@@ -51,31 +51,15 @@ internal sealed record HookRunResult(
 /// human narrow the detected set) is injected as a <see cref="HarnessSelector"/> so the prompt stays in
 /// the presentation layer; non-interactive callers omit it and every detected target is acted on.
 /// </summary>
-internal sealed class HookInstallService
+internal sealed class HookInstallService : IHookInstallService
 {
-    /// <summary>Narrow the detected targets, e.g. via an interactive prompt. Returns the chosen subset.</summary>
-    public delegate IReadOnlyList<HarnessTarget> HarnessSelector(IReadOnlyList<HarnessTarget> detected);
+    /// <inheritdoc />
+    public HookRunResult Install(HookInstallOptions opts, HarnessSelector? select = null) => Run(opts, remove: false, select);
 
-    public sealed record Options
-    {
-        /// <summary><c>--harness-home</c>: override the harness config root.</summary>
-        public string? RootOverride { get; init; }
+    /// <inheritdoc />
+    public HookRunResult Uninstall(HookInstallOptions opts, HarnessSelector? select = null) => Run(opts, remove: true, select);
 
-        /// <summary><c>--harness</c>: target these harness ids explicitly. Skips detection and selection.</summary>
-        public IReadOnlyList<string>? HarnessIds { get; init; }
-
-        /// <summary><c>--dry-run</c>: report intended changes without writing.</summary>
-        public bool DryRun { get; init; }
-
-        /// <summary>Path to the protostar binary the hooks should invoke. Defaults to this process.</summary>
-        public string? ExePathOverride { get; init; }
-    }
-
-    public HookRunResult Install(Options opts, HarnessSelector? select = null) => Run(opts, remove: false, select);
-
-    public HookRunResult Uninstall(Options opts, HarnessSelector? select = null) => Run(opts, remove: true, select);
-
-    private static HookRunResult Run(Options opts, bool remove, HarnessSelector? select)
+    private static HookRunResult Run(HookInstallOptions opts, bool remove, HarnessSelector? select)
     {
         if (!TryResolveTargets(opts, out var targets, out var failure, out var offendingId))
             return HookRunResult.Fail(failure, offendingId);
@@ -123,7 +107,7 @@ internal sealed class HookInstallService
     // Build the list of targets to act on. Explicit --harness ids are targeted even if not currently
     // present (the user asked for them); otherwise we detect every harness that supports hooks.
     private static bool TryResolveTargets(
-        Options opts,
+        HookInstallOptions opts,
         out List<HarnessTarget> targets,
         out HookRunFailure failure,
         out string? offendingId)

@@ -13,6 +13,10 @@ namespace Protostar.Cli.Commands;
 /// </summary>
 internal sealed class SkillsCommand : Command<SkillsCommand.Settings>
 {
+    private readonly ISkillService _skills;
+
+    public SkillsCommand(ISkillService skills) => _skills = skills;
+
     public sealed class Settings : CommandSettings
     {
         [CommandOption("-H|--harness <ID>")]
@@ -34,7 +38,7 @@ internal sealed class SkillsCommand : Command<SkillsCommand.Settings>
 
     protected override int Execute(CommandContext context, Settings settings, CancellationToken cancellation)
     {
-        var result = new SkillService().Discover(
+        var result = _skills.Discover(
             settings.Harness,
             settings.HarnessHome,
             ResolveProjectStart(settings));

@@ -14,6 +14,10 @@ namespace Protostar.Cli.Commands;
 /// </summary>
 internal sealed class InstallCommand : Command<InstallCommand.Settings>
 {
+    private readonly IHookInstallService _hooks;
+
+    public InstallCommand(IHookInstallService hooks) => _hooks = hooks;
+
     public sealed class Settings : CommandSettings
     {
         [CommandOption("-d|--dir <DIR>")]
@@ -98,14 +102,14 @@ internal sealed class InstallCommand : Command<InstallCommand.Settings>
 
     // After placing the binary, wire capture hooks into every detected harness (non-interactive,
     // pointing the hooks at the binary we just installed). Opt out with --no-hooks.
-    private static int InstallHooksTail(Settings settings, string dest)
+    private int InstallHooksTail(Settings settings, string dest)
     {
         if (settings.NoHooks)
             return 0;
 
         AnsiConsole.WriteLine();
         AnsiConsole.MarkupLine("[grey]Installing capture hooks into detected harnesses...[/]");
-        var result = new HookInstallService().Install(new HookInstallService.Options
+        var result = _hooks.Install(new HookInstallOptions
         {
             RootOverride = settings.HarnessHome,
             ExePathOverride = dest,
