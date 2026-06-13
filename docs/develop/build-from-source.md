@@ -56,6 +56,41 @@ where that matters):
 ./pstar.sh install-hooks --yes --dry-run
 ```
 
+## Debug the CLI
+
+Run under a debugger with breakpoints, against any command and arguments you
+choose. The repo ships launch configs, so open the `protostar-cli` folder in your
+editor and they appear — no setup.
+
+**VS Code** (`.vscode/launch.json`):
+
+- **protostar: prompt for args** — F5 asks for a command line each launch (e.g.
+  `skills --global-only`), so you can break into any command without editing a
+  file. Multi-word input is tokenized into separate arguments.
+- **protostar: --help** — a no-prompt baseline.
+
+**Visual Studio / Rider / the CLI** read the profiles in
+`src/Protostar.Cli/Properties/launchSettings.json`: pick `help`, `skills`,
+`install-hooks (dry-run, scratch harness)`, or `custom` (edit its
+`commandLineArgs` for an arbitrary command) from the run dropdown and start
+debugging. Same profiles from the terminal:
+
+```bash
+dotnet run --project src/Protostar.Cli --launch-profile custom -- skills --global-only
+```
+
+Every launch config defaults `PROTOSTAR_HARNESS_ROOT` to a gitignored
+`.dev/harness` scratch dir, so debugging hook/install commands never touches your
+real `~/.claude` (see the next section for why that matters).
+
+:::note Opening a parent folder instead of `protostar-cli`
+The VS Code `prompt for args` config loads only when `protostar-cli` is a
+workspace root, because `${workspaceFolder}` resolves to the folder holding
+`.vscode`. If you open a parent folder that contains this repo, add `protostar-cli`
+as a workspace root (File ▸ Add Folder to Workspace) so the config surfaces. The
+`launchSettings.json` profiles show up either way, via C# Dev Kit.
+:::
+
 ## Testing install/hook commands safely
 
 `install-hooks` (and `install`) write into your real `~/.claude` by default. To

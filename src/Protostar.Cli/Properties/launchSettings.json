@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json.schemastore.org/launchsettings.json",
+  "profiles": {
+    "help": {
+      "commandName": "Project",
+      "commandLineArgs": "--help"
+    },
+    "skills": {
+      "commandName": "Project",
+      "commandLineArgs": "skills"
+    },
+    "install-hooks (dry-run, scratch harness)": {
+      "commandName": "Project",
+      "commandLineArgs": "install-hooks --yes --dry-run",
+      "environmentVariables": {
+        "PROTOSTAR_HARNESS_ROOT": ".dev/harness"
+      }
+    },
+    "custom": {
+      "commandName": "Project",
+      "commandLineArgs": ""
+    }
+  }
+}

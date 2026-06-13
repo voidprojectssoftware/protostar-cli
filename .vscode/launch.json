@@ -1,0 +1,44 @@
+{
+  // Debug the protostar CLI under the .NET debugger. The "prompt for args" config asks you for an
+  // arbitrary command line each time you launch (F5), so you can break into any command + parameters.
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "protostar: prompt for args",
+      "type": "coreclr",
+      "request": "launch",
+      "preLaunchTask": "build protostar",
+      "program": "${workspaceFolder}/src/Protostar.Cli/bin/Debug/net10.0/protostar.dll",
+      // coreclr accepts args as a single string and tokenizes it (quotes respected), so a multi-word
+      // prompt like  skills --global-only  splits into separate arguments.
+      "args": "${input:protostarArgs}",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "stopAtEntry": false,
+      "env": {
+        // Hook/install commands honor this; point at a throwaway dir so debugging never edits your
+        // real ~/.claude. Harmless for commands that don't touch the harness. Remove to use defaults.
+        "PROTOSTAR_HARNESS_ROOT": "${workspaceFolder}/.dev/harness"
+      }
+    },
+    {
+      "name": "protostar: --help",
+      "type": "coreclr",
+      "request": "launch",
+      "preLaunchTask": "build protostar",
+      "program": "${workspaceFolder}/src/Protostar.Cli/bin/Debug/net10.0/protostar.dll",
+      "args": "--help",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "stopAtEntry": false
+    }
+  ],
+  "inputs": [
+    {
+      "id": "protostarArgs",
+      "type": "promptString",
+      "description": "protostar arguments (e.g. skills --global-only, install-hooks --yes --dry-run)",
+      "default": "--help"
+    }
+  ]
+}

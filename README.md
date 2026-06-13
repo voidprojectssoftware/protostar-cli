@@ -146,6 +146,14 @@ is equivalent to `protostar <args>`, building in place first:
 ./pstar.sh install-hooks --yes --dry-run
 ```
 
+**Debugging.** Launch configs are committed, so open the `protostar-cli` folder in your editor and
+debug with breakpoints against any command. In VS Code pick **protostar: prompt for args** (F5 asks
+for the command line each run, e.g. `skills --global-only`). In Visual Studio / Rider pick a profile
+from `src/Protostar.Cli/Properties/launchSettings.json` — `custom` runs whatever you put in its
+`commandLineArgs`. Both default `PROTOSTAR_HARNESS_ROOT` to the gitignored `.dev/harness` scratch dir,
+so debugging hook/install commands is safe. Full rundown in
+[Build from source › Debug the CLI](docs/develop/build-from-source.md).
+
 **Installing a dev build.** `protostar install` from a local build (what `pstar` runs) copies the
 whole build output and produces a *framework-dependent* install: it works on any machine with the
 .NET runtime (so, your dev box), but is not portable. For a standalone binary that needs no runtime,
