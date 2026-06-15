@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using Protostar.Cli.Harness;
 using Protostar.Cli.Hooks;
 using Protostar.Cli.Install;
 using Spectre.Console;
@@ -7,14 +8,22 @@ using Spectre.Console.Cli;
 namespace Protostar.Cli.Commands;
 
 /// <summary>
-/// Self-installs the running binary: copies it into a per-user directory and (unless told not to)
-/// ensures that directory is on PATH. A published self-contained single-file binary is copied as
-/// one file; a framework-dependent build (e.g. a local `dotnet build`, where the .exe is just an
-/// apphost that needs its .dll beside it) has its whole build output copied so the install actually
-/// runs. Then capture hooks are wired into detected harnesses (opt out with --no-hooks).
+/// Self-installs the running binary: copies it into a per-user directory, ensures that directory is
+/// on PATH (unless --no-modify-path), then wires capture hooks into detected harnesses (unless
+/// --no-hooks). A single-file publish is copied alone; a framework-dependent build has its whole
+/// output copied so the launcher can find its .dll.
 /// </summary>
 internal sealed class InstallCommand : Command<InstallCommand.Settings>
 {
+    private readonly IHookInstallService _hooks;
+    private readonly IHarnessCatalog _catalog;
+
+    public InstallCommand(IHookInstallService hooks, IHarnessCatalog catalog)
+    {
+        _hooks = hooks;
+        _catalog = catalog;
+    }
+
     public sealed class Settings : CommandSettings
     {
         [CommandOption("-d|--dir <DIR>")]
@@ -99,20 +108,19 @@ internal sealed class InstallCommand : Command<InstallCommand.Settings>
 
     // After placing the binary, wire capture hooks into every detected harness (non-interactive,
     // pointing the hooks at the binary we just installed). Opt out with --no-hooks.
-    private static int InstallHooksTail(Settings settings, string dest)
+    private int InstallHooksTail(Settings settings, string dest)
     {
         if (settings.NoHooks)
             return 0;
 
         AnsiConsole.WriteLine();
         AnsiConsole.MarkupLine("[grey]Installing capture hooks into detected harnesses...[/]");
-        return new HookInstallService().Install(new HookInstallService.Options
+        var result = _hooks.Install(new HookInstallOptions
         {
             RootOverride = settings.HarnessHome,
-            All = true,
-            NonInteractive = true,
             ExePathOverride = dest,
         });
+        return HookInstallPresenter.Render(result, dryRun: false, _catalog);
     }
 
     private static void ReportPath(string dir, bool noModifyPath)

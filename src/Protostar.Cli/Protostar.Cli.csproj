@@ -14,12 +14,14 @@
 
   <ItemGroup>
     <PackageReference Include="Duende.IdentityModel.OidcClient" Version="7.1.0" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="10.0.9" />
     <PackageReference Include="Spectre.Console" Version="0.55.2" />
     <PackageReference Include="Spectre.Console.Cli" Version="0.55.0" />
+    <PackageReference Include="YamlDotNet" Version="18.0.0" />
   </ItemGroup>
 
   <ItemGroup>
-    <InternalsVisibleTo Include="Protostar.Cli.Acceptance" />
+    <InternalsVisibleTo Include="Protostar.Cli.Unit" />
   </ItemGroup>
 
 </Project>

@@ -1,5 +1,7 @@
 using System.ComponentModel;
+using Protostar.Cli.Harness;
 using Protostar.Cli.Hooks;
+using Spectre.Console;
 using Spectre.Console.Cli;
 
 namespace Protostar.Cli.Commands;
@@ -11,6 +13,15 @@ namespace Protostar.Cli.Commands;
 /// </summary>
 internal sealed class InstallHooksCommand : Command<InstallHooksCommand.Settings>
 {
+    private readonly IHookInstallService _hooks;
+    private readonly IHarnessCatalog _catalog;
+
+    public InstallHooksCommand(IHookInstallService hooks, IHarnessCatalog catalog)
+    {
+        _hooks = hooks;
+        _catalog = catalog;
+    }
+
     public sealed class Settings : CommandSettings
     {
         [CommandOption("-H|--harness <ID>")]
@@ -44,17 +55,23 @@ internal sealed class InstallHooksCommand : Command<InstallHooksCommand.Settings
 
     protected override int Execute(CommandContext context, Settings settings, CancellationToken cancellation)
     {
-        var options = new HookInstallService.Options
+        var options = new HookInstallOptions
         {
             RootOverride = settings.HarnessHome,
             HarnessIds = settings.Harness,
-            All = settings.All,
-            NonInteractive = settings.Yes || settings.Harness is { Length: > 0 },
             DryRun = settings.DryRun,
             ExePathOverride = settings.ExePath,
         };
 
-        var service = new HookInstallService();
-        return settings.Remove ? service.Uninstall(options) : service.Install(options);
+        // Prompt only when nothing forced a selection: no --yes, no --all, no explicit --harness ids,
+        // and an actual TTY to prompt into. Otherwise act on every detected harness.
+        var interactive = !settings.Yes
+            && !settings.All
+            && settings.Harness is not { Length: > 0 }
+            && AnsiConsole.Profile.Capabilities.Interactive;
+        HarnessSelector? selector = interactive ? HookInstallPresenter.Prompt : null;
+
+        var result = settings.Remove ? _hooks.Uninstall(options, selector) : _hooks.Install(options, selector);
+        return HookInstallPresenter.Render(result, settings.DryRun, _catalog);
     }
 }
