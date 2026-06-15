@@ -71,8 +71,9 @@ internal sealed class HookInstallService : IHookInstallService
             return HookRunResult.Nothing;
 
         // Presentation hook: let the caller narrow the detected set (the interactive multiselect).
-        // Explicit-id and non-interactive callers pass no selector and act on every detected target.
-        if (select is not null)
+        // Explicit --harness ids skip selection (the operator already named the targets), so the
+        // selector runs only in the detection path; non-interactive callers pass none either way.
+        if (select is not null && opts.HarnessIds is not { Count: > 0 })
         {
             targets = select(targets).ToList();
             if (targets.Count == 0)
