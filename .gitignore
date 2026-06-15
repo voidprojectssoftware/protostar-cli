@@ -10,6 +10,9 @@ out/
 # Local dev scratch (e.g. throwaway harness via PROTOSTAR_HARNESS_ROOT, test installs)
 .dev/
 
+# Git worktrees checked out inside the repo for parallel branches
+.git-worktrees/
+
 # Code coverage output (dotnet-coverage; see docs/develop/build-from-source.md)
 coverage.cobertura.xml
 *.coverage
