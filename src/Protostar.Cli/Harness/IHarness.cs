@@ -1,11 +1,12 @@
 namespace Protostar.Cli.Harness;
 
 /// <summary>
-/// A coding harness protostar can wire capture hooks into (Claude Code, and others in future).
-/// Each integration lives behind this boundary so harness-specific knowledge — config locations,
-/// settings schema, hook event names — stays isolated. Supporting a new harness means adding one
-/// implementation and registering it in <see cref="HarnessRegistry"/>; the command and
-/// orchestration layers never change.
+/// A coding harness protostar can target (Claude Code today; others later). The core contract is thin:
+/// identity and detection (who the harness is, where it lives). Everything protostar does to a harness
+/// (wiring hooks, discovering skills) is layered on as optional capability interfaces
+/// (<see cref="IHookCapability"/>, <see cref="ISkillCapability"/>, ...) a provider implements only when
+/// it supports them. Callers test support by pattern-matching (<c>if (harness is IHookCapability h)</c>),
+/// keeping the two axes independent: a new harness is one provider, a new capability is one interface.
 /// </summary>
 internal interface IHarness
 {
@@ -22,13 +23,4 @@ internal interface IHarness
     /// not detected (and was not explicitly pointed at via an override).
     /// </summary>
     bool TryLocate(string? rootOverride, out HarnessLocation location);
-
-    /// <summary>
-    /// Idempotently add protostar's capture hooks, preserving all other settings.
-    /// <paramref name="exePath"/> is the absolute protostar binary the hooks should invoke.
-    /// </summary>
-    HookChangeSet InstallHooks(HarnessLocation location, string exePath, bool dryRun);
-
-    /// <summary>Remove protostar's capture hooks, leaving all other settings untouched.</summary>
-    HookChangeSet RemoveHooks(HarnessLocation location, bool dryRun);
 }

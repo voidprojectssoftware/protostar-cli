@@ -56,6 +56,41 @@ where that matters):
 ./pstar.sh install-hooks --yes --dry-run
 ```
 
+## Debug the CLI
+
+Run under a debugger with breakpoints, against any command and arguments you
+choose. The repo ships launch configs, so open the `protostar-cli` folder in your
+editor and they appear — no setup.
+
+**VS Code** (`.vscode/launch.json`):
+
+- **protostar: prompt for args** — F5 asks for a command line each launch (e.g.
+  `skills --global-only`), so you can break into any command without editing a
+  file. Multi-word input is tokenized into separate arguments.
+- **protostar: --help** — a no-prompt baseline.
+
+**Visual Studio / Rider / the CLI** read the profiles in
+`src/Protostar.Cli/Properties/launchSettings.json`: pick `help`, `skills`,
+`install-hooks (dry-run, scratch harness)`, or `custom` (edit its
+`commandLineArgs` for an arbitrary command) from the run dropdown and start
+debugging. Same profiles from the terminal:
+
+```bash
+dotnet run --project src/Protostar.Cli --launch-profile custom -- skills --global-only
+```
+
+Every launch config defaults `PROTOSTAR_HARNESS_ROOT` to a gitignored
+`.dev/harness` scratch dir, so debugging hook/install commands never touches your
+real `~/.claude` (see the next section for why that matters).
+
+:::note Opening a parent folder instead of `protostar-cli`
+The VS Code `prompt for args` config loads only when `protostar-cli` is a
+workspace root, because `${workspaceFolder}` resolves to the folder holding
+`.vscode`. If you open a parent folder that contains this repo, add `protostar-cli`
+as a workspace root (File ▸ Add Folder to Workspace) so the config surfaces. The
+`launchSettings.json` profiles show up either way, via C# Dev Kit.
+:::
+
 ## Testing install/hook commands safely
 
 `install-hooks` (and `install`) write into your real `~/.claude` by default. To
@@ -81,6 +116,39 @@ echo '{}' | ./src/Protostar.Cli/bin/Debug/net10.0/protostar capture --hook PostT
 :::
 
 Run the acceptance suite with `dotnet test` from the repo root.
+
+## Code coverage
+
+The coverage tools, [`dotnet-coverage`](https://learn.microsoft.com/dotnet/core/additional-tools/dotnet-coverage)
+and [ReportGenerator](https://github.com/danielpalme/ReportGenerator), are pinned as **local** tools
+in `.config/dotnet-tools.json`. There is nothing to install globally; restore them once:
+
+```bash
+dotnet tool restore
+```
+
+Then run the coverage script, which collects coverage and writes an HTML report under the gitignored
+`coverage/` directory:
+
+```powershell
+.\scripts\coverage.ps1          # add -Open to launch the HTML report when it finishes
+```
+
+:::note Why `dotnet-coverage` and not coverlet
+coverlet is the more common pick, but it instruments the test process in-process and does not
+reliably capture **child processes**. Our acceptance suite drives the built `protostar` binary as a
+child process, so coverlet would report most command code as uncovered. `dotnet-coverage` uses
+Microsoft's collector, which captures child-process coverage through shared memory, so the binary's
+real exercise is counted.
+:::
+
+To run the steps by hand instead of the script (the CLI assembly is named `protostar`, which is what
+the report filter targets):
+
+```bash
+dotnet tool run dotnet-coverage collect -f cobertura -o coverage/coverage.cobertura.xml "dotnet test"
+dotnet tool run reportgenerator -reports:coverage/coverage.cobertura.xml -targetdir:coverage/report -reporttypes:Html -assemblyfilters:+protostar
+```
 
 ## Repository layout
 

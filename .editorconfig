@@ -1,0 +1,20 @@
+# EditorConfig — https://editorconfig.org
+# Project-wide conventions enforced by tooling (Roslyn / IDE), so every editor and
+# agent picks them up programmatically rather than relying on docs being read.
+root = true
+
+[*.cs]
+
+# Constructor style
+# -----------------
+# Primary constructors are reserved for records and small lightweight types
+# (simple wrappers, adapters, DTOs, small plumbing). Logic-bearing classes use an
+# explicit `private readonly` field + constructor: readonly is compiler-enforced,
+# there is a natural place for guard clauses/validation, and a field's origin is
+# obvious to readers. Primary constructors offer no performance benefit (equivalent
+# IL), so the choice is about clarity and safety.
+#
+# IDE0290 is Roslyn's "Use primary constructor" suggestion. Disabling it stops
+# tooling and agents from being nudged to convert classes to primary constructors.
+# Full convention and rationale: AGENTS.md > Conventions > Constructors.
+dotnet_diagnostic.IDE0290.severity = none

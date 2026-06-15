@@ -146,6 +146,14 @@ is equivalent to `protostar <args>`, building in place first:
 ./pstar.sh install-hooks --yes --dry-run
 ```
 
+**Debugging.** Launch configs are committed, so open the `protostar-cli` folder in your editor and
+debug with breakpoints against any command. In VS Code pick **protostar: prompt for args** (F5 asks
+for the command line each run, e.g. `skills --global-only`). In Visual Studio / Rider pick a profile
+from `src/Protostar.Cli/Properties/launchSettings.json` — `custom` runs whatever you put in its
+`commandLineArgs`. Both default `PROTOSTAR_HARNESS_ROOT` to the gitignored `.dev/harness` scratch dir,
+so debugging hook/install commands is safe. Full rundown in
+[Build from source › Debug the CLI](docs/develop/build-from-source.md).
+
 **Installing a dev build.** `protostar install` from a local build (what `pstar` runs) copies the
 whole build output and produces a *framework-dependent* install: it works on any machine with the
 .NET runtime (so, your dev box), but is not portable. For a standalone binary that needs no runtime,
@@ -165,6 +173,25 @@ Get-Content .dev\harness\settings.json              # inspect what was written
 
 `.dev/` is gitignored, so scratch installs and harness fixtures never get committed. To run the
 acceptance suite, `dotnet test` from the repo root.
+
+**Code coverage.** The coverage tools are pinned as local tools in `.config/dotnet-tools.json`, so
+there is nothing to install globally. Restore them once, then run the coverage script:
+
+```powershell
+dotnet tool restore       # one-time: brings down the pinned tools
+.\scripts\coverage.ps1    # collect coverage, write coverage/report/index.html (add -Open to launch it)
+```
+
+We use [`dotnet-coverage`](https://learn.microsoft.com/dotnet/core/additional-tools/dotnet-coverage)
+rather than coverlet on purpose: the acceptance suite drives the built binary as a *child process*,
+and `dotnet-coverage` captures child-process coverage (coverlet's in-process instrumentation would
+miss it and under-report). All output lands under the gitignored `coverage/` dir. To run the steps
+by hand instead of the script (the CLI assembly is `protostar`, hence the filter):
+
+```powershell
+dotnet tool run dotnet-coverage collect -f cobertura -o coverage/coverage.cobertura.xml "dotnet test"
+dotnet tool run reportgenerator -reports:coverage/coverage.cobertura.xml -targetdir:coverage/report -reporttypes:Html -assemblyfilters:+protostar
+```
 
 > The `capture` command is invoked by an installed hook (the real binary) and reads its payload
 > from stdin. Piping stdin through the dev runner can hang, because `dotnet run` does not forward

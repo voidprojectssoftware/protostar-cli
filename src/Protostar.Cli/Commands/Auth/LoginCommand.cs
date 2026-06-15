@@ -14,6 +14,10 @@ namespace Protostar.Cli.Commands.Auth;
 /// </summary>
 internal sealed class LoginCommand : AsyncCommand<LoginCommand.Settings>
 {
+    private readonly ITokenStore _tokens;
+
+    public LoginCommand(ITokenStore tokens) => _tokens = tokens;
+
     public sealed class Settings : AuthSettings
     {
         [CommandOption("--provider <NAME>")]
@@ -32,7 +36,7 @@ internal sealed class LoginCommand : AsyncCommand<LoginCommand.Settings>
     protected override Task<int> ExecuteAsync(CommandContext context, Settings settings, CancellationToken cancellation) =>
         RunAsync(settings, cancellation);
 
-    private static async Task<int> RunAsync(Settings settings, CancellationToken cancellation)
+    private async Task<int> RunAsync(Settings settings, CancellationToken cancellation)
     {
         Uri registry;
         try
@@ -117,7 +121,7 @@ internal sealed class LoginCommand : AsyncCommand<LoginCommand.Settings>
         var user = result.User;
         var login = user?.FindFirst("preferred_username")?.Value ?? user?.FindFirst("github_login")?.Value;
 
-        var saved = new TokenStore().Save(new StoredToken
+        var saved = _tokens.Save(new StoredToken
         {
             Registry = RegistryEndpoint.CredentialKey(registry),
             AccessToken = result.AccessToken!,

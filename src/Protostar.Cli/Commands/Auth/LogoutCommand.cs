@@ -10,6 +10,10 @@ namespace Protostar.Cli.Commands.Auth;
 /// </summary>
 internal sealed class LogoutCommand : Command<LogoutCommand.Settings>
 {
+    private readonly ITokenStore _tokens;
+
+    public LogoutCommand(ITokenStore tokens) => _tokens = tokens;
+
     public sealed class Settings : AuthSettings;
 
     protected override int Execute(CommandContext context, Settings settings, CancellationToken cancellation)
@@ -26,15 +30,14 @@ internal sealed class LogoutCommand : Command<LogoutCommand.Settings>
         }
 
         var authority = registry.GetLeftPart(UriPartial.Authority);
-        var store = new TokenStore();
 
-        if (store.Load(registry) is null)
+        if (_tokens.Load(registry) is null)
         {
             AnsiConsole.MarkupLine($"Not logged in to [grey]{Markup.Escape(authority)}[/].");
             return 0;
         }
 
-        store.Delete(registry);
+        _tokens.Delete(registry);
         AnsiConsole.MarkupLine($"[green]Signed out[/] of [grey]{Markup.Escape(authority)}[/].");
         return 0;
     }

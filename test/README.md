@@ -1,5 +1,18 @@
 # Tests
 
+Two projects, split by test kind:
+
+- **Protostar.Cli.Unit** — fast in-process unit tests that call library types directly.
+- **Protostar.Cli.Acceptance** — black-box BDD scenarios that drive the real built binary.
+
+## Protostar.Cli.Unit
+
+In-process xUnit tests that exercise individual types directly, with no binary launched. The project
+has `InternalsVisibleTo` access (the CLI's types are `internal`), so tests can reach helpers like
+`ProjectLocator`, `TokenStore`, and `SelfRemoval` without making them `public`. Each test isolates
+its own state (a throwaway temp dir, or a redirected `PROTOSTAR_CONFIG_DIR`) and cleans up after
+itself. Keep anything that launches the binary out of here; that belongs in the acceptance suite.
+
 ## Protostar.Cli.Acceptance
 
 Behaviour-driven acceptance tests for the protostar CLI, written with

@@ -12,12 +12,16 @@ namespace Protostar.Cli.Commands.Auth;
 /// </summary>
 internal sealed class StatusCommand : AsyncCommand<StatusCommand.Settings>
 {
+    private readonly ITokenStore _tokens;
+
+    public StatusCommand(ITokenStore tokens) => _tokens = tokens;
+
     public sealed class Settings : AuthSettings;
 
     protected override Task<int> ExecuteAsync(CommandContext context, Settings settings, CancellationToken cancellation) =>
         RunAsync(settings, cancellation);
 
-    private static async Task<int> RunAsync(Settings settings, CancellationToken cancellation)
+    private async Task<int> RunAsync(Settings settings, CancellationToken cancellation)
     {
         Uri registry;
         try
@@ -31,8 +35,7 @@ internal sealed class StatusCommand : AsyncCommand<StatusCommand.Settings>
         }
 
         var authority = registry.GetLeftPart(UriPartial.Authority);
-        var store = new TokenStore();
-        var stored = store.Load(registry);
+        var stored = _tokens.Load(registry);
 
         if (stored is null)
         {
@@ -56,7 +59,7 @@ internal sealed class StatusCommand : AsyncCommand<StatusCommand.Settings>
                         RefreshToken = string.IsNullOrEmpty(refreshed.RefreshToken) ? stored.RefreshToken : refreshed.RefreshToken,
                         ExpiresAtUtc = refreshed.AccessTokenExpiration,
                     };
-                    store.Save(stored);
+                    _tokens.Save(stored);
                 }
             }
             catch (HttpRequestException)

@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using Protostar.Cli.Harness;
 using Protostar.Cli.Hooks;
 using Protostar.Cli.Install;
 using Spectre.Console;
@@ -9,6 +10,15 @@ namespace Protostar.Cli.Commands;
 /// <summary>Removes an installed protostar binary and (on Windows) its PATH entry.</summary>
 internal sealed class UninstallCommand : Command<UninstallCommand.Settings>
 {
+    private readonly IHookInstallService _hooks;
+    private readonly IHarnessCatalog _catalog;
+
+    public UninstallCommand(IHookInstallService hooks, IHarnessCatalog catalog)
+    {
+        _hooks = hooks;
+        _catalog = catalog;
+    }
+
     public sealed class Settings : CommandSettings
     {
         [CommandOption("-d|--dir <DIR>")]
@@ -37,12 +47,12 @@ internal sealed class UninstallCommand : Command<UninstallCommand.Settings>
         // leaving them would dangle. Opt out with --no-hooks.
         if (!settings.NoHooks)
         {
-            new HookInstallService().Uninstall(new HookInstallService.Options
+            // Hook removal is best-effort: render its outcome but never let it fail the uninstall.
+            var hooks = _hooks.Uninstall(new HookInstallOptions
             {
                 RootOverride = settings.HarnessHome,
-                All = true,
-                NonInteractive = true,
             });
+            HookInstallPresenter.Render(hooks, dryRun: false, _catalog);
         }
 
         if (!File.Exists(dest))

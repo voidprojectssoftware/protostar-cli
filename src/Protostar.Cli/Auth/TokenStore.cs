@@ -5,9 +5,9 @@ namespace Protostar.Cli.Auth;
 /// (<c>~/.protostar/credentials.json</c>), one per registry. Degrades gracefully when the file
 /// can't be written: <see cref="Save"/> returns false rather than throwing.
 /// </summary>
-internal sealed class TokenStore
+internal sealed class TokenStore : ITokenStore
 {
-    /// <summary>Persists the session. Returns false if the store can't be written.</summary>
+    /// <inheritdoc />
     public bool Save(StoredToken token)
     {
         try
@@ -23,9 +23,11 @@ internal sealed class TokenStore
         }
     }
 
+    /// <inheritdoc />
     public StoredToken? Load(Uri registry) =>
         CredentialFile.Read().Registries.TryGetValue(Key(registry), out var token) ? token : null;
 
+    /// <inheritdoc />
     public void Delete(Uri registry)
     {
         try
