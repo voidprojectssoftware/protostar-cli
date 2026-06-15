@@ -18,7 +18,7 @@
       "env": {
         // Hook/install commands honor this; point at a throwaway dir so debugging never edits your
         // real ~/.claude. Harmless for commands that don't touch the harness. Remove to use defaults.
-        "PROTOSTAR_HARNESS_ROOT": "${workspaceFolder}/.dev/harness"
+        // "PROTOSTAR_HARNESS_ROOT": "${workspaceFolder}/.dev/harness"
       }
     },
     {
