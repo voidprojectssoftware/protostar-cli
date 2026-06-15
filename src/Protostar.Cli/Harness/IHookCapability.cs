@@ -6,6 +6,12 @@ namespace Protostar.Cli.Harness;
 /// so a harness without a hook mechanism simply does not implement it, and the hook orchestration asks
 /// for the capability (<c>harness is IHookCapability</c>) rather than assuming every harness has one.
 /// </summary>
+/// <remarks>
+/// Both methods are idempotent: running again against settings already in the desired state reports
+/// <see cref="HookChange.Unchanged"/> and writes nothing. When <c>dryRun</c> is true the change is
+/// computed and returned but not persisted. An existing settings file that is not valid JSON is left
+/// untouched and the call throws rather than risk overwriting unrecognised content.
+/// </remarks>
 internal interface IHookCapability
 {
     /// <summary>

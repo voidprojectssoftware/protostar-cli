@@ -14,6 +14,8 @@ internal interface ISkillCapability
     /// provider locates its own project root from that path). Pass <c>null</c> to skip the project
     /// scope. A project skill sharing a global skill's name is reported separately, tagged
     /// <see cref="SkillScope.Project"/>; precedence is the caller's call, not discovery's.
+    /// Returns an empty list (never throws) when no skills are found, including when the harness has
+    /// no skills directory at all or <paramref name="projectStart"/> sits in no recognisable project.
     /// </summary>
     IReadOnlyList<DiscoveredSkill> DiscoverSkills(HarnessLocation location, string? projectStart);
 }
