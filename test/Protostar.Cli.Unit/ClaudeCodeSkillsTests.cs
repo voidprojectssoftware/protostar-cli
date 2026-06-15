@@ -23,11 +23,7 @@ public sealed class ClaudeCodeSkillsTests : IDisposable
             "protostar-skillstest-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(_root);
 
-        // Hermetic ceiling. Project discovery walks UP from projectStart looking for a `.claude`
-        // directory. The system temp dir lives under the real user home, which has its own
-        // `~/.claude`; without a boundary the walk would escape this sandbox and find real skills.
-        // A `.claude` here (with no `skills` subdir) stops the walk at _root, so every test sees only
-        // the fixtures it creates. Project fixtures place their own nearer `.claude`, found first.
+        // Create `.claude` dir at temp directory root. This stops project discovery from walking up to the global path.
         Directory.CreateDirectory(Path.Combine(_root, ".claude"));
     }
 
