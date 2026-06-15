@@ -174,6 +174,25 @@ Get-Content .dev\harness\settings.json              # inspect what was written
 `.dev/` is gitignored, so scratch installs and harness fixtures never get committed. To run the
 acceptance suite, `dotnet test` from the repo root.
 
+**Code coverage.** The coverage tools are pinned as local tools in `.config/dotnet-tools.json`, so
+there is nothing to install globally. Restore them once, then run the coverage script:
+
+```powershell
+dotnet tool restore       # one-time: brings down the pinned tools
+.\scripts\coverage.ps1    # collect coverage, write coverage/report/index.html (add -Open to launch it)
+```
+
+We use [`dotnet-coverage`](https://learn.microsoft.com/dotnet/core/additional-tools/dotnet-coverage)
+rather than coverlet on purpose: the acceptance suite drives the built binary as a *child process*,
+and `dotnet-coverage` captures child-process coverage (coverlet's in-process instrumentation would
+miss it and under-report). All output lands under the gitignored `coverage/` dir. To run the steps
+by hand instead of the script (the CLI assembly is `protostar`, hence the filter):
+
+```powershell
+dotnet tool run dotnet-coverage collect -f cobertura -o coverage/coverage.cobertura.xml "dotnet test"
+dotnet tool run reportgenerator -reports:coverage/coverage.cobertura.xml -targetdir:coverage/report -reporttypes:Html -assemblyfilters:+protostar
+```
+
 > The `capture` command is invoked by an installed hook (the real binary) and reads its payload
 > from stdin. Piping stdin through the dev runner can hang, because `dotnet run` does not forward
 > stdin's end-of-input. To test `capture` by hand, run the built binary directly, e.g.

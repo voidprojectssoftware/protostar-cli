@@ -117,6 +117,39 @@ echo '{}' | ./src/Protostar.Cli/bin/Debug/net10.0/protostar capture --hook PostT
 
 Run the acceptance suite with `dotnet test` from the repo root.
 
+## Code coverage
+
+The coverage tools, [`dotnet-coverage`](https://learn.microsoft.com/dotnet/core/additional-tools/dotnet-coverage)
+and [ReportGenerator](https://github.com/danielpalme/ReportGenerator), are pinned as **local** tools
+in `.config/dotnet-tools.json`. There is nothing to install globally; restore them once:
+
+```bash
+dotnet tool restore
+```
+
+Then run the coverage script, which collects coverage and writes an HTML report under the gitignored
+`coverage/` directory:
+
+```powershell
+.\scripts\coverage.ps1          # add -Open to launch the HTML report when it finishes
+```
+
+:::note Why `dotnet-coverage` and not coverlet
+coverlet is the more common pick, but it instruments the test process in-process and does not
+reliably capture **child processes**. Our acceptance suite drives the built `protostar` binary as a
+child process, so coverlet would report most command code as uncovered. `dotnet-coverage` uses
+Microsoft's collector, which captures child-process coverage through shared memory, so the binary's
+real exercise is counted.
+:::
+
+To run the steps by hand instead of the script (the CLI assembly is named `protostar`, which is what
+the report filter targets):
+
+```bash
+dotnet tool run dotnet-coverage collect -f cobertura -o coverage/coverage.cobertura.xml "dotnet test"
+dotnet tool run reportgenerator -reports:coverage/coverage.cobertura.xml -targetdir:coverage/report -reporttypes:Html -assemblyfilters:+protostar
+```
+
 ## Repository layout
 
 ```text
