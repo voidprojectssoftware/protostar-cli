@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using Protostar.Cli.Harness;
 using Protostar.Cli.Hooks;
 using Spectre.Console;
 using Spectre.Console.Cli;
@@ -13,8 +14,13 @@ namespace Protostar.Cli.Commands;
 internal sealed class InstallHooksCommand : Command<InstallHooksCommand.Settings>
 {
     private readonly IHookInstallService _hooks;
+    private readonly IHarnessCatalog _catalog;
 
-    public InstallHooksCommand(IHookInstallService hooks) => _hooks = hooks;
+    public InstallHooksCommand(IHookInstallService hooks, IHarnessCatalog catalog)
+    {
+        _hooks = hooks;
+        _catalog = catalog;
+    }
 
     public sealed class Settings : CommandSettings
     {
@@ -66,6 +72,6 @@ internal sealed class InstallHooksCommand : Command<InstallHooksCommand.Settings
         HarnessSelector? selector = interactive ? HookInstallPresenter.Prompt : null;
 
         var result = settings.Remove ? _hooks.Uninstall(options, selector) : _hooks.Install(options, selector);
-        return HookInstallPresenter.Render(result, settings.DryRun);
+        return HookInstallPresenter.Render(result, settings.DryRun, _catalog);
     }
 }

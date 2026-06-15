@@ -27,14 +27,14 @@ internal static class HookInstallPresenter
     }
 
     /// <summary>Render a run's outcome and return the process exit code (0 success, 1 any failure).</summary>
-    public static int Render(HookRunResult result, bool dryRun)
+    public static int Render(HookRunResult result, bool dryRun, IHarnessCatalog catalog)
     {
         switch (result.Failure)
         {
             case HookRunFailure.UnknownHarness:
                 AnsiConsole.MarkupLine(
                     $"[red]Unknown harness '{Markup.Escape(result.OffendingHarnessId!)}'.[/] " +
-                    $"Known: {string.Join(", ", HarnessRegistry.All.Select(h => h.Id))}");
+                    $"Known: {catalog.KnownIds}");
                 return 1;
             case HookRunFailure.Unsupported:
                 AnsiConsole.MarkupLine(

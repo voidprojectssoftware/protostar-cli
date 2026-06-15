@@ -48,7 +48,8 @@ public sealed class ClaudeCodeSkillsTests : IDisposable
 
     // ---- helpers -----------------------------------------------------------
 
-    private static ISkillCapability NewSut() => new ClaudeCodeHarness();
+    private static ISkillCapability NewSut() =>
+        new ClaudeCodeHarness(new ClaudeCodeSkillParser(), new ClaudeCodeSkillMapper());
 
     private static HarnessLocation LocationFor(string configDir) =>
         new(configDir, Path.Combine(configDir, "settings.json"));

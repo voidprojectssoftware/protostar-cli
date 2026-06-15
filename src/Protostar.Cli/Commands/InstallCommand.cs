@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using Protostar.Cli.Harness;
 using Protostar.Cli.Hooks;
 using Protostar.Cli.Install;
 using Spectre.Console;
@@ -15,8 +16,13 @@ namespace Protostar.Cli.Commands;
 internal sealed class InstallCommand : Command<InstallCommand.Settings>
 {
     private readonly IHookInstallService _hooks;
+    private readonly IHarnessCatalog _catalog;
 
-    public InstallCommand(IHookInstallService hooks) => _hooks = hooks;
+    public InstallCommand(IHookInstallService hooks, IHarnessCatalog catalog)
+    {
+        _hooks = hooks;
+        _catalog = catalog;
+    }
 
     public sealed class Settings : CommandSettings
     {
@@ -114,7 +120,7 @@ internal sealed class InstallCommand : Command<InstallCommand.Settings>
             RootOverride = settings.HarnessHome,
             ExePathOverride = dest,
         });
-        return HookInstallPresenter.Render(result, dryRun: false);
+        return HookInstallPresenter.Render(result, dryRun: false, _catalog);
     }
 
     private static void ReportPath(string dir, bool noModifyPath)

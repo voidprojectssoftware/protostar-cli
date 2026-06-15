@@ -3,6 +3,8 @@ using Protostar.Cli;
 using Protostar.Cli.Auth;
 using Protostar.Cli.Commands;
 using Protostar.Cli.Commands.Auth;
+using Protostar.Cli.Harness;
+using Protostar.Cli.Harness.ClaudeCode;
 using Protostar.Cli.Hooks;
 using Protostar.Cli.Infrastructure;
 using Protostar.Cli.Skills;
@@ -15,6 +17,13 @@ var services = new ServiceCollection();
 services.AddSingleton<ISkillService, SkillService>();
 services.AddSingleton<IHookInstallService, HookInstallService>();
 services.AddSingleton<ITokenStore, TokenStore>();
+
+// Harnesses and their collaborators live in the container too: register one IHarness per harness
+// (the extension point) plus the catalog that exposes them and the ClaudeCode skill parser/mapper.
+services.AddSingleton<IClaudeCodeSkillParser, ClaudeCodeSkillParser>();
+services.AddSingleton<IClaudeCodeSkillMapper, ClaudeCodeSkillMapper>();
+services.AddSingleton<IHarness, ClaudeCodeHarness>();
+services.AddSingleton<IHarnessCatalog, HarnessCatalog>();
 
 // Spectre.Console.Cli command app. `protostar` runs DefaultCommand; `--version`/`-v` and `--help`
 // are provided by the framework. The registrar resolves commands (and their dependencies) from the

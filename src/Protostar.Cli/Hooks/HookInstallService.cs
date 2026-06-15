@@ -53,13 +53,17 @@ internal sealed record HookRunResult(
 /// </summary>
 internal sealed class HookInstallService : IHookInstallService
 {
+    private readonly IHarnessCatalog _catalog;
+
+    public HookInstallService(IHarnessCatalog catalog) => _catalog = catalog;
+
     /// <inheritdoc />
     public HookRunResult Install(HookInstallOptions opts, HarnessSelector? select = null) => Run(opts, remove: false, select);
 
     /// <inheritdoc />
     public HookRunResult Uninstall(HookInstallOptions opts, HarnessSelector? select = null) => Run(opts, remove: true, select);
 
-    private static HookRunResult Run(HookInstallOptions opts, bool remove, HarnessSelector? select)
+    private HookRunResult Run(HookInstallOptions opts, bool remove, HarnessSelector? select)
     {
         if (!TryResolveTargets(opts, out var targets, out var failure, out var offendingId))
             return HookRunResult.Fail(failure, offendingId);
@@ -106,7 +110,7 @@ internal sealed class HookInstallService : IHookInstallService
 
     // Build the list of targets to act on. Explicit --harness ids are targeted even if not currently
     // present (the user asked for them); otherwise we detect every harness that supports hooks.
-    private static bool TryResolveTargets(
+    private bool TryResolveTargets(
         HookInstallOptions opts,
         out List<HarnessTarget> targets,
         out HookRunFailure failure,
@@ -120,7 +124,7 @@ internal sealed class HookInstallService : IHookInstallService
         {
             foreach (var id in opts.HarnessIds)
             {
-                var harness = HarnessRegistry.ById(id);
+                var harness = _catalog.ById(id);
                 if (harness is null)
                 {
                     failure = HookRunFailure.UnknownHarness;
@@ -139,7 +143,7 @@ internal sealed class HookInstallService : IHookInstallService
             return true;
         }
 
-        foreach (var harness in HarnessRegistry.All)
+        foreach (var harness in _catalog.All)
             if (harness is IHookCapability && harness.TryLocate(opts.RootOverride, out var location))
                 targets.Add(new HarnessTarget(harness, location));
 

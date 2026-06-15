@@ -34,6 +34,14 @@ interface, and inject the interface into the command. Spectre resolves commands 
 `TypeRegistrar`/`TypeResolver` bridge in `src/Protostar.Cli/Infrastructure/`. This keeps commands
 unit-testable with fakes instead of real disk or network.
 
+### Commands and presentation
+
+A command's `Execute` maps its `Settings` to a service call and returns `SomePresenter.Render(result, ...)`.
+Commands never build tables, call `AnsiConsole`, or emit markup; the presenter owns all Spectre.Console
+output and the exit code, which keeps the service a console-free, testable data source. A presenter lives
+next to the service it renders in that concern's folder, not under `Commands/` (`Skills/SkillsPresenter.cs`,
+`Hooks/HookInstallPresenter.cs`), and output-shaping helpers (truncation, formatting) live on it too.
+
 ### Constructors
 
 Primary constructors are reserved for records (positional) and small lightweight types (simple wrappers,

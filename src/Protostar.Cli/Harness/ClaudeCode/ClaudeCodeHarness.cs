@@ -8,6 +8,15 @@ namespace Protostar.Cli.Harness.ClaudeCode;
 /// </summary>
 internal sealed partial class ClaudeCodeHarness : IHarness
 {
+    private readonly IClaudeCodeSkillParser _parser;
+    private readonly IClaudeCodeSkillMapper _mapper;
+
+    public ClaudeCodeHarness(IClaudeCodeSkillParser parser, IClaudeCodeSkillMapper mapper)
+    {
+        _parser = parser;
+        _mapper = mapper;
+    }
+
     public string Id => "claude-code";
     public string DisplayName => "Claude Code";
 

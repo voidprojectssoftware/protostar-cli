@@ -34,6 +34,10 @@ internal sealed record SkillDiscoveryResult(
 /// </summary>
 internal sealed class SkillService : ISkillService
 {
+    private readonly IHarnessCatalog _catalog;
+
+    public SkillService(IHarnessCatalog catalog) => _catalog = catalog;
+
     /// <inheritdoc />
     public SkillDiscoveryResult Discover(string? harnessId, string? harnessHome, string? projectStart)
     {
@@ -61,13 +65,13 @@ internal sealed class SkillService : ISkillService
     }
 
     // Either the one harness the operator named, or every registered harness that supports skills.
-    private static IReadOnlyList<IHarness> ResolveHarnesses(string? id, out SkillQueryFailure failure)
+    private IReadOnlyList<IHarness> ResolveHarnesses(string? id, out SkillQueryFailure failure)
     {
         failure = SkillQueryFailure.None;
         if (id is null)
-            return HarnessRegistry.All.Where(h => h is ISkillCapability).ToList();
+            return _catalog.All.Where(h => h is ISkillCapability).ToList();
 
-        var harness = HarnessRegistry.ById(id);
+        var harness = _catalog.ById(id);
         if (harness is null)
         {
             failure = SkillQueryFailure.UnknownHarness;

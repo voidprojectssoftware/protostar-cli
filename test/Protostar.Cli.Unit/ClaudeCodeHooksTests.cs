@@ -45,7 +45,8 @@ public sealed class ClaudeCodeHooksTests : IDisposable
 
     private HarnessLocation Location() => new HarnessLocation(_tempDir, _settingsPath);
 
-    private static IHookCapability NewSut() => new ClaudeCodeHarness();
+    private static IHookCapability NewSut() =>
+        new ClaudeCodeHarness(new ClaudeCodeSkillParser(), new ClaudeCodeSkillMapper());
 
     // ---- Happy path -------------------------------------------------------
 

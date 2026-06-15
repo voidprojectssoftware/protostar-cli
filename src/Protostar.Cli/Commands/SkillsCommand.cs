@@ -1,21 +1,26 @@
 using System.ComponentModel;
 using Protostar.Cli.Harness;
 using Protostar.Cli.Skills;
-using Spectre.Console;
 using Spectre.Console.Cli;
 
 namespace Protostar.Cli.Commands;
 
 /// <summary>
 /// Lists the skills protostar can see on disk, in both global and project scope, across every harness
-/// that supports skill discovery. The read side of "push a local skill". Discovery itself lives in
-/// <see cref="SkillService"/>; this command only maps its settings into a query and renders the result.
+/// that supports skill discovery. The read side of "push a local skill". Discovery lives in
+/// <see cref="SkillService"/> and rendering in <see cref="SkillsPresenter"/>; this command only maps
+/// its settings into a query and hands the result to the presenter.
 /// </summary>
 internal sealed class SkillsCommand : Command<SkillsCommand.Settings>
 {
     private readonly ISkillService _skills;
+    private readonly IHarnessCatalog _catalog;
 
-    public SkillsCommand(ISkillService skills) => _skills = skills;
+    public SkillsCommand(ISkillService skills, IHarnessCatalog catalog)
+    {
+        _skills = skills;
+        _catalog = catalog;
+    }
 
     public sealed class Settings : CommandSettings
     {
@@ -43,42 +48,7 @@ internal sealed class SkillsCommand : Command<SkillsCommand.Settings>
             settings.HarnessHome,
             ResolveProjectStart(settings));
 
-        switch (result.Failure)
-        {
-            case SkillQueryFailure.UnknownHarness:
-                AnsiConsole.MarkupLine(
-                    $"[red]Unknown harness '{Markup.Escape(result.OffendingHarnessId!)}'.[/] " +
-                    $"Known: {string.Join(", ", HarnessRegistry.All.Select(h => h.Id))}");
-                return 1;
-            case SkillQueryFailure.Unsupported:
-                AnsiConsole.MarkupLine(
-                    $"[red]Harness '{Markup.Escape(result.OffendingHarnessId!)}' does not support skill discovery.[/]");
-                return 1;
-        }
-
-        if (result.Skills.Count == 0)
-        {
-            AnsiConsole.MarkupLine("[grey]No skills found.[/]");
-            return 0;
-        }
-
-        var table = new Table().Border(TableBorder.Rounded);
-        table.AddColumn("Scope");
-        table.AddColumn("Name");
-        table.AddColumn("Description");
-        foreach (var skill in result.Skills)
-        {
-            // The placeholder is markup, so it must not be escaped; a real description must be.
-            var description = skill.Description is null
-                ? "[grey](no description)[/]"
-                : Markup.Escape(Truncate(skill.Description));
-            table.AddRow(
-                Markup.Escape(skill.Scope.ToString().ToLowerInvariant()),
-                Markup.Escape(skill.Name),
-                description);
-        }
-        AnsiConsole.Write(table);
-        return 0;
+        return SkillsPresenter.Render(result, _catalog);
     }
 
     // The starting point each provider walks up from to find its own project root.
@@ -89,17 +59,5 @@ internal sealed class SkillsCommand : Command<SkillsCommand.Settings>
             return null;
 
         return settings.Project ?? Directory.GetCurrentDirectory();
-    }
-
-    private const string Ellipsis = "...";
-
-    // internal (not private) so the unit suite can exercise the truncation edge cases directly.
-    internal static string Truncate(string text, int max = 80)
-    {
-        if (max <= 0) return string.Empty;
-        if (text.Length <= max) return text;
-        // Too narrow to fit any text plus the ellipsis: just return as many dots as fit.
-        if (max <= Ellipsis.Length) return Ellipsis[..max];
-        return text[..(max - Ellipsis.Length)] + Ellipsis;
     }
 }

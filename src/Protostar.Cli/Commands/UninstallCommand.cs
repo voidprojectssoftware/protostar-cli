@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using Protostar.Cli.Harness;
 using Protostar.Cli.Hooks;
 using Protostar.Cli.Install;
 using Spectre.Console;
@@ -10,8 +11,13 @@ namespace Protostar.Cli.Commands;
 internal sealed class UninstallCommand : Command<UninstallCommand.Settings>
 {
     private readonly IHookInstallService _hooks;
+    private readonly IHarnessCatalog _catalog;
 
-    public UninstallCommand(IHookInstallService hooks) => _hooks = hooks;
+    public UninstallCommand(IHookInstallService hooks, IHarnessCatalog catalog)
+    {
+        _hooks = hooks;
+        _catalog = catalog;
+    }
 
     public sealed class Settings : CommandSettings
     {
@@ -46,7 +52,7 @@ internal sealed class UninstallCommand : Command<UninstallCommand.Settings>
             {
                 RootOverride = settings.HarnessHome,
             });
-            HookInstallPresenter.Render(hooks, dryRun: false);
+            HookInstallPresenter.Render(hooks, dryRun: false, _catalog);
         }
 
         if (!File.Exists(dest))
