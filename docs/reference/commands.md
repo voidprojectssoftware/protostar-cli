@@ -51,6 +51,47 @@ harnesses; otherwise it runs non-interactively.
 
 See [Connect your harness](../get-started/connect-your-harness.md).
 
+## `protostar skills`
+
+List the skills protostar finds on this machine, in global scope (for example
+`~/.claude/skills`) and project scope (walking up from the current directory),
+across every supported harness.
+
+| Option | Description |
+|---|---|
+| `-H, --harness <ID>` | Only discover skills for this harness id. |
+| `--harness-home <DIR>` | Override the harness config root (testing or a non-default location). |
+| `--project <DIR>` | Where to start looking for project-scoped skills. Defaults to the current directory. |
+| `--global-only` | Discover only global skills; skip the project scope. |
+
+### `protostar skills push [NAME...]`
+
+Back up local skills to the registry. With no names, every skill `protostar skills`
+lists is pushed; otherwise only the named ones. You must be
+[signed in](../get-started/authenticate.md) first.
+
+Each skill is uploaded on its own, so one refused skill does not stop the rest. For
+each skill you see one of:
+
+- **new version vN**: the registry stored a new version.
+- **unchanged (vN)**: the registry already had exactly this content.
+- **refused**: the registry would not store it (for example, it is over the size
+  limit or its SKILL.md is missing), with the reason.
+- **skipped**: another skill with the same name was already pushed in this run
+  (global wins over project, matching which one the harness loads).
+- **failed**: the upload did not complete (for example, the registry was
+  unreachable).
+
+Every file in the skill's directory is uploaded, except version control and
+dependency folders (`.git`, `node_modules`, `__pycache__`, `.venv`) and symbolic
+links. The exit code is `0` when every skill reached the registry, otherwise `1`.
+
+Takes the same options as `protostar skills`, plus:
+
+| Option | Description |
+|---|---|
+| `--registry <URL>` | Registry to back up to. Defaults to `PROTOSTAR_REGISTRY_URL`, then `https://localhost:7443`. |
+
 ## `protostar auth`
 
 Authenticate to the protostar registry.

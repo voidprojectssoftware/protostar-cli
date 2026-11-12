@@ -12,9 +12,9 @@ namespace Protostar.Cli.Commands.Auth;
 /// </summary>
 internal sealed class StatusCommand : AsyncCommand<StatusCommand.Settings>
 {
-    private readonly ITokenStore _tokens;
+    private readonly IAccessTokenProvider _tokens;
 
-    public StatusCommand(ITokenStore tokens) => _tokens = tokens;
+    public StatusCommand(IAccessTokenProvider tokens) => _tokens = tokens;
 
     public sealed class Settings : AuthSettings;
 
@@ -35,7 +35,8 @@ internal sealed class StatusCommand : AsyncCommand<StatusCommand.Settings>
         }
 
         var authority = registry.GetLeftPart(UriPartial.Authority);
-        var stored = _tokens.Load(registry);
+        // Refreshes a stale access token when it can, so a verified status survives short sessions.
+        var stored = await _tokens.GetSessionAsync(registry, cancellation);
 
         if (stored is null)
         {
@@ -44,29 +45,6 @@ internal sealed class StatusCommand : AsyncCommand<StatusCommand.Settings>
         }
 
         var oidc = OidcClientFactory.Create(registry);
-
-        // Refresh a stale access token if we can, so a verified status survives short sessions.
-        if (stored.IsExpired && stored.RefreshToken is { Length: > 0 } refreshToken)
-        {
-            try
-            {
-                var refreshed = await oidc.RefreshTokenAsync(refreshToken, backChannelParameters: null, scope: null, cancellation);
-                if (!refreshed.IsError && !string.IsNullOrEmpty(refreshed.AccessToken))
-                {
-                    stored = stored with
-                    {
-                        AccessToken = refreshed.AccessToken,
-                        RefreshToken = string.IsNullOrEmpty(refreshed.RefreshToken) ? stored.RefreshToken : refreshed.RefreshToken,
-                        ExpiresAtUtc = refreshed.AccessTokenExpiration,
-                    };
-                    _tokens.Save(stored);
-                }
-            }
-            catch (HttpRequestException)
-            {
-                // Fall through to the offline view below.
-            }
-        }
 
         IEnumerable<Claim>? claims = null;
         try
