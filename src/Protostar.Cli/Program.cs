@@ -7,6 +7,7 @@ using Protostar.Cli.Harness;
 using Protostar.Cli.Harness.ClaudeCode;
 using Protostar.Cli.Hooks;
 using Protostar.Cli.Infrastructure;
+using Protostar.Cli.Registry;
 using Protostar.Cli.Skills;
 using Spectre.Console.Cli;
 
@@ -17,6 +18,9 @@ var services = new ServiceCollection();
 services.AddSingleton<ISkillService, SkillService>();
 services.AddSingleton<IHookInstallService, HookInstallService>();
 services.AddSingleton<ITokenStore, TokenStore>();
+services.AddSingleton<IAccessTokenProvider, AccessTokenProvider>();
+services.AddSingleton<IRegistryApi, RegistryApi>();
+services.AddSingleton<ISkillPushService, SkillPushService>();
 
 // Harnesses and their collaborators live in the container too: register one IHarness per harness
 // (the extension point) plus the catalog that exposes them and the ClaudeCode skill parser/mapper.
@@ -43,8 +47,13 @@ app.Configure(config =>
     config.AddCommand<CaptureCommand>("capture")
         .WithDescription("Capture a harness hook event (invoked by installed hooks).")
         .IsHidden();
-    config.AddCommand<SkillsCommand>("skills")
-        .WithDescription("List skills discovered on disk (global and project) across supported harnesses.");
+    config.AddBranch("skills", skills =>
+    {
+        skills.SetDescription("List skills on this machine, or back them up to the registry.");
+        skills.SetDefaultCommand<SkillsCommand>();
+        skills.AddCommand<SkillsPushCommand>("push")
+            .WithDescription("Back up local skills to the registry (all, or the named ones).");
+    });
 
     config.AddBranch("auth", auth =>
     {

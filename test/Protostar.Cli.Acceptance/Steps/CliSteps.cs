@@ -70,6 +70,14 @@ public sealed class CliSteps : IDisposable
     public void GivenAFakeHarnessWithSettings(string harness, string settings) =>
         _harness.WriteSettings(settings);
 
+    [Given("a global skill named {string} in the harness")]
+    public void GivenAGlobalSkillInTheHarness(string name)
+    {
+        var dir = Path.Combine(_harness.ConfigDir, "skills", name);
+        Directory.CreateDirectory(dir);
+        File.WriteAllText(Path.Combine(dir, "SKILL.md"), $"---\nname: {name}\ndescription: test skill\n---\nBody.\n");
+    }
+
     [Then("the harness settings contain {string}")]
     public void ThenTheHarnessSettingsContain(string text) =>
         Assert.Contains(text, _harness.ReadSettings());
