@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.2.0](https://github.com/voidprojectssoftware/protostar-cli/compare/v0.1.0...v0.2.0) (2026-11-12)
+
+
+### Features
+
+* **cli:** back up local skills to the registry with skills push ([#40](https://github.com/voidprojectssoftware/protostar-cli/issues/40)) ([#43](https://github.com/voidprojectssoftware/protostar-cli/issues/43)) ([581b0ad](https://github.com/voidprojectssoftware/protostar-cli/commit/581b0adbfe3abcf34f1a0482c8b2fcf4b8aed002))
+* **cli:** capture hook backs up a skill when it changes ([#42](https://github.com/voidprojectssoftware/protostar-cli/issues/42)) ([#49](https://github.com/voidprojectssoftware/protostar-cli/issues/49)) ([5abd589](https://github.com/voidprojectssoftware/protostar-cli/commit/5abd589804f7d92e002c755180a1513ac9703056))
+* **cli:** harness-agnostic skill discovery (PROT-54) ([#13](https://github.com/voidprojectssoftware/protostar-cli/issues/13)) ([b88aefa](https://github.com/voidprojectssoftware/protostar-cli/commit/b88aefac55669e8c5c739c2783e83ab3123e3de5))
+
+
+### Bug Fixes
+
+* **cli:** compare same-name skills by content before skipping ([#50](https://github.com/voidprojectssoftware/protostar-cli/issues/50)) ([f0483f2](https://github.com/voidprojectssoftware/protostar-cli/commit/f0483f20b8a1bcd9d6424688c4b3955f83335691))
+* **uninstall:** delete own running binary on Windows (PROT-52) ([#11](https://github.com/voidprojectssoftware/protostar-cli/issues/11)) ([0fb554c](https://github.com/voidprojectssoftware/protostar-cli/commit/0fb554c543937d5f3f730dc4491fe2db424a7943))
+
 ## [0.1.0](https://github.com/voidprojectssoftware/protostar-cli/compare/v0.0.1...v0.1.0) (2026-06-04)
 
 
