@@ -1,6 +1,7 @@
 using Microsoft.Extensions.DependencyInjection;
 using Protostar.Cli;
 using Protostar.Cli.Auth;
+using Protostar.Cli.Capture;
 using Protostar.Cli.Commands;
 using Protostar.Cli.Commands.Auth;
 using Protostar.Cli.Harness;
@@ -20,7 +21,9 @@ services.AddSingleton<IHookInstallService, HookInstallService>();
 services.AddSingleton<ITokenStore, TokenStore>();
 services.AddSingleton<IAccessTokenProvider, AccessTokenProvider>();
 services.AddSingleton<IRegistryApi, RegistryApi>();
+services.AddSingleton<ISkillLedger, SkillLedger>();
 services.AddSingleton<ISkillPushService, SkillPushService>();
+services.AddSingleton<ICaptureService, CaptureService>();
 
 // Harnesses and their collaborators live in the container too: register one IHarness per harness
 // (the extension point) plus the catalog that exposes them and the ClaudeCode skill parser/mapper.

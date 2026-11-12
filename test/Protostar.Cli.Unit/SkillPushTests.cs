@@ -33,12 +33,78 @@ public sealed class SkillPushServiceTests : IDisposable
 
     private static SkillPushRequest Request(params string[] names) => new(names, null, null, null, Registry);
 
-    private static (ISkillPushService Sut, FakeRegistryApi Api) Build(
+    private readonly FakeLedger _ledger = new();
+
+    private (ISkillPushService Sut, FakeRegistryApi Api) Build(
         IEnumerable<DiscoveredSkill> skills, StoredToken? session = null, FakeRegistryApi? api = null)
     {
         api ??= new FakeRegistryApi();
-        var sut = new SkillPushService(new FakeSkillService(skills.ToList()), new FakeTokens(session), api);
+        var sut = new SkillPushService(new FakeSkillService(skills.ToList()), new FakeTokens(session), api, _ledger);
         return (sut, api);
+    }
+
+    [Fact]
+    public async Task A_successful_push_is_recorded_and_the_next_run_skips_the_network()
+    {
+        var (sut, api) = Build([Skill("alpha")], Session());
+
+        await sut.PushAsync(Request(), CancellationToken.None);
+        var second = await sut.PushAsync(Request(), CancellationToken.None);
+
+        Assert.Single(api.Pushed);
+        Assert.Equal(1, api.MetaCalls);
+        Assert.Equal(new SkillPushOutcome(SkillPushStatus.Unchanged, 1, null), Assert.Single(second.Entries).Outcome);
+    }
+
+    [Fact]
+    public async Task Unchanged_by_the_ledger_needs_no_session()
+    {
+        var skill = Skill("alpha");
+        var (seed, _) = Build([skill], Session());
+        await seed.PushAsync(Request(), CancellationToken.None);
+        var (sut, api) = Build([skill], session: null);
+
+        var result = await sut.PushAsync(Request(), CancellationToken.None);
+
+        Assert.Equal(SkillPushRunFailure.None, result.Failure);
+        Assert.Empty(api.Pushed);
+    }
+
+    [Fact]
+    public async Task A_changed_skill_is_uploaded_again()
+    {
+        var skill = Skill("alpha");
+        var (sut, api) = Build([skill], Session());
+        await sut.PushAsync(Request(), CancellationToken.None);
+
+        File.WriteAllText(Path.Combine(skill.Path, "SKILL.md"), "---\nname: alpha\n---\nedited");
+        await sut.PushAsync(Request(), CancellationToken.None);
+
+        Assert.Equal(2, api.Pushed.Count);
+    }
+
+    [Fact]
+    public async Task Force_uploads_even_when_the_ledger_matches()
+    {
+        var (sut, api) = Build([Skill("alpha")], Session());
+        await sut.PushAsync(Request(), CancellationToken.None);
+
+        await sut.PushAsync(Request() with { Force = true }, CancellationToken.None);
+
+        Assert.Equal(2, api.Pushed.Count);
+    }
+
+    [Fact]
+    public async Task A_refused_push_is_not_recorded()
+    {
+        var api = new FakeRegistryApi();
+        api.Outcomes["alpha"] = new SkillPushOutcome(SkillPushStatus.Refused, null, "nope");
+        var (sut, _) = Build([Skill("alpha")], Session(), api);
+
+        await sut.PushAsync(Request(), CancellationToken.None);
+        await sut.PushAsync(Request(), CancellationToken.None);
+
+        Assert.Equal(2, api.Pushed.Count);
     }
 
     [Fact]
@@ -174,6 +240,15 @@ public sealed class SkillPushServiceTests : IDisposable
         Assert.Equal(0, api.MetaCalls);
     }
 
+    internal sealed class FakeLedger : ISkillLedger
+    {
+        private readonly Dictionary<string, SkillLedgerEntry> _entries = [];
+
+        public SkillLedgerEntry? Get(Uri registry, string skillPath) => _entries.GetValueOrDefault(registry + "|" + skillPath);
+
+        public void Record(Uri registry, string skillPath, SkillLedgerEntry entry) => _entries[registry + "|" + skillPath] = entry;
+    }
+
     private sealed class FakeSkillService(IReadOnlyList<DiscoveredSkill> skills) : ISkillService
     {
         public SkillDiscoveryResult Discover(string? harnessId, string? harnessHome, string? projectStart) =>
@@ -232,6 +307,23 @@ public sealed class SkillFileReaderTests : IDisposable
 
         Assert.Equal(["SKILL.md", "references/deep/a.md", "scripts/run.sh"], files.Select(f => f.RelativePath));
         Assert.Equal("hello", Encoding.UTF8.GetString(files[0].Content));
+    }
+
+    [Fact]
+    public void Hash_is_stable_and_changes_when_a_file_moves_or_changes()
+    {
+        Write("SKILL.md", "a");
+        Write("b.md", "b");
+        var first = SkillFileReader.Hash(SkillFileReader.Read(_root));
+        Assert.Equal(first, SkillFileReader.Hash(SkillFileReader.Read(_root)));
+
+        File.Move(Path.Combine(_root, "b.md"), Path.Combine(_root, "c.md"));
+        var moved = SkillFileReader.Hash(SkillFileReader.Read(_root));
+        Write("c.md", "changed");
+        var changed = SkillFileReader.Hash(SkillFileReader.Read(_root));
+
+        Assert.NotEqual(first, moved);
+        Assert.NotEqual(moved, changed);
     }
 
     [Fact]

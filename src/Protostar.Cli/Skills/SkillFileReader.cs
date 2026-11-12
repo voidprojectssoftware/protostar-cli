@@ -28,6 +28,30 @@ internal static class SkillFileReader
         return files;
     }
 
+    /// <summary>A stable SHA-256 over every file's path and bytes, as lowercase hex.</summary>
+    /// <remarks>
+    /// Each path and content is length-prefixed so moving bytes between a file's name and its content, or
+    /// between two files, always changes the hash. <paramref name="files"/> must be in
+    /// <see cref="Read"/>'s order.
+    /// </remarks>
+    public static string Hash(IReadOnlyList<SkillUploadFile> files)
+    {
+        using var sha = System.Security.Cryptography.IncrementalHash.CreateHash(System.Security.Cryptography.HashAlgorithmName.SHA256);
+        Span<byte> length = stackalloc byte[8];
+        foreach (var file in files)
+        {
+            var path = System.Text.Encoding.UTF8.GetBytes(file.RelativePath);
+            System.Buffers.Binary.BinaryPrimitives.WriteInt64LittleEndian(length, path.Length);
+            sha.AppendData(length);
+            sha.AppendData(path);
+            System.Buffers.Binary.BinaryPrimitives.WriteInt64LittleEndian(length, file.Content.Length);
+            sha.AppendData(length);
+            sha.AppendData(file.Content);
+        }
+
+        return Convert.ToHexStringLower(sha.GetHashAndReset());
+    }
+
     private static void Collect(DirectoryInfo directory, string rootPath, List<SkillUploadFile> files)
     {
         foreach (var entry in directory.EnumerateFileSystemInfos())
