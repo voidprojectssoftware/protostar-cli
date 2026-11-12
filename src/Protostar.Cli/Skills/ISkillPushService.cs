@@ -17,8 +17,10 @@ internal interface ISkillPushService
     /// </summary>
     /// <remarks>
     /// Skills are sent one request each, so one refused skill never fails the others. When two
-    /// discovered skills share a name, the first in discovery order (global before project) is pushed
-    /// and the rest are skipped, matching which one the harness itself loads.
+    /// discovered skills share a name, the first in discovery order (global before project) is pushed,
+    /// matching which one the harness itself loads. A later one is skipped when its content is identical,
+    /// and reported as <see cref="SkillPushStatus.Conflict"/> when it differs, since the registry holds one
+    /// skill per name and pushing both would make them overwrite each other.
     /// </remarks>
     Task<SkillPushRunResult> PushAsync(SkillPushRequest request, CancellationToken cancellationToken);
 }

@@ -51,8 +51,14 @@ internal enum SkillPushStatus
     /// <summary>The registry refused the skill (not its creator, too large, invalid); see the message.</summary>
     Refused,
 
-    /// <summary>The skill was skipped before upload (for example a second skill with the same name).</summary>
+    /// <summary>The skill was not uploaded because an identical skill of the same name was.</summary>
     Skipped,
+
+    /// <summary>
+    /// The skill was not uploaded because a different skill of the same name was, and the registry holds one
+    /// skill per name.
+    /// </summary>
+    Conflict,
 
     /// <summary>The upload could not complete (unreachable registry, unreadable files, server error).</summary>
     Failed,

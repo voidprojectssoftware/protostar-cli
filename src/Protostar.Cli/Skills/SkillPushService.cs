@@ -11,7 +11,8 @@ namespace Protostar.Cli.Skills;
 /// <remarks>
 /// Everything that can stop the whole run (bad URL, unknown skill, no session, unreachable or
 /// incompatible registry) is checked before the first upload, so a run either uploads every skill it
-/// can or uploads nothing. A skill whose content matches the <see cref="ISkillLedger"/> record is
+/// can or uploads nothing. When two skills share a name, only the first (global before project) is
+/// pushed; the other is skipped if its content is identical and reported as a conflict if not. A skill whose content matches the <see cref="ISkillLedger"/> record is
 /// reported unchanged without any network call, and when every skill is, the registry is never contacted.
 /// </remarks>
 internal sealed class SkillPushService : ISkillPushService
@@ -55,42 +56,50 @@ internal sealed class SkillPushService : ISkillPushService
         if (missing is not null)
             return SkillPushRunResult.Fail(SkillPushRunFailure.SkillNotFound, missing, registry);
 
-        // Decide each skill locally first: duplicates are skipped, unreadable skills fail, and skills the
-        // ledger says the registry already has are unchanged. Only what is left needs the network.
+        // Decide each skill locally first: unreadable skills fail, a second skill with an already-seen name is
+        // compared by content (identical is skipped, different is a conflict), and skills the ledger says the
+        // registry already has are unchanged. Only what is left needs the network.
         var entries = new SkillPushEntry?[selected.Count];
         var pending = new List<(int Index, IReadOnlyList<SkillUploadFile> Files, string Hash)>();
-        var seen = new Dictionary<string, DiscoveredSkill>(StringComparer.OrdinalIgnoreCase);
+        var seen = new Dictionary<string, (DiscoveredSkill Skill, string? Hash)>(StringComparer.OrdinalIgnoreCase);
         for (var i = 0; i < selected.Count; i++)
         {
             var skill = selected[i];
-            if (seen.TryGetValue(skill.Name, out var first))
-            {
-                entries[i] = new SkillPushEntry(skill, new SkillPushOutcome(
-                    SkillPushStatus.Skipped, null, $"Same name as the {first.Scope.ToString().ToLowerInvariant()} skill at {first.Path}."));
-                continue;
-            }
-            seen[skill.Name] = skill;
 
-            IReadOnlyList<SkillUploadFile> files;
+            IReadOnlyList<SkillUploadFile>? files = null;
+            string? readError = null;
             try
             {
                 files = SkillFileReader.Read(skill.Path);
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
+                readError = ex.Message;
+            }
+
+            var hash = files is null ? null : SkillFileReader.Hash(files);
+
+            if (seen.TryGetValue(skill.Name, out var first))
+            {
+                entries[i] = new SkillPushEntry(skill, CompareWithFirst(first.Skill, first.Hash, hash));
+                continue;
+            }
+            seen[skill.Name] = (skill, hash);
+
+            if (files is null)
+            {
                 entries[i] = new SkillPushEntry(skill, new SkillPushOutcome(
-                    SkillPushStatus.Failed, null, $"Could not read the skill's files: {ex.Message}"));
+                    SkillPushStatus.Failed, null, $"Could not read the skill's files: {readError}"));
                 continue;
             }
 
-            var hash = SkillFileReader.Hash(files);
             if (!request.Force && _ledger.Get(registry, skill.Path) is { } recorded && recorded.ContentHash == hash)
             {
                 entries[i] = new SkillPushEntry(skill, new SkillPushOutcome(SkillPushStatus.Unchanged, recorded.Version, null));
                 continue;
             }
 
-            pending.Add((i, files, hash));
+            pending.Add((i, files, hash!));
         }
 
         if (pending.Count > 0)
@@ -118,6 +127,21 @@ internal sealed class SkillPushService : ISkillPushService
         }
 
         return new SkillPushRunResult(SkillPushRunFailure.None, null, registry, entries.Select(e => e!).ToList());
+    }
+
+    // A later skill whose name was already taken in this run. The registry holds one skill per name, so the
+    // later copy can only be left out safely when its content is identical to the one being backed up.
+    private static SkillPushOutcome CompareWithFirst(DiscoveredSkill first, string? firstHash, string? hash)
+    {
+        var where = $"the {first.Scope.ToString().ToLowerInvariant()} skill at {first.Path}";
+        if (firstHash is not null && firstHash == hash)
+            return new SkillPushOutcome(SkillPushStatus.Skipped, null, $"Identical to {where}.");
+
+        var why = firstHash is null || hash is null
+            ? $"Could not compare it with {where}, which has the same name."
+            : $"Differs from {where}, which has the same name.";
+        return new SkillPushOutcome(SkillPushStatus.Conflict, null,
+            $"{why} The registry holds one skill per name, so this copy was not backed up.");
     }
 
     // Every discovered skill when no names were given; otherwise the skills matching each name, with
