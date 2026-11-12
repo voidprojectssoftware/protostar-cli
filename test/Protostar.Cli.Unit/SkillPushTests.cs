@@ -215,7 +215,7 @@ public sealed class SkillPushServiceTests : IDisposable
     }
 
     [Fact]
-    public async Task Second_skill_with_the_same_name_is_skipped_not_pushed()
+    public async Task Second_skill_with_the_same_name_and_identical_content_is_skipped()
     {
         var global = Skill("alpha", SkillScope.Global);
         var project = Skill("alpha", SkillScope.Project);
@@ -225,7 +225,42 @@ public sealed class SkillPushServiceTests : IDisposable
 
         Assert.Single(api.Pushed);
         Assert.Equal(SkillPushStatus.Skipped, result.Entries[1].Outcome.Status);
+        Assert.Contains("Identical", result.Entries[1].Outcome.Message);
         Assert.True(result.Succeeded);
+    }
+
+    [Fact]
+    public async Task Second_skill_with_the_same_name_and_different_content_is_a_conflict()
+    {
+        var global = Skill("alpha", SkillScope.Global);
+        var project = Skill("alpha", SkillScope.Project);
+        File.WriteAllText(Path.Combine(project.Path, "SKILL.md"), "---\nname: alpha\n---\nthe project's own version");
+        var (sut, api) = Build([global, project], Session());
+
+        var result = await sut.PushAsync(Request(), CancellationToken.None);
+
+        var uploaded = Encoding.UTF8.GetString(Assert.Single(api.Pushed).Files[0].Content);
+        Assert.EndsWith("body", uploaded);
+        Assert.Equal(SkillPushStatus.Conflict, result.Entries[1].Outcome.Status);
+        Assert.Contains(global.Path, result.Entries[1].Outcome.Message);
+        Assert.False(result.Succeeded);
+    }
+
+    [Fact]
+    public async Task Same_name_conflict_is_detected_even_when_the_first_copy_is_unchanged_by_the_ledger()
+    {
+        var global = Skill("alpha", SkillScope.Global);
+        var (seed, _) = Build([global], Session());
+        await seed.PushAsync(Request(), CancellationToken.None);
+        var project = Skill("alpha", SkillScope.Project);
+        File.WriteAllText(Path.Combine(project.Path, "SKILL.md"), "different");
+        var (sut, api) = Build([global, project], session: null);
+
+        var result = await sut.PushAsync(Request(), CancellationToken.None);
+
+        Assert.Empty(api.Pushed);
+        Assert.Equal(SkillPushStatus.Unchanged, result.Entries[0].Outcome.Status);
+        Assert.Equal(SkillPushStatus.Conflict, result.Entries[1].Outcome.Status);
     }
 
     [Fact]

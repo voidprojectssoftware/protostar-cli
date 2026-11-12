@@ -43,13 +43,18 @@ internal static class CapturePresenter
         }
 
         var outcome = push.Entries.FirstOrDefault()?.Outcome;
-        return outcome?.Status switch
+        var conflict = push.Entries.Skip(1).FirstOrDefault(e => e.Outcome.Status == SkillPushStatus.Conflict);
+        var line = outcome?.Status switch
         {
             SkillPushStatus.Created => $"{prefix}: backed up skill '{result.SkillName}' as v{outcome.Version}.",
             SkillPushStatus.Unchanged => $"{prefix}: skill '{result.SkillName}' unchanged.",
             null => $"{prefix}: nothing to do.",
             _ => $"{prefix}: skill '{result.SkillName}' not backed up: {outcome.Message}",
         };
+
+        return conflict is null
+            ? line
+            : $"{line} Conflict: the {conflict.Skill.Scope.ToString().ToLowerInvariant()} copy at {conflict.Skill.Path}: {conflict.Outcome.Message}";
     }
 
     private static string Reason(SkillPushRunResult push) => push.Failure switch
@@ -65,5 +70,5 @@ internal static class CapturePresenter
         result.Action == CaptureAction.Failed ||
         (result.Push is { } push &&
          (push.Failure is not (SkillPushRunFailure.None or SkillPushRunFailure.SkillNotFound) ||
-          push.Entries.Any(e => e.Outcome.Status is SkillPushStatus.Refused or SkillPushStatus.Failed)));
+          push.Entries.Any(e => e.Outcome.Status is SkillPushStatus.Refused or SkillPushStatus.Failed or SkillPushStatus.Conflict)));
 }

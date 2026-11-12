@@ -77,8 +77,12 @@ each skill you see one of:
 - **unchanged (vN)**: the registry already had exactly this content.
 - **refused**: the registry would not store it (for example, it is over the size
   limit or its SKILL.md is missing), with the reason.
-- **skipped**: another skill with the same name was already pushed in this run
-  (global wins over project, matching which one the harness loads).
+- **skipped**: another skill with the same name and identical content was already
+  pushed in this run, so the registry already has it.
+- **conflict**: another skill with the same name but different content was pushed
+  in this run (global wins over project, matching which one the harness loads).
+  The registry holds one skill per name, so this copy is not backed up; rename one
+  of them to back up both.
 - **failed**: the upload did not complete (for example, the registry was
   unreachable).
 
