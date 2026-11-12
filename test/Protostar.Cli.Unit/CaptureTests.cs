@@ -9,7 +9,11 @@ namespace Protostar.Cli.Unit;
 /// <summary>Contract tests for <see cref="ICaptureService"/> and the line <see cref="CapturePresenter"/> writes.</summary>
 public sealed class CaptureServiceTests
 {
-    private const string SkillUse = """{"session_id":"s1","cwd":"/tmp","hook_event_name":"PostToolUse","tool_name":"Skill","tool_input":{"skill":"alpha"}}""";
+    // A directory that exists on every OS, since the service ignores a cwd that is not on disk.
+    private static readonly string Cwd = Path.GetTempPath().TrimEnd(Path.DirectorySeparatorChar);
+
+    private static readonly string SkillUse =
+        $$$"""{"session_id":"s1","cwd":{{{System.Text.Json.JsonSerializer.Serialize(Cwd)}}},"hook_event_name":"PostToolUse","tool_name":"Skill","tool_input":{"skill":"alpha"}}""";
 
     private static (ICaptureService Sut, FakePush Push) Build(SkillPushRunResult? result = null)
     {
@@ -31,12 +35,33 @@ public sealed class CaptureServiceTests
         Assert.Equal(CaptureAction.SkillBackedUp, result.Action);
         var request = Assert.Single(push.Requests);
         Assert.Equal(["alpha"], request.Names);
-        Assert.Equal("/tmp", request.ProjectStart);
+        Assert.Equal(Cwd, request.ProjectStart);
         Assert.False(request.Force);
     }
 
+    [Fact]
+    public async Task Events_other_than_PostToolUse_are_ignored()
+    {
+        var (sut, push) = Build();
+
+        var result = await sut.HandleAsync("SessionStart", SkillUse, CancellationToken.None);
+
+        Assert.Equal(CaptureAction.Ignored, result.Action);
+        Assert.Empty(push.Requests);
+    }
+
+    [Fact]
+    public async Task A_cwd_that_does_not_exist_skips_project_skills_but_still_pushes()
+    {
+        var (sut, push) = Build();
+        var payload = """{"tool_name":"Skill","cwd":"/definitely/not/here","tool_input":{"skill":"alpha"}}""";
+
+        await sut.HandleAsync("PostToolUse", payload, CancellationToken.None);
+
+        Assert.Null(Assert.Single(push.Requests).ProjectStart);
+    }
+
     [Theory]
-    [InlineData("SessionStart", SkillUse)]
     [InlineData("PostToolUse", "")]
     [InlineData("PostToolUse", "not json")]
     [InlineData("PostToolUse", """{"tool_name":"Bash","tool_input":{"command":"ls"}}""")]
