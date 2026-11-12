@@ -9,6 +9,7 @@ namespace Protostar.Cli.Unit;
 /// <c>~/.protostar</c>. Tests within a class run sequentially in xUnit, so the process-global env
 /// var is safe here.
 /// </summary>
+[Collection("ProtostarConfigDir")]
 public sealed class CredentialStoreTests : IDisposable
 {
     private readonly string _dir;

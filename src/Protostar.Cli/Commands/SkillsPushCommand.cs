@@ -48,6 +48,10 @@ internal sealed class SkillsPushCommand : AsyncCommand<SkillsPushCommand.Setting
         [CommandOption("--registry <URL>")]
         [Description("Registry base URL. Defaults to $PROTOSTAR_REGISTRY_URL, then the built-in dev default.")]
         public string? Registry { get; init; }
+
+        [CommandOption("--force")]
+        [Description("Upload every selected skill even if it has not changed since its last backup.")]
+        public bool Force { get; init; }
     }
 
     protected override async Task<int> ExecuteAsync(CommandContext context, Settings settings, CancellationToken cancellation)
@@ -57,7 +61,8 @@ internal sealed class SkillsPushCommand : AsyncCommand<SkillsPushCommand.Setting
             settings.Harness,
             settings.HarnessHome,
             settings.GlobalOnly ? null : settings.Project ?? Directory.GetCurrentDirectory(),
-            settings.Registry);
+            settings.Registry,
+            settings.Force);
 
         var result = await _push.PushAsync(request, cancellation);
         return SkillPushPresenter.Render(result, _catalog);

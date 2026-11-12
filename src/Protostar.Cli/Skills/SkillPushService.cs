@@ -11,19 +11,22 @@ namespace Protostar.Cli.Skills;
 /// <remarks>
 /// Everything that can stop the whole run (bad URL, unknown skill, no session, unreachable or
 /// incompatible registry) is checked before the first upload, so a run either uploads every skill it
-/// can or uploads nothing.
+/// can or uploads nothing. A skill whose content matches the <see cref="ISkillLedger"/> record is
+/// reported unchanged without any network call, and when every skill is, the registry is never contacted.
 /// </remarks>
 internal sealed class SkillPushService : ISkillPushService
 {
     private readonly ISkillService _skills;
     private readonly IAccessTokenProvider _tokens;
     private readonly IRegistryApi _registry;
+    private readonly ISkillLedger _ledger;
 
-    public SkillPushService(ISkillService skills, IAccessTokenProvider tokens, IRegistryApi registry)
+    public SkillPushService(ISkillService skills, IAccessTokenProvider tokens, IRegistryApi registry, ISkillLedger ledger)
     {
         _skills = skills;
         _tokens = tokens;
         _registry = registry;
+        _ledger = ledger;
     }
 
     /// <inheritdoc />
@@ -52,52 +55,69 @@ internal sealed class SkillPushService : ISkillPushService
         if (missing is not null)
             return SkillPushRunResult.Fail(SkillPushRunFailure.SkillNotFound, missing, registry);
 
-        if (selected.Count == 0)
-            return new SkillPushRunResult(SkillPushRunFailure.None, null, registry, []);
-
-        var session = await _tokens.GetSessionAsync(registry, cancellationToken);
-        if (session is null)
-            return SkillPushRunResult.Fail(SkillPushRunFailure.NotLoggedIn, null, registry);
-        if (session.IsExpired)
-            return SkillPushRunResult.Fail(SkillPushRunFailure.SessionExpired, null, registry);
-
-        var meta = await _registry.GetMetaAsync(registry, cancellationToken);
-        if (meta is null)
-            return SkillPushRunResult.Fail(SkillPushRunFailure.RegistryUnreachable, null, registry);
-        if (ApiCompatibility.Check(meta) is { } incompatibility)
-            return SkillPushRunResult.Fail(SkillPushRunFailure.Incompatible, incompatibility, registry);
-
-        var entries = new List<SkillPushEntry>(selected.Count);
-        var pushed = new Dictionary<string, DiscoveredSkill>(StringComparer.OrdinalIgnoreCase);
-        foreach (var skill in selected)
+        // Decide each skill locally first: duplicates are skipped, unreadable skills fail, and skills the
+        // ledger says the registry already has are unchanged. Only what is left needs the network.
+        var entries = new SkillPushEntry?[selected.Count];
+        var pending = new List<(int Index, IReadOnlyList<SkillUploadFile> Files, string Hash)>();
+        var seen = new Dictionary<string, DiscoveredSkill>(StringComparer.OrdinalIgnoreCase);
+        for (var i = 0; i < selected.Count; i++)
         {
-            if (pushed.TryGetValue(skill.Name, out var first))
+            var skill = selected[i];
+            if (seen.TryGetValue(skill.Name, out var first))
             {
-                entries.Add(new SkillPushEntry(skill, new SkillPushOutcome(
-                    SkillPushStatus.Skipped, null, $"Same name as the {first.Scope.ToString().ToLowerInvariant()} skill at {first.Path}.")));
+                entries[i] = new SkillPushEntry(skill, new SkillPushOutcome(
+                    SkillPushStatus.Skipped, null, $"Same name as the {first.Scope.ToString().ToLowerInvariant()} skill at {first.Path}."));
+                continue;
+            }
+            seen[skill.Name] = skill;
+
+            IReadOnlyList<SkillUploadFile> files;
+            try
+            {
+                files = SkillFileReader.Read(skill.Path);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                entries[i] = new SkillPushEntry(skill, new SkillPushOutcome(
+                    SkillPushStatus.Failed, null, $"Could not read the skill's files: {ex.Message}"));
                 continue;
             }
 
-            pushed[skill.Name] = skill;
-            entries.Add(new SkillPushEntry(skill, await PushOneAsync(registry, session.AccessToken, skill, cancellationToken)));
+            var hash = SkillFileReader.Hash(files);
+            if (!request.Force && _ledger.Get(registry, skill.Path) is { } recorded && recorded.ContentHash == hash)
+            {
+                entries[i] = new SkillPushEntry(skill, new SkillPushOutcome(SkillPushStatus.Unchanged, recorded.Version, null));
+                continue;
+            }
+
+            pending.Add((i, files, hash));
         }
 
-        return new SkillPushRunResult(SkillPushRunFailure.None, null, registry, entries);
-    }
-
-    private async Task<SkillPushOutcome> PushOneAsync(Uri registry, string accessToken, DiscoveredSkill skill, CancellationToken cancellationToken)
-    {
-        IReadOnlyList<SkillUploadFile> files;
-        try
+        if (pending.Count > 0)
         {
-            files = SkillFileReader.Read(skill.Path);
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            return new SkillPushOutcome(SkillPushStatus.Failed, null, $"Could not read the skill's files: {ex.Message}");
+            var session = await _tokens.GetSessionAsync(registry, cancellationToken);
+            if (session is null)
+                return SkillPushRunResult.Fail(SkillPushRunFailure.NotLoggedIn, null, registry);
+            if (session.IsExpired)
+                return SkillPushRunResult.Fail(SkillPushRunFailure.SessionExpired, null, registry);
+
+            var meta = await _registry.GetMetaAsync(registry, cancellationToken);
+            if (meta is null)
+                return SkillPushRunResult.Fail(SkillPushRunFailure.RegistryUnreachable, null, registry);
+            if (ApiCompatibility.Check(meta) is { } incompatibility)
+                return SkillPushRunResult.Fail(SkillPushRunFailure.Incompatible, incompatibility, registry);
+
+            foreach (var (index, files, hash) in pending)
+            {
+                var skill = selected[index];
+                var outcome = await _registry.PushSkillAsync(registry, session.AccessToken, skill.Name, files, cancellationToken);
+                if (outcome.Succeeded)
+                    _ledger.Record(registry, skill.Path, new SkillLedgerEntry(hash, outcome.Version));
+                entries[index] = new SkillPushEntry(skill, outcome);
+            }
         }
 
-        return await _registry.PushSkillAsync(registry, accessToken, skill.Name, files, cancellationToken);
+        return new SkillPushRunResult(SkillPushRunFailure.None, null, registry, entries.Select(e => e!).ToList());
     }
 
     // Every discovered skill when no names were given; otherwise the skills matching each name, with

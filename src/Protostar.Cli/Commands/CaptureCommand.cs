@@ -1,16 +1,27 @@
 using System.ComponentModel;
+using Protostar.Cli.Auth;
+using Protostar.Cli.Capture;
 using Spectre.Console.Cli;
 
 namespace Protostar.Cli.Commands;
 
 /// <summary>
-/// Invoked by an installed harness hook when a captured event fires (e.g. PostToolUse on the Skill
-/// tool). Reads the hook's JSON payload from stdin and acknowledges it. This is the capture seam;
-/// syncing the skill to the registry lands in a later ticket. It never blocks the harness and
-/// always exits 0.
+/// Invoked by an installed harness hook when a captured event fires (e.g. PostToolUse on the Skill tool).
 /// </summary>
-internal sealed class CaptureCommand : Command<CaptureCommand.Settings>
+/// <remarks>
+/// Reads the hook's JSON payload from stdin and hands it to <see cref="ICaptureService"/>, which backs
+/// up a used skill when it changed. Bounded by <see cref="Timeout"/>, and always exits 0 so it never
+/// blocks or fails the harness.
+/// </remarks>
+internal sealed class CaptureCommand : AsyncCommand<CaptureCommand.Settings>
 {
+    /// <summary>How long a capture may run before it gives up.</summary>
+    private static readonly TimeSpan Timeout = TimeSpan.FromSeconds(15);
+
+    private readonly ICaptureService _capture;
+
+    public CaptureCommand(ICaptureService capture) => _capture = capture;
+
     public sealed class Settings : CommandSettings
     {
         [CommandOption("--hook <EVENT>")]
@@ -18,16 +29,30 @@ internal sealed class CaptureCommand : Command<CaptureCommand.Settings>
         public string? Hook { get; init; }
     }
 
-    protected override int Execute(CommandContext context, Settings settings, CancellationToken cancellation)
+    protected override async Task<int> ExecuteAsync(CommandContext context, Settings settings, CancellationToken cancellation)
     {
         // Only read stdin when it is actually piped (a real hook invocation). Guards against blocking
         // if a user runs this by hand in a terminal.
-        var payload = Console.IsInputRedirected ? Console.In.ReadToEnd() : string.Empty;
+        var payload = Console.IsInputRedirected ? await Console.In.ReadToEndAsync(cancellation) : string.Empty;
         var hook = settings.Hook ?? "unknown";
 
-        // A quiet acknowledgement. For a successful hook, Claude Code surfaces stdout in the
-        // transcript only, so this never leaks into the model's context.
-        Console.WriteLine($"protostar capture: {hook} ({payload.Length} bytes)");
-        return 0;
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellation);
+        timeout.CancelAfter(Timeout);
+
+        var result = await _capture.HandleAsync(hook, payload, timeout.Token);
+        return CapturePresenter.Render(hook, result, Console.Out, AppendLog);
+    }
+
+    private static void AppendLog(string line)
+    {
+        try
+        {
+            Directory.CreateDirectory(ProtostarPaths.ConfigDir());
+            File.AppendAllText(Path.Combine(ProtostarPaths.ConfigDir(), "capture.log"), line + Environment.NewLine);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // Logging is best effort; the hook must still succeed.
+        }
     }
 }

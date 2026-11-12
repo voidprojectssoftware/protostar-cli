@@ -91,6 +91,12 @@ Takes the same options as `protostar skills`, plus:
 | Option | Description |
 |---|---|
 | `--registry <URL>` | Registry to back up to. Defaults to `PROTOSTAR_REGISTRY_URL`, then `https://localhost:7443`. |
+| `--force` | Upload every selected skill even if it has not changed since its last backup. |
+
+protostar remembers what it last backed up to each registry in
+`~/.protostar/skill-ledger.json`, so a skill that has not changed is reported as
+unchanged without contacting the registry. Use `--force` if the registry has lost
+something the ledger says it has.
 
 ## `protostar auth`
 
@@ -122,10 +128,20 @@ See [Authenticate to a registry](../get-started/authenticate.md).
 
 :::note Invoked by hooks, not by you
 `capture` is called automatically by the [hooks](../get-started/connect-your-harness.md)
-protostar installs in your harness. It reads a hook event from stdin and
-acknowledges it; it is hidden from `--help` for that reason and is documented here
-only for completeness. You should not need to run it by hand.
+protostar installs in your harness. It is hidden from `--help` for that reason and
+is documented here only for completeness. You should not need to run it by hand.
 :::
+
+When Claude Code uses one of your skills, `capture` backs that skill up to the
+registry if it changed since its last backup, the same way
+[`skills push`](#protostar-skills-push-name) does for one skill. An unchanged skill
+costs no network call. Plugin skills (`plugin:name`) are not backed up. Other hook
+events are acknowledged and ignored for now.
+
+The hook never blocks or fails your session: it gives up after 15 seconds and
+always exits `0`. It writes one line to the session transcript, and problems you
+may need to act on (not signed in, registry unreachable, skill refused) are also
+appended to `~/.protostar/capture.log`.
 
 | Option | Description |
 |---|---|

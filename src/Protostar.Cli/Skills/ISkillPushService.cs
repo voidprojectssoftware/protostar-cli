@@ -29,12 +29,14 @@ internal interface ISkillPushService
 /// <param name="HarnessHome">Override the harness config root.</param>
 /// <param name="ProjectStart">Where the project-scope walk-up starts; <c>null</c> skips project skills.</param>
 /// <param name="Registry">The <c>--registry</c> option; <c>null</c> falls back to the environment and default.</param>
+/// <param name="Force">Upload even when the local ledger says the registry already has this content.</param>
 internal sealed record SkillPushRequest(
     IReadOnlyList<string> Names,
     string? HarnessId,
     string? HarnessHome,
     string? ProjectStart,
-    string? Registry);
+    string? Registry,
+    bool Force = false);
 
 /// <summary>Why a push run stopped before uploading anything.</summary>
 internal enum SkillPushRunFailure
