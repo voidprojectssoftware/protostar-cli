@@ -170,8 +170,9 @@ public sealed class ProjectFactsResolverTests : IDisposable
         var resolver = new ProjectFactsResolver();
         var first = resolver.Resolve(repo);
 
-        // Without its .git folder the repo would no longer be one if git ran again.
-        Directory.Delete(Path.Combine(repo, ".git"), recursive: true);
+        // Without its .git folder the repo would no longer be one if git ran again. Moved rather than deleted,
+        // because git's object files are read-only and Windows refuses to delete them.
+        Directory.Move(Path.Combine(repo, ".git"), Path.Combine(_root, "moved-git"));
         var second = resolver.Resolve(repo);
 
         Assert.Equal(first, second);
