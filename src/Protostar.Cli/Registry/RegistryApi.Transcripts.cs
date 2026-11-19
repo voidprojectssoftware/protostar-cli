@@ -62,6 +62,8 @@ internal sealed partial class RegistryApi : ITranscriptApi
             var problem = await ReadProblemAsync(response, cancellationToken);
             if (IsUnknownMachine(response, problem, machineId))
                 return new AppendResult(AppendStatus.UnknownMachine, null, problem!.Title);
+            if (IsUnknownTranscript(response, problem))
+                return new AppendResult(AppendStatus.UnknownTranscript, null, problem!.Title);
 
             return response.StatusCode switch
             {
@@ -146,11 +148,21 @@ internal sealed partial class RegistryApi : ITranscriptApi
         }
     }
 
-    // The registry has no code for this refusal, only a 400 whose title names the machine ("Machine <id> is not
-    // registered."), so match that exactly: other 400s (a bad key, a corrupt chunk) must never look like it.
+    // The problem type identifies the refusal (registry#41). Registries from before it send only a 400 whose title names
+    // the machine ("Machine <id> is not registered."), so that exact title still counts; other 400s (a bad key, a
+    // corrupt chunk) must never look like it.
     private static bool IsUnknownMachine(HttpResponseMessage response, ProblemBody? problem, Guid machineId) =>
         response.StatusCode == HttpStatusCode.BadRequest &&
-        problem?.Title?.StartsWith($"Machine {machineId} is not registered.", StringComparison.OrdinalIgnoreCase) == true;
+        (problem?.Type == UnknownMachineType ||
+         problem?.Title?.StartsWith($"Machine {machineId} is not registered.", StringComparison.OrdinalIgnoreCase) == true);
+
+    // Only the problem type, never a bare 404: a 404 from a proxy or a wrong base URL must not make the caller upload
+    // a whole transcript again from offset 0.
+    private static bool IsUnknownTranscript(HttpResponseMessage response, ProblemBody? problem) =>
+        response.StatusCode == HttpStatusCode.NotFound && problem?.Type == UnknownTranscriptType;
+
+    private const string UnknownMachineType = "https://protostar.dev/problems/unknown-machine";
+    private const string UnknownTranscriptType = "https://protostar.dev/problems/unknown-transcript";
 
     private static string Describe(HttpStatusCode status) => status == HttpStatusCode.Unauthorized
         ? "The registry rejected the session. Run `protostar auth login`."
@@ -166,5 +178,5 @@ internal sealed partial class RegistryApi : ITranscriptApi
 
     private sealed record PositionBody(int Revision, long Length);
 
-    private sealed record ProblemBody(string? Title, int? Revision, long? Length);
+    private sealed record ProblemBody(string? Type, string? Title, int? Revision, long? Length);
 }

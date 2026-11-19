@@ -171,6 +171,13 @@ internal sealed record SessionStatusResult(SessionSyncFailure Failure, string? D
 /// <c>PUT</c>, and the retry happens even when it fails, because a concurrent push (a burst of Stop hooks) may have
 /// registered the machine first; if the retry is refused too, the transcript fails as any other refusal does.
 /// </para>
+/// <para>
+/// A registry that lost the transcript itself answers an append with the <c>unknown-transcript</c> problem type. Only
+/// that answer makes the transcript register again and upload from the start, once per run; a server error or an
+/// unreachable registry leaves the ledger's position alone, so a transient failure never re-sends a large file. The
+/// registration recovers a forgotten machine first, so a registry reset that lost both comes back in one push. A
+/// subagent's registration carries its parent key as always, so its link to the session is restored with it.
+/// </para>
 /// </remarks>
 internal sealed partial class SessionSyncService : ISessionSyncService
 {
@@ -396,12 +403,7 @@ internal sealed partial class SessionSyncService : ISessionSyncService
             ApiResult<TranscriptPosition> registered;
             try
             {
-                registered = await _api.RegisterTranscriptAsync(registry, session.AccessToken, transcript, session.MachineId, project, cancellationToken);
-                if (registered.MachineUnknown)
-                {
-                    await RegisterMachineAgainAsync(registry, session, cancellationToken);
-                    registered = await _api.RegisterTranscriptAsync(registry, session.AccessToken, transcript, session.MachineId, project, cancellationToken);
-                }
+                registered = await RegisterTranscriptAsync(registry, session, transcript, project, cancellationToken);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
@@ -427,6 +429,7 @@ internal sealed partial class SessionSyncService : ISessionSyncService
         }
 
         var mismatches = 0;
+        var reRegistered = false;
         while (true)
         {
             if (budget is { } limit && clock.Elapsed >= limit)
@@ -487,6 +490,35 @@ internal sealed partial class SessionSyncService : ISessionSyncService
                 case AppendStatus.Mismatch:
                     return Failed(transcript, plan, sent, "The registry's position kept moving; another machine may be uploading the same transcript.");
 
+                case AppendStatus.UnknownTranscript when !reRegistered:
+                    // The registry lost the transcript (its rows were deleted, or the database was reset), so what the
+                    // ledger says it holds is gone. Register it again and upload from the position that returns: a
+                    // fresh registration answers revision 1 at offset 0. Once only; a second refusal fails below.
+                    reRegistered = true;
+                    var project = ProjectFactsFor(transcript);
+                    ApiResult<TranscriptPosition> again;
+                    try
+                    {
+                        again = await RegisterTranscriptAsync(registry, session, transcript, project, cancellationToken);
+                    }
+                    catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                    {
+                        return Stopped();
+                    }
+
+                    if (!again.Ok)
+                        return Failed(transcript, plan, sent, again.Error!);
+                    filing = project is null ? ProjectFiling.Pending : ProjectFiling.Sent;
+                    // As after a first registration: the ledger takes the registry's confirmed position, and the
+                    // upload resumes from it unless it is past the end of the file.
+                    var restart = again.Value!;
+                    _ledger.Save(registry, transcript.Harness, transcript.Key, new SessionLedgerEntry(
+                        restart.Revision, restart.Length, SessionLedger.TailHash(transcript.Path, restart.Length), true, null, now, filing));
+                    (revision, offset) = restart.Length <= SafeLength(transcript.Path)
+                        ? (restart.Revision, restart.Length)
+                        : (restart.Revision + 1, 0);
+                    break;
+
                 default:
                     return Failed(transcript, plan, sent, result.Message ?? "The upload failed.");
             }
@@ -531,6 +563,19 @@ internal sealed partial class SessionSyncService : ISessionSyncService
         }
 
         return (SessionSyncFailure.None, null, new Session(stored.AccessToken, machine.Id));
+    }
+
+    // Registers the transcript, registering the machine again first when the registry has forgotten it too, so the
+    // two recoveries compose: after a full reset both are gone, and the machine must exist before the transcript can.
+    private async Task<ApiResult<TranscriptPosition>> RegisterTranscriptAsync(
+        Uri registry, Session session, LocalTranscript transcript, ProjectFacts? project, CancellationToken cancellationToken)
+    {
+        var registered = await _api.RegisterTranscriptAsync(registry, session.AccessToken, transcript, session.MachineId, project, cancellationToken);
+        if (!registered.MachineUnknown)
+            return registered;
+
+        await RegisterMachineAgainAsync(registry, session, cancellationToken);
+        return await _api.RegisterTranscriptAsync(registry, session.AccessToken, transcript, session.MachineId, project, cancellationToken);
     }
 
     // The registry forgot this machine. Registers it again under the same id: a new id would split its history in

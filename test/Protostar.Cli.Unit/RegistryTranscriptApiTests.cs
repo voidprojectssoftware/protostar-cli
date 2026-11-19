@@ -15,14 +15,21 @@ public sealed class RegistryTranscriptApiTests
     private static readonly LocalTranscript Transcript = new(
         "claude-code", "6f83525b-790f-4654-944d-ba3b0c96453e", TranscriptKind.Session, null, "/tmp/session.jsonl", null);
 
+    private const string GenericType = "https://tools.ietf.org/html/rfc9110#section-15.5.1";
+    private const string UnknownMachineType = "https://protostar.dev/problems/unknown-machine";
+    private const string UnknownTranscriptType = "https://protostar.dev/problems/unknown-transcript";
+
     // The registry's real answers (TranscriptService): a 400 problem whose title names the machine.
     private static string AppendRefusal(Guid id) => $"Machine {id} is not registered.";
     private static string RegisterRefusal(Guid id) => $"Machine {id} is not registered. Register it with PUT /v1/machines/{{machineId}} first.";
 
-    [Fact]
-    public async Task An_append_refused_for_an_unknown_machine_is_reported_as_such()
+    [Theory]
+    [InlineData(UnknownMachineType)]
+    [InlineData(GenericType)]
+    public async Task An_append_refused_for_an_unknown_machine_is_reported_as_such(string type)
     {
-        var api = Api(HttpStatusCode.BadRequest, AppendRefusal(MachineId));
+        // A registry from before registry#41 sends a generic type, and only the title tells.
+        var api = Api(HttpStatusCode.BadRequest, AppendRefusal(MachineId), type);
 
         var result = await Append(api);
 
@@ -38,6 +45,41 @@ public sealed class RegistryTranscriptApiTests
 
         Assert.False(result.Ok);
         Assert.True(result.MachineUnknown);
+    }
+
+    [Fact]
+    public async Task The_unknown_machine_type_is_recognised_whatever_the_title_says()
+    {
+        var api = Api(HttpStatusCode.BadRequest, "Some reworded title.", UnknownMachineType);
+
+        var appended = await Append(api);
+        var registered = await api.RegisterTranscriptAsync(Registry, "tok", Transcript, MachineId, null, CancellationToken.None);
+
+        Assert.Equal(AppendStatus.UnknownMachine, appended.Status);
+        Assert.True(registered.MachineUnknown);
+    }
+
+    [Fact]
+    public async Task An_append_refused_with_the_unknown_transcript_type_is_reported_as_such()
+    {
+        var api = Api(HttpStatusCode.NotFound, "No transcript with that harness and key.", UnknownTranscriptType);
+
+        var result = await Append(api);
+
+        Assert.Equal(AppendStatus.UnknownTranscript, result.Status);
+    }
+
+    [Theory]
+    [InlineData(HttpStatusCode.NotFound, GenericType)]
+    [InlineData(HttpStatusCode.BadRequest, UnknownTranscriptType)]
+    [InlineData(HttpStatusCode.InternalServerError, UnknownTranscriptType)]
+    public async Task Only_a_404_with_the_unknown_transcript_type_means_the_transcript_is_unknown(HttpStatusCode status, string type)
+    {
+        var api = Api(status, "No transcript with that harness and key.", type);
+
+        var result = await Append(api);
+
+        Assert.NotEqual(AppendStatus.UnknownTranscript, result.Status);
     }
 
     [Theory]
@@ -58,15 +100,15 @@ public sealed class RegistryTranscriptApiTests
     private static Task<AppendResult> Append(RegistryApi api) =>
         api.AppendAsync(Registry, "tok", Transcript.Harness, Transcript.Key, 1, 0, MachineId, Encoding.UTF8.GetBytes("{}\n"), CancellationToken.None);
 
-    private static RegistryApi Api(HttpStatusCode status, string title) => new(new ProblemHandler(status, title));
+    private static RegistryApi Api(HttpStatusCode status, string title, string type = GenericType) => new(new ProblemHandler(status, title, type));
 
-    private sealed class ProblemHandler(HttpStatusCode status, string title) : HttpMessageHandler
+    private sealed class ProblemHandler(HttpStatusCode status, string title, string type) : HttpMessageHandler
     {
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>
             Task.FromResult(new HttpResponseMessage(status)
             {
                 Content = new StringContent(
-                    $$"""{"type":"https://tools.ietf.org/html/rfc9110#section-15.5.1","title":"{{title}}","status":{{(int)status}}}""",
+                    $$"""{"type":"{{type}}","title":"{{title}}","status":{{(int)status}}}""",
                     Encoding.UTF8,
                     "application/problem+json"),
             });

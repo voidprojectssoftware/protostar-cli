@@ -21,7 +21,10 @@ internal interface ITranscriptApi
         Uri registry, string accessToken, LocalTranscript transcript, Guid machineId, ProjectFacts? project, CancellationToken cancellationToken);
 
     /// <summary><c>POST /v1/transcripts/{harness}/{key}/content</c>: appends one chunk of whole lines, gzip-compressed on the wire.</summary>
-    /// <remarks>A registry that does not know <paramref name="machineId"/> answers <see cref="AppendStatus.UnknownMachine"/>.</remarks>
+    /// <remarks>
+    /// A registry that does not know <paramref name="machineId"/> answers <see cref="AppendStatus.UnknownMachine"/>, and one
+    /// that does not know the transcript answers <see cref="AppendStatus.UnknownTranscript"/>.
+    /// </remarks>
     Task<AppendResult> AppendAsync(
         Uri registry, string accessToken, string harness, string key, int revision, long offset, Guid machineId,
         ReadOnlyMemory<byte> chunk, CancellationToken cancellationToken);
@@ -63,6 +66,10 @@ internal enum AppendStatus
 
     /// <summary>The registry has no record of the machine that sent the chunk, typically after its database was rebuilt.</summary>
     UnknownMachine,
+
+    /// <summary>The registry has no record of the transcript itself, typically after its rows were lost or the database reset.</summary>
+    /// <remarks>Only the registry's <c>unknown-transcript</c> problem type means this; any other 404 is <see cref="Rejected"/>.</remarks>
+    UnknownTranscript,
 }
 
 /// <summary>The result of appending a chunk.</summary>
