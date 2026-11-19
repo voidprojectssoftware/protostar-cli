@@ -9,6 +9,7 @@ using Protostar.Cli.Harness.ClaudeCode;
 using Protostar.Cli.Hooks;
 using Protostar.Cli.Infrastructure;
 using Protostar.Cli.Registry;
+using Protostar.Cli.Sessions;
 using Protostar.Cli.Skills;
 using Spectre.Console.Cli;
 
@@ -20,7 +21,13 @@ services.AddSingleton<ISkillService, SkillService>();
 services.AddSingleton<IHookInstallService, HookInstallService>();
 services.AddSingleton<ITokenStore, TokenStore>();
 services.AddSingleton<IAccessTokenProvider, AccessTokenProvider>();
-services.AddSingleton<IRegistryApi, RegistryApi>();
+services.AddSingleton<RegistryApi>();
+services.AddSingleton<IRegistryApi>(sp => sp.GetRequiredService<RegistryApi>());
+services.AddSingleton<ITranscriptApi>(sp => sp.GetRequiredService<RegistryApi>());
+services.AddSingleton<ISessionLedger, SessionLedger>();
+services.AddSingleton<IMachineIdentity, MachineIdentity>();
+services.AddSingleton(TimeProvider.System);
+services.AddSingleton<ISessionSyncService, SessionSyncService>();
 services.AddSingleton<ISkillLedger, SkillLedger>();
 services.AddSingleton<ISkillPushService, SkillPushService>();
 services.AddSingleton<ICaptureService, CaptureService>();
@@ -56,6 +63,17 @@ app.Configure(config =>
         skills.SetDefaultCommand<SkillsCommand>();
         skills.AddCommand<SkillsPushCommand>("push")
             .WithDescription("Back up local skills to the registry (all, or the named ones).");
+    });
+
+    config.AddBranch("sessions", sessions =>
+    {
+        sessions.SetDescription("Back up session transcripts, and see what is backed up.");
+        sessions.AddCommand<SessionsPushCommand>("push")
+            .WithDescription("Back up every session transcript on this machine to the registry.");
+        sessions.AddCommand<SessionsStatusCommand>("status")
+            .WithDescription("Show what is and is not backed up on this machine. Works offline; exits 1 while anything is pending.");
+        sessions.AddCommand<SessionsListCommand>("list")
+            .WithDescription("List sessions backed up from every machine.");
     });
 
     config.AddBranch("auth", auth =>

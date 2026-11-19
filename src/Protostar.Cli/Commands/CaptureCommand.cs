@@ -15,7 +15,7 @@ namespace Protostar.Cli.Commands;
 /// </remarks>
 internal sealed class CaptureCommand : AsyncCommand<CaptureCommand.Settings>
 {
-    /// <summary>How long a capture may run before it gives up.</summary>
+    /// <summary>How long a capture may run before it gives up. The upload budgets inside are smaller.</summary>
     private static readonly TimeSpan Timeout = TimeSpan.FromSeconds(15);
 
     private readonly ICaptureService _capture;

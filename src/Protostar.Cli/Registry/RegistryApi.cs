@@ -14,7 +14,7 @@ namespace Protostar.Cli.Registry;
 /// The registry URL is passed per call rather than fixed at construction because it is resolved from
 /// command options and the environment at run time. TLS is validated normally.
 /// </remarks>
-internal sealed class RegistryApi : IRegistryApi, IDisposable
+internal sealed partial class RegistryApi : IRegistryApi, IDisposable
 {
     private readonly HttpClient _http;
 

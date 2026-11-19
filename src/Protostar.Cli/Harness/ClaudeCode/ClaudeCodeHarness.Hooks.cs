@@ -6,8 +6,9 @@ namespace Protostar.Cli.Harness.ClaudeCode;
 
 /// <summary>
 /// Claude Code's hook capability. Capture hooks live in <c>settings.json</c> under <c>hooks</c>: a
-/// <c>PostToolUse</c> hook matching the <c>Skill</c> tool (the capture trigger) and a
-/// <c>SessionStart</c> hook (the seam for the future suggestion loop). Edits are surgical (via
+/// <c>PostToolUse</c> hook matching the <c>Skill</c> tool (backs up a used skill), <c>Stop</c> and
+/// <c>SessionEnd</c> hooks (back up the session transcript as it grows), and a <c>SessionStart</c> hook
+/// (the seam for the future suggestion loop). Edits are surgical (via
 /// <see cref="JsonNode"/>) so unrelated settings survive, and re-running is idempotent: managed
 /// entries are recognised by a marker in their command and replaced rather than duplicated.
 /// </summary>
@@ -69,6 +70,8 @@ internal sealed partial class ClaudeCodeHarness : IHookCapability
         var hooks = GetOrAddObject(root, "hooks");
         AddCommandHook(hooks, "PostToolUse", matcher: "Skill", Command(exePath, "PostToolUse"));
         AddCommandHook(hooks, "SessionStart", matcher: null, Command(exePath, "SessionStart"));
+        AddCommandHook(hooks, "Stop", matcher: null, Command(exePath, "Stop"));
+        AddCommandHook(hooks, "SessionEnd", matcher: null, Command(exePath, "SessionEnd"));
     }
 
     // Quote the exe path so one containing spaces survives the harness's shell invocation.

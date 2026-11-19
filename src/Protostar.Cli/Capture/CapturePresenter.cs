@@ -1,4 +1,5 @@
 using Protostar.Cli.Registry;
+using Protostar.Cli.Sessions;
 using Protostar.Cli.Skills;
 
 namespace Protostar.Cli.Capture;
@@ -31,6 +32,8 @@ internal static class CapturePresenter
         var prefix = $"protostar capture ({hookEvent})";
         if (result.Action == CaptureAction.Ignored)
             return $"{prefix}: nothing to do.";
+        if (result.Action == CaptureAction.SessionBackedUp && result.Sessions is { } sessions)
+            return $"{prefix}: {DescribeSessions(sessions)}";
         if (result.Action == CaptureAction.Failed || result.Push is null)
             return $"{prefix}: could not back up skill '{result.SkillName}': {result.Message}";
 
@@ -57,6 +60,32 @@ internal static class CapturePresenter
             : $"{line} Conflict: the {conflict.Skill.Scope.ToString().ToLowerInvariant()} copy at {conflict.Skill.Path}: {conflict.Outcome.Message}";
     }
 
+    private static string DescribeSessions(SessionSyncResult sync)
+    {
+        if (sync.Failure != SessionSyncFailure.None)
+        {
+            return sync.Failure switch
+            {
+                SessionSyncFailure.NotLoggedIn => "session not backed up: not signed in. Run `protostar auth login`.",
+                SessionSyncFailure.SessionExpired => "session not backed up: the session expired. Run `protostar auth login`.",
+                SessionSyncFailure.RegistryUnreachable => "session not backed up: the registry could not be reached. It goes on the next sync.",
+                _ => $"session not backed up: {sync.Detail ?? sync.Failure.ToString()}",
+            };
+        }
+
+        var sent = sync.Transcripts.Sum(t => t.BytesUploaded);
+        var failed = sync.Transcripts.FirstOrDefault(t => t.Status == TranscriptSyncStatus.Failed);
+        if (failed is not null)
+            return $"session not fully backed up: {failed.Message}";
+        if (sync.Transcripts.Any(t => t.Status is TranscriptSyncStatus.Partial))
+            return $"backed up {SessionsPresenter.Bytes(sent)} of the session; the rest goes after the next reply.";
+        if (sync.Transcripts.FirstOrDefault(t => t.Status is TranscriptSyncStatus.Skipped) is { } skipped)
+            return sent > 0
+                ? $"backed up {SessionsPresenter.Bytes(sent)} of the session; {SessionsPresenter.Bytes(skipped.BytesPending)} waits: {skipped.Message}"
+                : $"{SessionsPresenter.Bytes(skipped.BytesPending)} of the session not backed up yet: {skipped.Message}";
+        return sent > 0 ? $"backed up {SessionsPresenter.Bytes(sent)} of the session." : "session already backed up.";
+    }
+
     private static string Reason(SkillPushRunResult push) => push.Failure switch
     {
         SkillPushRunFailure.NotLoggedIn => "not signed in. Run `protostar auth login`.",
@@ -68,6 +97,8 @@ internal static class CapturePresenter
     // Worth a log line: anything other than success, ignore, or "not a local skill".
     private static bool NeedsAttention(CaptureResult result) =>
         result.Action == CaptureAction.Failed ||
+        (result.Sessions is { } sessions &&
+         (sessions.Failure != SessionSyncFailure.None || sessions.Transcripts.Any(t => t.Status == TranscriptSyncStatus.Failed))) ||
         (result.Push is { } push &&
          (push.Failure is not (SkillPushRunFailure.None or SkillPushRunFailure.SkillNotFound) ||
           push.Entries.Any(e => e.Outcome.Status is SkillPushStatus.Refused or SkillPushStatus.Failed or SkillPushStatus.Conflict)));
