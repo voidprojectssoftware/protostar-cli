@@ -210,6 +210,65 @@ public sealed class SessionSyncServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task Offline_the_new_bytes_stay_pending_and_the_next_push_sends_them()
+    {
+        WriteSession("""{"n":1}""");
+        await Sync();
+        AppendRaw("{\"n\":2}\n");
+        _registry.Offline = true;
+
+        var offline = await Sut().SyncAsync(Request(sessionPath: SessionFile), null, CancellationToken.None);
+
+        Assert.Equal(SessionSyncFailure.RegistryUnreachable, offline.Failure);
+        Assert.Equal(8, Assert.Single(Sut().Status(Registry, "claude-code", _root).Transcripts).BytesPending);
+
+        _registry.Offline = false;
+        var online = await Sync();
+
+        Assert.True(online.Complete);
+        Assert.Equal(8, Assert.Single(online.Transcripts).BytesUploaded);
+        Assert.Equal(File.ReadAllBytes(SessionFile), _registry.Content(SessionId));
+        Assert.True(Sut().Status(Registry, "claude-code", _root).FullySynced);
+    }
+
+    [Fact]
+    public async Task A_push_that_waited_for_the_lock_plans_again_from_what_the_holder_uploaded()
+    {
+        WriteSession("""{"n":1}""");
+        await Sync();
+        AppendRaw("{\"n\":2}\n");
+        _ledger.OnLock = () => Sync().GetAwaiter().GetResult();
+        _registry.ResetCounters();
+
+        var result = await Sync();
+
+        // The holder sent the new line; this push finds nothing left and writes no stale position back.
+        Assert.Equal(TranscriptSyncStatus.UpToDate, Assert.Single(result.Transcripts).Status);
+        Assert.Equal(1, _registry.Appends);
+        Assert.Equal(File.ReadAllBytes(SessionFile), _registry.Content(SessionId));
+        Assert.Equal(new FileInfo(SessionFile).Length, _ledger.Get(new Uri(Registry), "claude-code", SessionId)!.Length);
+    }
+
+    [Fact]
+    public async Task A_push_that_waited_for_the_lock_respects_the_throttle_the_holder_set()
+    {
+        WriteSession("""{"n":1}""");
+        await Sync();
+        AppendRaw("{\"n\":2}\n");
+        var registry = new Uri(Registry);
+        _ledger.Save(registry, "claude-code", SessionId, _ledger.Get(registry, "claude-code", SessionId)! with { LastAttemptAt = DateTimeOffset.UtcNow.AddHours(-1) });
+        _ledger.OnLock = () =>
+        {
+            Sync().GetAwaiter().GetResult();
+            AppendRaw("{\"n\":3}\n");
+        };
+
+        var result = await Sync(throttle: TimeSpan.FromMinutes(5));
+
+        Assert.Equal(TranscriptSyncStatus.Skipped, Assert.Single(result.Transcripts).Status);
+    }
+
+    [Fact]
     public async Task Without_a_session_new_content_reports_not_logged_in()
     {
         WriteSession("""{"n":1}""");
@@ -316,6 +375,7 @@ public sealed class SessionSyncServiceTests : IDisposable
         public int Calls { get; private set; }
         public int Appends { get; private set; }
         public int MachineRegistrations { get; private set; }
+        public bool Offline { get; set; }
 
         public void ResetCounters() => (Calls, Appends) = (0, 0);
 
@@ -328,7 +388,7 @@ public sealed class SessionSyncServiceTests : IDisposable
         public Task<RegistryMeta?> GetMetaAsync(Uri registry, CancellationToken cancellationToken)
         {
             Calls++;
-            return Task.FromResult<RegistryMeta?>(new RegistryMeta { ApiMajors = [1] });
+            return Task.FromResult(Offline ? null : new RegistryMeta { ApiMajors = [1] });
         }
 
         public Task<SkillPushOutcome> PushSkillAsync(Uri registry, string accessToken, string name, IReadOnlyList<SkillUploadFile> files, CancellationToken cancellationToken) =>
@@ -390,7 +450,16 @@ public sealed class SessionSyncServiceTests : IDisposable
 
         public void Save(Uri registry, string harness, string key, SessionLedgerEntry entry) => _entries[harness + "/" + key] = entry;
 
-        public IDisposable? TryLock(Uri registry, string harness, string key) => new MemoryStream();
+        /// <summary>Runs as the lock is taken, to stand in for another process that finished just before.</summary>
+        public Action? OnLock { get; set; }
+
+        public IDisposable? TryLock(Uri registry, string harness, string key)
+        {
+            var onLock = OnLock;
+            OnLock = null;
+            onLock?.Invoke();
+            return new MemoryStream();
+        }
     }
 
     private sealed class FakeMachine : IMachineIdentity
