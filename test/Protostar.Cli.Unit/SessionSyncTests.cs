@@ -558,6 +558,112 @@ public sealed class SessionSyncServiceTests : IDisposable
         Assert.Equal(0, _registry.Appends);
     }
 
+    // A line recording a working directory, so the transcript's project facts are sent and an unchanged ledger entry
+    // needs no registration: only the append can discover that the registry lost the transcript.
+    private const string WithDirectory = """{"type":"user","cwd":"/home/me/src/protostar"}""";
+
+    [Fact]
+    public async Task A_registry_that_lost_the_transcript_gets_it_registered_again_and_uploaded_from_the_start()
+    {
+        WriteSession(WithDirectory, """{"n":2}""");
+        await Sync();
+        _registry.ForgetTranscript(SessionId);
+        var backedUp = new FileInfo(SessionFile).Length;
+        AppendRaw("{\"n\":3}\n");
+        _registry.AppendRequests.Clear();
+
+        var result = await Sync();
+
+        Assert.Equal(TranscriptSyncStatus.Uploaded, Assert.Single(result.Transcripts).Status);
+        Assert.Equal(File.ReadAllBytes(SessionFile), _registry.Content(SessionId));
+        Assert.Equal(1, _registry.Revision(SessionId));
+        // The first append went where the ledger said; after the unknown answer, the upload restarted at 0 as revision 1.
+        Assert.Equal([(SessionId, 1, backedUp), (SessionId, 1, 0L)], _registry.AppendRequests);
+        var entry = _ledger.Get(new Uri(Registry), "claude-code", SessionId)!;
+        Assert.Equal((1, new FileInfo(SessionFile).Length), (entry.Revision, entry.Length));
+    }
+
+    [Fact]
+    public async Task After_a_full_reset_the_machine_comes_back_first_then_the_transcript()
+    {
+        WriteSession(WithDirectory);
+        await Sync();
+        _registry.ForgetMachines();
+        _registry.ForgetTranscript(SessionId);
+        AppendRaw("{\"n\":2}\n");
+        _registry.RegistrationOrder.Clear();
+
+        var result = await Sync();
+
+        Assert.Equal(TranscriptSyncStatus.Uploaded, Assert.Single(result.Transcripts).Status);
+        Assert.Equal(File.ReadAllBytes(SessionFile), _registry.Content(SessionId));
+        Assert.Equal([FakeMachine.Id, FakeMachine.Id], _registry.MachineRegistrationIds);
+        Assert.Equal([SessionId], _registry.RegistrationOrder);
+        Assert.Equal(new FileInfo(SessionFile).Length, _ledger.Get(new Uri(Registry), "claude-code", SessionId)!.Length);
+    }
+
+    [Fact]
+    public async Task A_lost_subagent_is_registered_again_under_its_session()
+    {
+        WriteSession(WithDirectory);
+        var subagents = Path.Combine(ProjectDir, SessionId, "subagents");
+        Directory.CreateDirectory(subagents);
+        var agentFile = Path.Combine(subagents, "agent-ae75b028226c93701.jsonl");
+        File.WriteAllText(agentFile, WithDirectory + "\n");
+        await Sync();
+        var key = $"{SessionId}.agent-ae75b028226c93701";
+        _registry.ForgetTranscript(SessionId);
+        _registry.ForgetTranscript(key);
+        File.AppendAllText(agentFile, "{\"type\":\"assistant\"}\n");
+
+        var result = await Sync();
+
+        Assert.True(result.Complete);
+        Assert.Equal(TranscriptKind.Subagent, _registry.Registered[key].Kind);
+        Assert.Equal(SessionId, _registry.Registered[key].ParentKey);
+        Assert.Equal(File.ReadAllBytes(agentFile), _registry.Content(key));
+    }
+
+    [Theory]
+    [InlineData(false, "The registry returned 500.")]
+    [InlineData(false, "Could not reach the registry: connection refused")]
+    [InlineData(true, "Refused by the registry (404).")]
+    public async Task Any_other_failure_leaves_the_ledger_where_it_was(bool refused, string message)
+    {
+        WriteSession(WithDirectory, """{"n":2}""");
+        await Sync();
+        var before = _ledger.Get(new Uri(Registry), "claude-code", SessionId)!;
+        AppendRaw("{\"n\":3}\n");
+        _registry.AppendAnswer = new AppendResult(refused ? AppendStatus.Rejected : AppendStatus.Failed, null, message);
+        _registry.AppendRequests.Clear();
+
+        var result = await Sync();
+
+        Assert.Equal(TranscriptSyncStatus.Failed, Assert.Single(result.Transcripts).Status);
+        Assert.Equal([(SessionId, before.Revision, before.Length)], _registry.AppendRequests);
+        var after = _ledger.Get(new Uri(Registry), "claude-code", SessionId)!;
+        Assert.Equal((before.Revision, before.Length, before.TailSha256), (after.Revision, after.Length, after.TailSha256));
+    }
+
+    [Fact]
+    public async Task A_transcript_still_unknown_after_registering_again_fails_without_looping()
+    {
+        WriteSession(WithDirectory);
+        await Sync();
+        _registry.ForgetTranscript(SessionId);
+        _registry.ForgetsTranscriptsAfterRegistering = true;
+        AppendRaw("{\"n\":2}\n");
+        _registry.AppendRequests.Clear();
+        _registry.RegistrationOrder.Clear();
+
+        var result = await Sync();
+
+        var outcome = Assert.Single(result.Transcripts);
+        Assert.Equal(TranscriptSyncStatus.Failed, outcome.Status);
+        Assert.Equal(2, _registry.AppendRequests.Count);
+        Assert.Single(_registry.RegistrationOrder);
+    }
+
     // ── listing ───────────────────────────────────────────────────────────────────
 
     private static readonly string[] BackedUpIds =
@@ -724,6 +830,21 @@ public sealed class SessionSyncServiceTests : IDisposable
         /// <summary>Stands in for a rebuilt or restored database: transcripts kept, machines gone.</summary>
         public void ForgetMachines() => _machines.Clear();
 
+        /// <summary>Stands in for a transcript's rows being lost: its content and registration are gone.</summary>
+        public void ForgetTranscript(string key)
+        {
+            _content.Remove(key);
+            Registered.Remove(key);
+        }
+
+        /// <summary>The append answer for the next calls, in place of the real rules (a 5xx, the registry going away).</summary>
+        public AppendResult? AppendAnswer { get; set; }
+
+        /// <summary>Registration succeeds but the transcript is forgotten straight away, so appends keep answering unknown.</summary>
+        public bool ForgetsTranscriptsAfterRegistering { get; set; }
+
+        public List<(string Key, int Revision, long Offset)> AppendRequests { get; } = [];
+
         private static string NotRegistered(Guid machineId) => $"Machine {machineId} is not registered.";
 
         public Dictionary<string, LocalTranscript> Registered { get; } = [];
@@ -791,15 +912,23 @@ public sealed class SessionSyncServiceTests : IDisposable
             if (!_content.ContainsKey(transcript.Key))
                 _content[transcript.Key] = (1, []);
             var (revision, bytes) = _content[transcript.Key];
+            if (ForgetsTranscriptsAfterRegistering)
+                _content.Remove(transcript.Key);
             return Task.FromResult(ApiResult<TranscriptPosition>.Success(new TranscriptPosition(revision, bytes.Count)));
         }
 
         public Task<AppendResult> AppendAsync(Uri registry, string accessToken, string harness, string key, int revision, long offset, Guid machineId, ReadOnlyMemory<byte> chunk, CancellationToken cancellationToken)
         {
             Calls++;
+            AppendRequests.Add((key, revision, offset));
+            if (AppendAnswer is { } answer)
+                return Task.FromResult(answer);
+            // The real registry looks the transcript up before the machine (TranscriptService.AppendAsync).
+            if (!_content.TryGetValue(key, out var stored))
+                return Task.FromResult(new AppendResult(AppendStatus.UnknownTranscript, null, "No transcript with that harness and key."));
             if (!_machines.Contains(machineId))
                 return Task.FromResult(new AppendResult(AppendStatus.UnknownMachine, null, NotRegistered(machineId)));
-            var (current, bytes) = _content[key];
+            var (current, bytes) = stored;
             var newRevision = revision == current + 1 && offset == 0;
             if (!newRevision && (revision != current || offset != bytes.Count))
                 return Task.FromResult(new AppendResult(AppendStatus.Mismatch, new TranscriptPosition(current, bytes.Count), "mismatch"));
