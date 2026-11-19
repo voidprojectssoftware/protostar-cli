@@ -41,3 +41,6 @@ Thumbs.db
 
 # Reqnroll generates code-behind beside each .feature file; it is rebuilt every compile.
 *.feature.cs
+
+# PR and comment bodies written by agents (docs/process/working-an-issue.md)
+.bodies/
