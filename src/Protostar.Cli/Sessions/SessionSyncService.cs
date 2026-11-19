@@ -75,7 +75,9 @@ internal sealed record TranscriptSyncOutcome(
     LocalTranscript Transcript, TranscriptSyncStatus Status, long BytesUploaded, long BytesPending, bool Rewritten, string? Message);
 
 /// <summary>The result of a sync run.</summary>
-internal sealed record SessionSyncResult(SessionSyncFailure Failure, string? Detail, Uri? Registry, IReadOnlyList<TranscriptSyncOutcome> Transcripts)
+/// <param name="Stopped">Whether the run was cancelled (Ctrl+C) before it finished; what it had not sent goes next time.</param>
+internal sealed record SessionSyncResult(
+    SessionSyncFailure Failure, string? Detail, Uri? Registry, IReadOnlyList<TranscriptSyncOutcome> Transcripts, bool Stopped = false)
 {
     /// <summary>True when the run went ahead and nothing failed or was left over.</summary>
     public bool Complete => Failure == SessionSyncFailure.None &&
@@ -85,7 +87,18 @@ internal sealed record SessionSyncResult(SessionSyncFailure Failure, string? Det
 }
 
 /// <summary>Progress during a sync, for a progress bar.</summary>
-internal sealed record SessionSyncProgress(int TranscriptsDone, int TranscriptsTotal, long BytesUploaded, string? Current);
+/// <remarks>
+/// Counts only the transcripts that had something to upload when the run was planned, so a second push after an
+/// interrupted one shows just what remains. A transcript counts as done once it is finished with, whether it was
+/// uploaded, skipped or failed, and its planned bytes then count as done too, so the totals always add up.
+/// Within a transcript the bytes move chunk by chunk.
+/// </remarks>
+/// <param name="TranscriptsDone">Transcripts finished with so far.</param>
+/// <param name="TranscriptsTotal">Transcripts that had something to upload.</param>
+/// <param name="BytesDone">Bytes accounted for so far, of <paramref name="BytesTotal"/>.</param>
+/// <param name="BytesTotal">Bytes the registry did not have when the run was planned.</param>
+/// <param name="Current">The transcript being uploaded, or <c>null</c> before the first and after the last.</param>
+internal sealed record SessionSyncProgress(int TranscriptsDone, int TranscriptsTotal, long BytesDone, long BytesTotal, string? Current);
 
 /// <summary>A transcript's backup state on this machine.</summary>
 /// <param name="Transcript">The transcript.</param>
@@ -120,6 +133,15 @@ internal sealed record SessionStatusResult(SessionSyncFailure Failure, string? D
 /// registered before this existed is registered again once, with facts, even when nothing else changed.
 /// </para>
 /// <para>Uploads within a run are sequential; the per-transcript lock stops two processes uploading the same file.</para>
+/// <para>
+/// A run first plans every transcript, then uploads the ones with something new, most recently written first, so a
+/// first backup of a large history secures the sessions that matter most before the old ones. Planning reads only
+/// file sizes, write times and the ledger, plus at most a 4 KiB tail fingerprint and a scan to the next newline for
+/// a transcript already partly backed up, so it costs the same for 17 GB as for 17 MB. The ledger advances only
+/// after the registry accepts a chunk, so a run stopped at any point (Ctrl+C, a crash, the machine sleeping) loses
+/// nothing: the next run resumes each transcript from its last accepted chunk, and a chunk the registry took but
+/// the ledger missed comes back as a <c>409</c> with the registry's position.
+/// </para>
 /// </remarks>
 internal sealed class SessionSyncService : ISessionSyncService
 {
@@ -158,74 +180,107 @@ internal sealed class SessionSyncService : ISessionSyncService
         if (!TryResolve(request.Registry, request.HarnessId, out var registry, out var harnesses, out var failure, out var detail))
             return SessionSyncResult.Fail(failure, detail, registry);
 
-        var transcripts = Locate(harnesses, request.HarnessHome, request.SessionPath);
+        var planned = Locate(harnesses, request.HarnessHome, request.SessionPath)
+            .Select(transcript => (Transcript: transcript, Plan: Plan(registry, transcript)))
+            .ToList();
+        var outcomes = new List<TranscriptSyncOutcome>(planned.Count);
+        outcomes.AddRange(planned.Where(p => p.Plan.UpToDate).Select(p => UpToDate(p.Transcript)));
+
+        var work = planned
+            .Where(p => !p.Plan.UpToDate)
+            .OrderByDescending(p => p.Plan.Modified)
+            .ThenBy(p => p.Transcript.Path, StringComparer.Ordinal)
+            .ToList();
+        var bytesTotal = work.Sum(p => p.Plan.Pending);
+        var done = 0;
+        long bytesDone = 0;
+        progress?.Report(new SessionSyncProgress(0, work.Count, 0, bytesTotal, null));
+
         var clock = Stopwatch.StartNew();
-        var outcomes = new List<TranscriptSyncOutcome>(transcripts.Count);
         Session? session = null;
-        long uploaded = 0;
+        var stopped = false;
 
-        for (var i = 0; i < transcripts.Count; i++)
+        foreach (var (transcript, plan) in work)
         {
-            var transcript = transcripts[i];
-            progress?.Report(new SessionSyncProgress(i, transcripts.Count, uploaded, transcript.Key));
-
-            var plan = Plan(registry, transcript);
-            if (plan.UpToDate)
+            if (stopped || cancellationToken.IsCancellationRequested)
             {
-                outcomes.Add(new TranscriptSyncOutcome(transcript, TranscriptSyncStatus.UpToDate, 0, 0, false, null));
+                // Never started, so its ledger entry is untouched and the next run plans it afresh.
+                stopped = true;
+                outcomes.Add(Skipped(transcript, plan, StoppedMessage));
                 continue;
             }
+
+            progress?.Report(new SessionSyncProgress(done, work.Count, bytesDone, bytesTotal, transcript.Key));
+            TranscriptSyncOutcome outcome;
 
             if (Throttled(request, plan))
             {
-                outcomes.Add(Skipped(transcript, plan, ThrottledMessage));
-                continue;
+                outcome = Skipped(transcript, plan, ThrottledMessage);
             }
-
-            if (request.Budget is { } budget && clock.Elapsed >= budget)
+            else if (request.Budget is { } budget && clock.Elapsed >= budget)
             {
-                outcomes.Add(Skipped(transcript, plan, "Out of time this run; it goes next time."));
-                continue;
+                outcome = Skipped(transcript, plan, "Out of time this run; it goes next time.");
             }
-
-            // The network is needed from here on: connect once, lazily, so a run with nothing new stays offline.
-            if (session is null)
+            else
             {
-                var connected = await ConnectAsync(registry, cancellationToken);
-                if (connected.Failure != SessionSyncFailure.None)
-                    return SessionSyncResult.Fail(connected.Failure, connected.Detail, registry);
-                session = connected.Session!;
+                // The network is needed from here on: connect once, lazily, so a run with nothing new stays offline.
+                if (session is null)
+                {
+                    (SessionSyncFailure Failure, string? Detail, Session? Session) connected;
+                    try
+                    {
+                        connected = await ConnectAsync(registry, cancellationToken);
+                    }
+                    catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                    {
+                        stopped = true;
+                        outcomes.Add(Skipped(transcript, plan, StoppedMessage));
+                        continue;
+                    }
+
+                    if (connected.Failure != SessionSyncFailure.None)
+                        return SessionSyncResult.Fail(connected.Failure, connected.Detail, registry);
+                    session = connected.Session!;
+                }
+
+                var pending = plan.Pending;
+                outcome = await UploadUnderLockAsync(
+                    registry, session, transcript, request, clock,
+                    sent => progress?.Report(new SessionSyncProgress(done, work.Count, bytesDone + Math.Min(sent, pending), bytesTotal, transcript.Key)),
+                    cancellationToken);
             }
 
-            using var held = _ledger.TryLock(registry, transcript.Harness, transcript.Key);
-            if (held is null)
-            {
-                outcomes.Add(Skipped(transcript, plan, "Another protostar process is uploading it."));
-                continue;
-            }
-
-            // Plan again under the lock: another process (a push from an earlier hook) may have uploaded since,
-            // and uploading from the stale plan would write its old position back over the ledger.
-            plan = Plan(registry, transcript);
-            if (plan.UpToDate)
-            {
-                outcomes.Add(new TranscriptSyncOutcome(transcript, TranscriptSyncStatus.UpToDate, 0, 0, false, null));
-                continue;
-            }
-
-            if (Throttled(request, plan))
-            {
-                outcomes.Add(Skipped(transcript, plan, ThrottledMessage));
-                continue;
-            }
-
-            var outcome = await UploadAsync(registry, session, transcript, plan, request.Budget, clock, cancellationToken);
-            uploaded += outcome.BytesUploaded;
             outcomes.Add(outcome);
+            stopped = cancellationToken.IsCancellationRequested;
+            if (stopped)
+                continue;
+            done++;
+            bytesDone += plan.Pending;
+            progress?.Report(new SessionSyncProgress(done, work.Count, bytesDone, bytesTotal, null));
         }
 
-        progress?.Report(new SessionSyncProgress(transcripts.Count, transcripts.Count, uploaded, null));
-        return new SessionSyncResult(SessionSyncFailure.None, null, registry, outcomes);
+        return new SessionSyncResult(SessionSyncFailure.None, null, registry, outcomes, stopped);
+    }
+
+    // Takes the transcript's lock and uploads from a fresh plan, or says why it did not.
+    private async Task<TranscriptSyncOutcome> UploadUnderLockAsync(
+        Uri registry, Session session, LocalTranscript transcript, SessionSyncRequest request, Stopwatch clock, Action<long> sent,
+        CancellationToken cancellationToken)
+    {
+        using var held = _ledger.TryLock(registry, transcript.Harness, transcript.Key);
+        if (held is null)
+            return Skipped(transcript, Plan(registry, transcript), "Another protostar process is uploading it.");
+
+        // Plan again under the lock: another process (a push from an earlier hook) may have uploaded since,
+        // and uploading from the stale plan would write its old position back over the ledger.
+        var plan = Plan(registry, transcript);
+        if (plan.UpToDate)
+            return UpToDate(transcript);
+
+        if (Throttled(request, plan))
+            return Skipped(transcript, plan, ThrottledMessage);
+
+        return await UploadAsync(registry, session, transcript, plan, request.Budget, clock, sent, cancellationToken);
     }
 
     /// <inheritdoc />
@@ -238,11 +293,9 @@ internal sealed class SessionSyncService : ISessionSyncService
         foreach (var transcript in Locate(harnesses, harnessHome, null))
         {
             var plan = Plan(registry, transcript);
-            var info = new FileInfo(transcript.Path);
             var backedUp = plan.Rewritten ? 0 : plan.Entry?.Length ?? 0;
             statuses.Add(new TranscriptStatus(
-                transcript, plan.Size, backedUp, plan.UpToDate ? 0 : Math.Max(0, plan.Size - backedUp), plan.Rewritten,
-                plan.Entry?.LastSyncedAt, info.Exists ? info.LastWriteTimeUtc : DateTimeOffset.MinValue));
+                transcript, plan.Size, backedUp, plan.Pending, plan.Rewritten, plan.Entry?.LastSyncedAt, plan.Modified));
         }
 
         return new SessionStatusResult(SessionSyncFailure.None, null, registry, statuses);
@@ -268,25 +321,35 @@ internal sealed class SessionSyncService : ISessionSyncService
 
     // ── planning ──────────────────────────────────────────────────────────────────
 
-    private sealed record UploadPlan(SessionLedgerEntry? Entry, long Size, bool UpToDate, bool Rewritten);
+    private sealed record UploadPlan(SessionLedgerEntry? Entry, long Size, DateTimeOffset Modified, bool UpToDate, bool Rewritten)
+    {
+        /// <summary>Bytes on disk the registry does not have yet.</summary>
+        public long Pending => UpToDate ? 0 : Math.Max(0, Size - (Rewritten ? 0 : Entry?.Length ?? 0));
+    }
 
-    // Decides from the file and the ledger alone whether anything needs uploading.
+    // Decides from the file and the ledger alone whether anything needs uploading. It never reads the bytes still to
+    // upload, only a stat, the ledger entry, a 4 KiB fingerprint and the scan to the next newline after it.
     private UploadPlan Plan(Uri registry, LocalTranscript transcript)
     {
-        var size = SafeLength(transcript.Path);
+        var (size, modified) = Stat(transcript.Path);
         var entry = _ledger.Get(registry, transcript.Harness, transcript.Key);
         if (entry is null || !entry.Registered)
-            return new UploadPlan(entry, size, false, false);
+            return new UploadPlan(entry, size, modified, false, false);
 
         var rewritten = size < entry.Length || SessionLedger.TailHash(transcript.Path, entry.Length) != entry.TailSha256;
         if (rewritten)
-            return new UploadPlan(entry, size, false, true);
+            return new UploadPlan(entry, size, modified, false, true);
 
         // Bytes past the stored length that do not yet form a whole line are not uploadable yet. A transcript
         // registered before project facts existed is not up to date until it has been registered again with them.
         var upToDate = (size == entry.Length || !HasCompleteLineAfter(transcript.Path, entry.Length)) && entry.Project is not null;
-        return new UploadPlan(entry, size, upToDate, false);
+        return new UploadPlan(entry, size, modified, upToDate, false);
     }
+
+    private const string StoppedMessage = "Stopped part way; the rest goes next time.";
+
+    private static TranscriptSyncOutcome UpToDate(LocalTranscript transcript) =>
+        new(transcript, TranscriptSyncStatus.UpToDate, 0, 0, false, null);
 
     private const string ThrottledMessage = "Synced moments ago; waiting for the throttle window.";
 
@@ -295,26 +358,38 @@ internal sealed class SessionSyncService : ISessionSyncService
         _time.GetUtcNow() - last < throttle;
 
     private static TranscriptSyncOutcome Skipped(LocalTranscript transcript, UploadPlan plan, string reason) =>
-        new(transcript, TranscriptSyncStatus.Skipped, 0, Math.Max(0, plan.Size - (plan.Rewritten ? 0 : plan.Entry?.Length ?? 0)), plan.Rewritten, reason);
+        new(transcript, TranscriptSyncStatus.Skipped, 0, plan.Pending, plan.Rewritten, reason);
 
     // ── uploading ─────────────────────────────────────────────────────────────────
 
     private sealed record Session(string AccessToken, Guid MachineId);
 
+    // Reports the bytes sent so far through onSent after each accepted chunk. Cancellation stops it between or during
+    // chunks and keeps what was sent: the ledger only ever holds a position the registry confirmed.
     private async Task<TranscriptSyncOutcome> UploadAsync(
         Uri registry, Session session, LocalTranscript transcript, UploadPlan plan, TimeSpan? budget, Stopwatch clock,
-        CancellationToken cancellationToken)
+        Action<long> onSent, CancellationToken cancellationToken)
     {
         var now = _time.GetUtcNow();
         var entry = plan.Entry;
         int revision;
-        long offset;
+        long offset = 0;
+        long sent = 0;
 
         var filing = entry?.Project;
         if (entry is null || !entry.Registered || filing != ProjectFiling.Sent)
         {
             var project = ProjectFactsFor(transcript);
-            var registered = await _api.RegisterTranscriptAsync(registry, session.AccessToken, transcript, session.MachineId, project, cancellationToken);
+            ApiResult<TranscriptPosition> registered;
+            try
+            {
+                registered = await _api.RegisterTranscriptAsync(registry, session.AccessToken, transcript, session.MachineId, project, cancellationToken);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                return Stopped();
+            }
+
             if (!registered.Ok)
                 return Failed(transcript, plan, 0, registered.Error!);
             filing = project is null ? ProjectFiling.Pending : ProjectFiling.Sent;
@@ -333,12 +408,13 @@ internal sealed class SessionSyncService : ISessionSyncService
             (revision, offset) = plan.Rewritten ? (entry.Revision + 1, 0) : (entry.Revision, entry.Length);
         }
 
-        long sent = 0;
         var mismatches = 0;
         while (true)
         {
             if (budget is { } limit && clock.Elapsed >= limit)
                 return Finish(TranscriptSyncStatus.Partial, "Out of time this run; the rest goes next time.");
+            if (cancellationToken.IsCancellationRequested)
+                return Stopped();
 
             byte[] chunk;
             try
@@ -357,7 +433,17 @@ internal sealed class SessionSyncService : ISessionSyncService
             if (chunk.Length == 0)
                 return Finish(sent > 0 || plan.Rewritten ? TranscriptSyncStatus.Uploaded : TranscriptSyncStatus.UpToDate, null);
 
-            var result = await _api.AppendAsync(registry, session.AccessToken, transcript.Harness, transcript.Key, revision, offset, session.MachineId, chunk, cancellationToken);
+            AppendResult result;
+            try
+            {
+                result = await _api.AppendAsync(registry, session.AccessToken, transcript.Harness, transcript.Key, revision, offset, session.MachineId, chunk, cancellationToken);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                // The registry may have taken this chunk; if so, the next run's append gets a 409 with its position.
+                return Stopped();
+            }
+
             switch (result.Status)
             {
                 case AppendStatus.Appended:
@@ -365,6 +451,7 @@ internal sealed class SessionSyncService : ISessionSyncService
                     sent += chunk.Length;
                     _ledger.Save(registry, transcript.Harness, transcript.Key, new SessionLedgerEntry(
                         revision, offset, SessionLedger.TailHash(transcript.Path, offset), true, _time.GetUtcNow(), now, filing));
+                    onSent(sent);
                     break;
 
                 case AppendStatus.Mismatch when result.Position is { } position && ++mismatches <= 3:
@@ -384,6 +471,8 @@ internal sealed class SessionSyncService : ISessionSyncService
 
         TranscriptSyncOutcome Finish(TranscriptSyncStatus status, string? message) =>
             new(transcript, status, sent, Math.Max(0, SafeLength(transcript.Path) - offset), plan.Rewritten, message);
+
+        TranscriptSyncOutcome Stopped() => sent > 0 ? Finish(TranscriptSyncStatus.Partial, StoppedMessage) : Skipped(transcript, plan, StoppedMessage);
     }
 
     // The facts of the directory the transcript's session ran in, or null while its file records none.
@@ -476,6 +565,19 @@ internal sealed class SessionSyncService : ISessionSyncService
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             return false;
+        }
+    }
+
+    private static (long Size, DateTimeOffset Modified) Stat(string path)
+    {
+        try
+        {
+            var info = new FileInfo(path);
+            return info.Exists ? (info.Length, info.LastWriteTimeUtc) : (0, DateTimeOffset.MinValue);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return (0, DateTimeOffset.MinValue);
         }
     }
 

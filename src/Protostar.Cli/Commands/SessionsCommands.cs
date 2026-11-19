@@ -1,6 +1,7 @@
 using System.ComponentModel;
 using Protostar.Cli.Capture;
 using Protostar.Cli.Harness;
+using Protostar.Cli.Infrastructure;
 using Protostar.Cli.Registry;
 using Protostar.Cli.Sessions;
 using Spectre.Console.Cli;
@@ -29,8 +30,11 @@ internal class LocalSessionsSettings : SessionsSettings
 
 /// <summary><c>protostar sessions push</c>: backs up every session transcript on this machine.</summary>
 /// <remarks>
+/// <para>Newest transcripts first, with progress, and resumable: Ctrl+C stops it cleanly and the next push carries on.</para>
+/// <para>
 /// With the hidden <c>--session</c> option it is the background push a capture hook starts (see
 /// <see cref="BackgroundPush"/>): one session, no progress display, and problems go to <c>capture.log</c>.
+/// </para>
 /// </remarks>
 internal sealed class SessionsPushCommand : AsyncCommand<SessionsPushCommand.Settings>
 {
@@ -64,8 +68,10 @@ internal sealed class SessionsPushCommand : AsyncCommand<SessionsPushCommand.Set
             return CapturePresenter.RenderBackgroundPush(await _sessions.SyncAsync(one, null, cancellation), Console.Out, CaptureLog.Append);
         }
 
+        // Ctrl+C stops between or during chunks, with the ledger and locks left clean, rather than killing the process.
+        using var ctrlC = new CtrlCCancellation(cancellation);
         var request = new SessionSyncRequest(settings.Registry, settings.Harness, settings.HarnessHome, null, null, null);
-        var result = await SessionsPresenter.WithProgressAsync(progress => _sessions.SyncAsync(request, progress, cancellation));
+        var result = await SessionsPresenter.WithProgressAsync(progress => _sessions.SyncAsync(request, progress, ctrlC.Token));
         return SessionsPresenter.RenderSync(result, _catalog);
     }
 }

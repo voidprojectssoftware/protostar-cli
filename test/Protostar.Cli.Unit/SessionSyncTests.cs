@@ -348,6 +348,94 @@ public sealed class SessionSyncServiceTests : IDisposable
         Assert.Empty(SessionSyncService.ReadWholeLines(SessionFile, 8));
     }
 
+    // ── a large first backup ──────────────────────────────────────────────────────
+
+    private string WriteSessionIn(string project, string id, DateTime modifiedUtc, int bytes = 8)
+    {
+        var dir = Path.Combine(_root, "projects", project);
+        Directory.CreateDirectory(dir);
+        var path = Path.Combine(dir, id + ".jsonl");
+        var line = new string('x', 1023) + "\n";
+        File.WriteAllText(path, bytes < 1024 ? "{\"n\":1}\n" : string.Concat(Enumerable.Repeat(line, bytes / 1024)));
+        File.SetLastWriteTimeUtc(path, modifiedUtc);
+        return path;
+    }
+
+    private const string Older = "0b8f5c21-0000-4000-8000-000000000001";
+    private const string Oldest = "0b8f5c21-0000-4000-8000-000000000002";
+
+    [Fact]
+    public async Task The_most_recently_written_transcripts_go_first()
+    {
+        var now = DateTime.UtcNow;
+        WriteSessionIn("-a", Oldest, now.AddDays(-30));
+        WriteSessionIn("-b", SessionId, now.AddMinutes(-1));
+        WriteSessionIn("-c", Older, now.AddDays(-2));
+
+        await Sync();
+
+        Assert.Equal([SessionId, Older, Oldest], _registry.RegistrationOrder);
+    }
+
+    [Fact]
+    public async Task Progress_counts_bytes_within_a_large_transcript_and_adds_up_to_the_plan()
+    {
+        var size = new FileInfo(WriteSessionIn("-big", SessionId, DateTime.UtcNow, 20 * 1024 * 1024)).Length;
+        WriteSession("""{"n":1}""");
+        File.SetLastWriteTimeUtc(SessionFile, DateTime.UtcNow.AddDays(-1));
+        var reports = new List<SessionSyncProgress>();
+
+        await Sut().SyncAsync(Request(), new Recorder(reports.Add), CancellationToken.None);
+
+        Assert.Equal(new SessionSyncProgress(0, 2, 0, size + 8, null), reports[0]);
+        Assert.Equal(new SessionSyncProgress(2, 2, size + 8, size + 8, null), reports[^1]);
+        var big = reports.Where(r => r.Current == SessionId && r.TranscriptsDone == 0).Select(r => r.BytesDone).ToList();
+        Assert.Equal([0, SessionSyncService.ChunkBytes, 2L * SessionSyncService.ChunkBytes, size], big);
+        Assert.Equal(reports.Select(r => r.BytesDone).Order(), reports.Select(r => r.BytesDone));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Stopping_part_way_loses_nothing_and_the_next_push_sends_only_the_rest(bool responseLost)
+    {
+        var bigFile = WriteSessionIn("-big", SessionId, DateTime.UtcNow, 20 * 1024 * 1024);
+        var smallFile = WriteSessionIn("-small", Older, DateTime.UtcNow.AddDays(-1));
+        using var stop = new CancellationTokenSource();
+        // Ctrl+C arrives while the first chunk is in flight; the registry keeps it either way.
+        _registry.AfterAppend = token =>
+        {
+            stop.Cancel();
+            if (responseLost)
+                token.ThrowIfCancellationRequested();
+        };
+
+        var stopped = await Sut().SyncAsync(Request(), null, stop.Token);
+
+        Assert.True(stopped.Stopped);
+        Assert.False(stopped.Complete);
+        Assert.Equal(SessionSyncService.ChunkBytes, _registry.Content(SessionId).Length);
+        var entry = _ledger.Get(new Uri(Registry), "claude-code", SessionId)!;
+        Assert.Equal(responseLost ? 0 : SessionSyncService.ChunkBytes, entry.Length);
+        Assert.DoesNotContain(Older, _registry.RegistrationOrder);
+
+        _registry.AfterAppend = null;
+        _registry.ResetCounters();
+        var resumed = await Sync();
+
+        Assert.True(resumed.Complete);
+        Assert.False(resumed.Stopped);
+        Assert.Equal(new FileInfo(bigFile).Length - SessionSyncService.ChunkBytes, resumed.Transcripts.Single(t => t.Transcript.Key == SessionId).BytesUploaded);
+        Assert.Equal(3, _registry.Appends);
+        Assert.Equal(File.ReadAllBytes(bigFile), _registry.Content(SessionId));
+        Assert.Equal(File.ReadAllBytes(smallFile), _registry.Content(Older));
+    }
+
+    private sealed class Recorder(Action<SessionSyncProgress> record) : IProgress<SessionSyncProgress>
+    {
+        public void Report(SessionSyncProgress value) => record(value);
+    }
+
     // ── projects ──────────────────────────────────────────────────────────────────
 
     [Fact]
@@ -431,6 +519,10 @@ public sealed class SessionSyncServiceTests : IDisposable
         private readonly Dictionary<string, (int Revision, List<byte> Bytes)> _content = [];
 
         public Dictionary<string, LocalTranscript> Registered { get; } = [];
+        public List<string> RegistrationOrder { get; } = [];
+
+        /// <summary>Runs after a chunk is stored, before the reply: to cancel mid-request, or lose the reply.</summary>
+        public Action<CancellationToken>? AfterAppend { get; set; }
         public List<int> ChunkSizes { get; } = [];
         public int Calls { get; private set; }
         public int Appends { get; private set; }
@@ -473,6 +565,7 @@ public sealed class SessionSyncServiceTests : IDisposable
         {
             Calls++;
             Registered[transcript.Key] = transcript;
+            RegistrationOrder.Add(transcript.Key);
             (Filed.TryGetValue(transcript.Key, out var filed) ? filed : Filed[transcript.Key] = []).Add(project);
             if (!_content.ContainsKey(transcript.Key))
                 _content[transcript.Key] = (1, []);
@@ -496,6 +589,7 @@ public sealed class SessionSyncServiceTests : IDisposable
                 bytes = [];
             bytes.AddRange(chunk.ToArray());
             _content[key] = (revision, bytes);
+            AfterAppend?.Invoke(cancellationToken);
             return Task.FromResult(new AppendResult(AppendStatus.Appended, new TranscriptPosition(revision, bytes.Count), null));
         }
 
