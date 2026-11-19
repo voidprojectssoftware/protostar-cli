@@ -151,8 +151,9 @@ internal static class SkillPullPresenter
 
     private static string Authority(Uri? registry) => registry?.GetLeftPart(UriPartial.Authority) ?? string.Empty;
 
-    // The message and exit code for a run that stopped early, or null when it went ahead.
-    private static int? Failure(SkillPullRunFailure failure, string? detail, Uri? registry, IHarnessCatalog catalog)
+    /// <summary>Prints why a run stopped early and returns its exit code, or returns <c>null</c> when it went ahead.</summary>
+    /// <remarks>Also used by <see cref="SkillChangePresenter"/>, whose lookup stops for the same reasons.</remarks>
+    internal static int? Failure(SkillPullRunFailure failure, string? detail, Uri? registry, IHarnessCatalog catalog)
     {
         var authority = Authority(registry);
         string? message = failure switch

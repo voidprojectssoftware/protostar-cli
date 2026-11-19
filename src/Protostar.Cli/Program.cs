@@ -35,6 +35,7 @@ services.AddSingleton<IProjectService, ProjectService>();
 services.AddSingleton<ISkillLedger, SkillLedger>();
 services.AddSingleton<ISkillPushService, SkillPushService>();
 services.AddSingleton<ISkillPullService, SkillPullService>();
+services.AddSingleton<ISkillChangeService, SkillChangeService>();
 services.AddSingleton<IBackgroundPush, BackgroundPush>();
 services.AddSingleton<ICaptureService, CaptureService>();
 
@@ -65,7 +66,7 @@ app.Configure(config =>
         .IsHidden();
     config.AddBranch("skills", skills =>
     {
-        skills.SetDescription("List skills on this machine, back them up to the registry, or pull them from it.");
+        skills.SetDescription("List skills on this machine, back them up to the registry, pull them from it, or rename or delete them there.");
         skills.SetDefaultCommand<SkillsCommand>();
         skills.AddCommand<SkillsPushCommand>("push")
             .WithDescription("Back up local skills to the registry (all, or the named ones).");
@@ -73,6 +74,10 @@ app.Configure(config =>
             .WithDescription("List the skills in the registry and whether each is on this machine.");
         skills.AddCommand<SkillsPullCommand>("pull")
             .WithDescription("Install or update skills from the registry (all, or the named ones).");
+        skills.AddCommand<SkillsRenameCommand>("rename")
+            .WithDescription("Rename a skill in the registry, keeping its history; this machine's copies follow.");
+        skills.AddCommand<SkillsDeleteCommand>("delete")
+            .WithDescription("Delete a skill and all its versions from the registry. Local copies are never deleted.");
     });
 
     config.AddBranch("sessions", sessions =>

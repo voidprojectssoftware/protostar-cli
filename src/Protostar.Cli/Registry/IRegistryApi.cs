@@ -62,6 +62,25 @@ internal interface IRegistryApi
         Guid? projectId,
         int? version,
         CancellationToken cancellationToken);
+
+    /// <summary>Renames the caller's skill through <c>POST /v1/skills/{name}/rename</c>, keeping its version history.</summary>
+    /// <param name="registry">The registry base URL.</param>
+    /// <param name="accessToken">A current bearer token for that registry.</param>
+    /// <param name="name">The skill's exact current name.</param>
+    /// <param name="projectId">The skill's project; <c>null</c> for a global skill.</param>
+    /// <param name="newName">The name it takes.</param>
+    /// <param name="cancellationToken">Cancels the request.</param>
+    /// <returns>The skill's name afterwards, or the registry's reason (a 409 when the name is taken).</returns>
+    Task<ApiResult<string>> RenameSkillAsync(
+        Uri registry, string accessToken, string name, Guid? projectId, string newName, CancellationToken cancellationToken);
+
+    /// <summary>Deletes the caller's skill, with every version, through <c>DELETE /v1/skills/{name}</c>.</summary>
+    /// <param name="registry">The registry base URL.</param>
+    /// <param name="accessToken">A current bearer token for that registry.</param>
+    /// <param name="name">The skill's exact name.</param>
+    /// <param name="projectId">The skill's project; <c>null</c> for a global skill.</param>
+    /// <param name="cancellationToken">Cancels the request.</param>
+    Task<ApiResult<bool>> DeleteSkillAsync(Uri registry, string accessToken, string name, Guid? projectId, CancellationToken cancellationToken);
 }
 
 /// <summary>The project folder a project skill is pushed from, for the registry to resolve to a project.</summary>

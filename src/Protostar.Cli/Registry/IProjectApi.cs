@@ -52,4 +52,7 @@ internal sealed record ProjectLinkChange
     [JsonPropertyName("outcome")] public string Outcome { get; init; } = "";
 
     [JsonPropertyName("project")] public RemoteProject Project { get; init; } = new();
+
+    /// <summary>The names of the project skills that moved with the folder, sorted; empty when none did, or from a registry too old to say.</summary>
+    [JsonPropertyName("movedSkills")] public IReadOnlyList<string> MovedSkills { get; init; } = [];
 }

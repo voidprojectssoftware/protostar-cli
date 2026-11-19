@@ -17,6 +17,14 @@ internal interface ISkillLedger
     /// <summary>Records that the skill at <paramref name="skillPath"/> is in the registry with this content.</summary>
     /// <remarks>Never throws: a ledger that cannot be written only costs a redundant upload next time.</remarks>
     void Record(Uri registry, string skillPath, SkillLedgerEntry entry);
+
+    /// <summary>Every record for <paramref name="registry"/>, keyed by skill directory (full path).</summary>
+    /// <remarks>How a rename or delete finds this machine's copies of one registry skill, in any harness or checkout.</remarks>
+    IReadOnlyDictionary<string, SkillLedgerEntry> Entries(Uri registry);
+
+    /// <summary>Drops the record for the skill at <paramref name="skillPath"/>, when its folder has moved.</summary>
+    /// <remarks>Never throws, like <see cref="Record"/>.</remarks>
+    void Forget(Uri registry, string skillPath);
 }
 
 /// <summary>What was last pushed or pulled for one skill.</summary>
