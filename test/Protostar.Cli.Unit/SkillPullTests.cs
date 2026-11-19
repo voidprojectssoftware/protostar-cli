@@ -1,8 +1,10 @@
+using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
 using Protostar.Cli.Auth;
 using Protostar.Cli.Harness;
 using Protostar.Cli.Harness.ClaudeCode;
+using Protostar.Cli.Projects;
 using Protostar.Cli.Registry;
 using Protostar.Cli.Skills;
 using Xunit;
@@ -22,16 +24,26 @@ public sealed class SkillPullServiceTests : IDisposable
     private readonly string _home = Directory.CreateTempSubdirectory("pstar-pull-").FullName;
     private readonly FakeLedger _ledger = new();
     private readonly FakeRegistryApi _api = new();
+    private readonly FakeProjectApi _projects = new();
+    private readonly string _repos = Path.GetFullPath(Directory.CreateTempSubdirectory("pstar-pull-repos-").FullName);
 
-    public void Dispose() => Directory.Delete(_home, recursive: true);
+    public void Dispose()
+    {
+        Directory.Delete(_home, recursive: true);
+        foreach (var file in Directory.EnumerateFiles(_repos, "*", SearchOption.AllDirectories))
+            File.SetAttributes(file, FileAttributes.Normal);
+        Directory.Delete(_repos, recursive: true);
+    }
 
     private string SkillsDir => Path.Combine(_home, "skills");
 
-    private ISkillPullService Build(StoredToken? session = null)
+    private ISkillPullService Build(StoredToken? session = null) => Build(_api, session);
+
+    private ISkillPullService Build(FakeRegistryApi api, StoredToken? session = null, bool noSession = false)
     {
         var harness = new ClaudeCodeHarness(new ClaudeCodeSkillParser(), new ClaudeCodeSkillMapper());
         var catalog = new HarnessCatalog([harness]);
-        return new SkillPullService(catalog, new Tokens(session ?? Session()), _api, _ledger);
+        return new SkillPullService(catalog, new Tokens(noSession ? null : session ?? Session()), api, _ledger, new ProjectFactsResolver(), _projects, new FakeMachine());
     }
 
     private static StoredToken Session(bool expired = false) => new()
@@ -254,9 +266,7 @@ public sealed class SkillPullServiceTests : IDisposable
     [Fact]
     public async Task Pull_without_a_session_fails_before_contacting_the_registry_list()
     {
-        var sut = new SkillPullService(
-            new HarnessCatalog([new ClaudeCodeHarness(new ClaudeCodeSkillParser(), new ClaudeCodeSkillMapper())]),
-            new Tokens(null), _api, _ledger);
+        var sut = Build(_api, noSession: true);
 
         var result = await sut.PullAsync(Pull(), CancellationToken.None);
 
@@ -275,9 +285,7 @@ public sealed class SkillPullServiceTests : IDisposable
     public async Task A_registry_list_error_is_reported()
     {
         var api = new FakeRegistryApi { ListError = "boom" };
-        var sut = new SkillPullService(
-            new HarnessCatalog([new ClaudeCodeHarness(new ClaudeCodeSkillParser(), new ClaudeCodeSkillMapper())]),
-            new Tokens(Session()), api, _ledger);
+        var sut = Build(api);
 
         var result = await sut.CompareAsync(Remote(), CancellationToken.None);
 
@@ -524,6 +532,228 @@ public sealed class SkillPullServiceTests : IDisposable
         Assert.Equal(SkillPullStatus.Failed, entry.Status);
         Assert.Contains("is a symbolic link (to", entry.Message);
         Assert.Equal(Manifest("alpha", "old"), File.ReadAllText(Path.Combine(real, "SKILL.md")));
+    }
+
+    // ----- Project skills -----
+
+    private static string Git(string directory, params string[] arguments)
+    {
+        var start = new ProcessStartInfo("git") { WorkingDirectory = directory, RedirectStandardOutput = true, RedirectStandardError = true };
+        foreach (var argument in arguments)
+            start.ArgumentList.Add(argument);
+        start.Environment["GIT_AUTHOR_NAME"] = start.Environment["GIT_COMMITTER_NAME"] = "Test";
+        start.Environment["GIT_AUTHOR_EMAIL"] = start.Environment["GIT_COMMITTER_EMAIL"] = "test@example.invalid";
+        using var process = Process.Start(start)!;
+        var output = process.StandardOutput.ReadToEnd();
+        var error = process.StandardError.ReadToEnd();
+        process.WaitForExit();
+        Assert.True(process.ExitCode == 0, $"git {string.Join(' ', arguments)} failed: {error}");
+        return output.Trim();
+    }
+
+    // A git repo with one commit; its root commit is its project's identity.
+    private string Repo(string name)
+    {
+        var repo = Path.Combine(_repos, name);
+        Directory.CreateDirectory(repo);
+        Git(repo, "init", "-q", "-b", "main");
+        File.WriteAllText(Path.Combine(repo, "README.md"), name);
+        Git(repo, "add", ".");
+        Git(repo, "commit", "-q", "-m", $"{name} root");
+        return repo;
+    }
+
+    private string Clone(string repo, string name)
+    {
+        var clone = Path.Combine(_repos, name);
+        Git(_repos, "clone", "-q", repo, clone);
+        return clone;
+    }
+
+    // The registry project a checkout resolves to, as the fake project API answers.
+    private static Guid ProjectOf(string checkout) => FakeRegistryApi.ProjectIdOf(new ProjectFactsResolver().Resolve(checkout));
+
+    private void PublishProject(string checkout, string name, int version, string body = "project body")
+    {
+        var text = Manifest(name, body);
+        var file = new RegistrySkillFile("SKILL.md", Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(text))), Encoding.UTF8.GetBytes(text));
+        var hash = SkillFileReader.RegistryHash([new SkillUploadFile(file.RelativePath, file.Content)]);
+        var projectId = ProjectOf(checkout);
+        _api.Skills.Add(new RegistrySkill(name, "d", version, hash, DateTimeOffset.UtcNow, projectId, Path.GetFileName(checkout)));
+        _api.Contents[FakeRegistryApi.Key(name, projectId)] = new RegistrySkillContent(name, version, hash, [file]);
+    }
+
+    private static string ProjectSkill(string checkout, string name) => Path.Combine(checkout, ".claude", "skills", name);
+
+    [Fact]
+    public async Task In_another_clone_of_the_project_its_skill_is_not_installed_and_pull_installs_it_into_that_clone()
+    {
+        var a = Repo("a");
+        PublishProject(a, "deploy", 1);
+        var clone = Clone(a, "a-second");
+
+        var remote = await Build().CompareAsync(Remote() with { ProjectStart = clone }, CancellationToken.None);
+        var pull = await Build().PullAsync(Pull() with { ProjectStart = clone }, CancellationToken.None);
+
+        var compared = Assert.Single(remote.Skills);
+        Assert.Equal(SkillSyncState.NotInstalled, compared.State);
+        Assert.Equal("a-second", compared.Project); // the name the registry gave the folder's project
+        var entry = Assert.Single(pull.Entries);
+        Assert.Equal(SkillPullStatus.Installed, entry.Status);
+        Assert.Equal(ProjectSkill(clone, "deploy"), entry.Path);
+        Assert.Equal(Manifest("deploy", "project body"), File.ReadAllText(Path.Combine(ProjectSkill(clone, "deploy"), "SKILL.md")));
+        Assert.False(Directory.Exists(ProjectSkill(a, "deploy")));
+        Assert.False(Directory.Exists(SkillsDir));
+        Assert.Equal(ProjectOf(a), _ledger.Get(RegistryUri, ProjectSkill(clone, "deploy"))!.ProjectId);
+    }
+
+    [Fact]
+    public async Task A_worktree_installs_into_itself_not_into_its_main_worktree()
+    {
+        var a = Repo("a");
+        PublishProject(a, "deploy", 1);
+        var worktree = Path.Combine(_repos, "a-wt");
+        Git(a, "worktree", "add", "-q", worktree, "-b", "side");
+
+        var pull = await Build().PullAsync(Pull() with { ProjectStart = Path.Combine(worktree) }, CancellationToken.None);
+
+        Assert.Equal(SkillPullStatus.Installed, Assert.Single(pull.Entries).Status);
+        Assert.True(File.Exists(Path.Combine(ProjectSkill(worktree, "deploy"), "SKILL.md")));
+        Assert.False(Directory.Exists(Path.Combine(a, ".claude")));
+    }
+
+    [Fact]
+    public async Task From_another_projects_checkout_a_project_skill_is_listed_as_theirs_and_nothing_is_written()
+    {
+        var a = Repo("a");
+        var b = Repo("b");
+        PublishProject(a, "deploy", 1);
+
+        var remote = await Build().CompareAsync(Remote() with { ProjectStart = b }, CancellationToken.None);
+        var pull = await Build().PullAsync(Pull("deploy") with { ProjectStart = b }, CancellationToken.None);
+
+        var compared = Assert.Single(remote.Skills);
+        Assert.Equal(SkillSyncState.OtherProject, compared.State);
+        Assert.Equal("a", compared.Project);
+        Assert.Contains("Belongs to project a", compared.Note);
+        Assert.Contains(Path.Combine(".claude", "skills", "deploy"), compared.Note);
+        var entry = Assert.Single(pull.Entries);
+        Assert.Equal(SkillPullStatus.OtherProject, entry.Status);
+        Assert.True(pull.Succeeded);
+        Assert.False(Directory.Exists(Path.Combine(a, ".claude")));
+        Assert.False(Directory.Exists(Path.Combine(b, ".claude")));
+        Assert.False(Directory.Exists(SkillsDir));
+        Assert.Empty(_api.Downloaded);
+    }
+
+    [Fact]
+    public async Task A_global_and_a_project_skill_of_the_same_name_install_into_their_own_folders()
+    {
+        var a = Repo("a");
+        Publish("deploy", 3, ("SKILL.md", Manifest("deploy", "global body")));
+        PublishProject(a, "deploy", 1);
+
+        var pull = await Build().PullAsync(Pull("deploy") with { ProjectStart = a }, CancellationToken.None);
+
+        Assert.Equal(2, pull.Entries.Count);
+        Assert.All(pull.Entries, e => Assert.Equal(SkillPullStatus.Installed, e.Status));
+        Assert.Equal(Manifest("deploy", "global body"), File.ReadAllText(Path.Combine(SkillsDir, "deploy", "SKILL.md")));
+        Assert.Equal(Manifest("deploy", "project body"), File.ReadAllText(Path.Combine(ProjectSkill(a, "deploy"), "SKILL.md")));
+        Assert.Null(_ledger.Get(RegistryUri, Path.Combine(SkillsDir, "deploy"))!.ProjectId);
+    }
+
+    [Fact]
+    public async Task A_project_skills_folder_synced_as_the_global_skill_is_not_trusted_for_the_project_skill()
+    {
+        var a = Repo("a");
+        var path = ProjectSkill(a, "deploy");
+        Directory.CreateDirectory(path);
+        File.WriteAllText(Path.Combine(path, "SKILL.md"), Manifest("deploy", "old"));
+        // What an older CLI recorded: the project's copy pushed as the global skill.
+        _ledger.Record(RegistryUri, path, new SkillLedgerEntry(SkillFileReader.Hash(SkillFileReader.Read(path)), 1, "deploy"));
+        PublishProject(a, "deploy", 2, "new");
+
+        var pull = await Build().PullAsync(Pull() with { ProjectStart = a }, CancellationToken.None);
+
+        Assert.Equal(SkillPullStatus.LocalChanges, Assert.Single(pull.Entries).Status);
+        Assert.Equal(Manifest("deploy", "old"), File.ReadAllText(Path.Combine(path, "SKILL.md")));
+    }
+
+    [Fact]
+    public async Task A_folder_with_no_project_yet_lists_its_project_skills_as_only_here()
+    {
+        var a = Repo("a");
+        Directory.CreateDirectory(ProjectSkill(a, "deploy"));
+        File.WriteAllText(Path.Combine(ProjectSkill(a, "deploy"), "SKILL.md"), Manifest("deploy"));
+        _projects.Unknown = true;
+
+        var remote = await Build().CompareAsync(Remote() with { ProjectStart = a }, CancellationToken.None);
+
+        var compared = Assert.Single(remote.Skills);
+        Assert.Equal(SkillSyncState.LocalOnly, compared.State);
+        Assert.Equal("a", compared.Project);
+    }
+
+    [Fact]
+    public async Task When_the_registry_cannot_say_which_project_the_folder_is_in_project_skills_are_not_written()
+    {
+        var a = Repo("a");
+        PublishProject(a, "deploy", 1);
+        _projects.Error = "boom";
+
+        var pull = await Build().PullAsync(Pull() with { ProjectStart = a }, CancellationToken.None);
+
+        var entry = Assert.Single(pull.Entries);
+        Assert.Equal(SkillPullStatus.OtherProject, entry.Status);
+        Assert.Contains("boom", entry.Message);
+        Assert.False(Directory.Exists(Path.Combine(a, ".claude")));
+    }
+
+    [Fact]
+    public async Task A_folder_whose_project_skills_folder_is_the_global_one_is_not_treated_as_a_project()
+    {
+        // Running in the home folder: <home>/.claude/skills is where global skills live.
+        var home = Path.Combine(_repos, "home");
+        var config = Path.Combine(home, ".claude");
+        Directory.CreateDirectory(config);
+        PublishProject(home, "deploy", 1);
+
+        var harness = new ClaudeCodeHarness(new ClaudeCodeSkillParser(), new ClaudeCodeSkillMapper());
+        var sut = new SkillPullService(new HarnessCatalog([harness]), new Tokens(Session()), _api, _ledger, new ProjectFactsResolver(), _projects, new FakeMachine());
+        var pull = await sut.PullAsync(new SkillPullRequest([], null, config, Registry, ProjectStart: home), CancellationToken.None);
+
+        var entry = Assert.Single(pull.Entries);
+        Assert.Equal(SkillPullStatus.OtherProject, entry.Status);
+        Assert.Contains("global skills folder", entry.Message);
+        Assert.False(Directory.Exists(Path.Combine(config, "skills")));
+    }
+
+    /// <summary>Resolves a folder to the project <see cref="FakeRegistryApi.ProjectIdOf"/> gives it, named after its main worktree.</summary>
+    private sealed class FakeProjectApi : IProjectApi
+    {
+        public string? Error { get; set; }
+
+        /// <summary>Answer as for a folder no backup has created a project for yet.</summary>
+        public bool Unknown { get; set; }
+
+        public Task<ApiResult<RemoteProject>> ResolveProjectAsync(Uri registry, string accessToken, Guid machineId, ProjectFacts facts, CancellationToken cancellationToken)
+        {
+            if (Error is not null)
+                return Task.FromResult(ApiResult<RemoteProject>.Fail(Error));
+            var name = Path.GetFileName(facts.MainWorktree ?? facts.Directory);
+            return Task.FromResult(ApiResult<RemoteProject>.Success(new RemoteProject
+            {
+                ProjectId = Unknown ? null : FakeRegistryApi.ProjectIdOf(facts),
+                Name = name,
+                RecognisedBy = Unknown ? "new" : "rootCommit",
+            }));
+        }
+
+        public Task<ApiResult<ProjectLinkChange>> LinkFolderAsync(Uri registry, string accessToken, Guid machineId, ProjectFacts facts, string project, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
+        public Task<ApiResult<ProjectLinkChange>> UnlinkFolderAsync(Uri registry, string accessToken, Guid machineId, ProjectFacts facts, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
     }
 
     private sealed class Tokens(StoredToken? session) : IAccessTokenProvider

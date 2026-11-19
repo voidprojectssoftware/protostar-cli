@@ -1,4 +1,5 @@
 using Protostar.Cli.Auth;
+using Protostar.Cli.Projects;
 
 namespace Protostar.Cli.Registry;
 
@@ -25,16 +26,23 @@ internal interface IRegistryApi
     /// <param name="accessToken">A current bearer token for that registry.</param>
     /// <param name="name">The skill's name, used by the registry only when its SKILL.md declares none.</param>
     /// <param name="files">Every file in the skill, with paths relative to the skill's root.</param>
+    /// <param name="project">The project folder a project skill lives in; <c>null</c> for a global skill.</param>
     /// <param name="cancellationToken">Cancels the upload.</param>
+    /// <remarks>
+    /// A registry from before project skills ignores <paramref name="project"/> and files the skill as global,
+    /// so the registry must be upgraded before a CLI that sends it.
+    /// </remarks>
     Task<SkillPushOutcome> PushSkillAsync(
         Uri registry,
         string accessToken,
         string name,
         IReadOnlyList<SkillUploadFile> files,
+        SkillProject? project,
         CancellationToken cancellationToken);
 
     /// <summary>
-    /// Lists the caller's skills from <c>GET /v1/skills</c>, each described by its current version.
+    /// Lists every one of the caller's skills, global and project, from <c>GET /v1/skills?includeProjects=true</c>,
+    /// each described by its current version.
     /// </summary>
     Task<RegistrySkillList> ListSkillsAsync(Uri registry, string accessToken, CancellationToken cancellationToken);
 
@@ -44,23 +52,33 @@ internal interface IRegistryApi
     /// <param name="registry">The registry base URL.</param>
     /// <param name="accessToken">A current bearer token for that registry.</param>
     /// <param name="name">The skill's exact name, as <see cref="ListSkillsAsync"/> reported it.</param>
+    /// <param name="projectId">The skill's project, as <see cref="ListSkillsAsync"/> reported it; <c>null</c> for a global skill.</param>
     /// <param name="version">The version to fetch; <c>null</c> for the current version.</param>
     /// <param name="cancellationToken">Cancels the download.</param>
     Task<RegistrySkillDownload> GetSkillFilesAsync(
         Uri registry,
         string accessToken,
         string name,
+        Guid? projectId,
         int? version,
         CancellationToken cancellationToken);
 }
 
+/// <summary>The project folder a project skill is pushed from, for the registry to resolve to a project.</summary>
+/// <param name="MachineId">This machine's id, which keys a folder outside git.</param>
+/// <param name="Facts">The project folder's facts, from the one resolver sessions also use.</param>
+internal sealed record SkillProject(Guid MachineId, ProjectFacts Facts);
+
 /// <summary>One skill in the caller's registry, described by its current version.</summary>
-/// <param name="Name">The skill's name, unique per user.</param>
+/// <param name="Name">The skill's name, unique per user within its project (or among global skills).</param>
 /// <param name="Description">The current version's description; <c>null</c> when omitted.</param>
 /// <param name="Version">The current version number.</param>
 /// <param name="ContentHash">The registry's content hash; compare with <c>SkillFileReader.RegistryHash</c>.</param>
 /// <param name="UpdatedAt">When the current version was pushed.</param>
-internal sealed record RegistrySkill(string Name, string? Description, int Version, string ContentHash, DateTimeOffset UpdatedAt);
+/// <param name="ProjectId">The project the skill belongs to; <c>null</c> for a global skill.</param>
+/// <param name="ProjectName">That project's display name; <c>null</c> for a global skill.</param>
+internal sealed record RegistrySkill(
+    string Name, string? Description, int Version, string ContentHash, DateTimeOffset UpdatedAt, Guid? ProjectId = null, string? ProjectName = null);
 
 /// <summary>The result of listing skills: the skills, or why they could not be listed.</summary>
 /// <param name="Skills">The caller's skills; <c>null</c> when the request failed.</param>
@@ -102,8 +120,8 @@ internal enum SkillPushStatus
     Skipped,
 
     /// <summary>
-    /// The skill was not uploaded because a different skill of the same name was, and the registry holds one
-    /// skill per name.
+    /// The skill was not uploaded because a different skill of the same name and scope was, and the registry
+    /// holds one skill per name in each scope.
     /// </summary>
     Conflict,
 
@@ -115,7 +133,9 @@ internal enum SkillPushStatus
 /// <param name="Status">What happened.</param>
 /// <param name="Version">The registry's current version number after the push; <c>null</c> unless created or unchanged.</param>
 /// <param name="Message">Why a skill was refused, skipped, or failed; <c>null</c> on success.</param>
-internal sealed record SkillPushOutcome(SkillPushStatus Status, int? Version, string? Message)
+/// <param name="ProjectId">The project the registry filed a project skill under; <c>null</c> for a global skill.</param>
+/// <param name="ProjectName">That project's display name; <c>null</c> for a global skill.</param>
+internal sealed record SkillPushOutcome(SkillPushStatus Status, int? Version, string? Message, Guid? ProjectId = null, string? ProjectName = null)
 {
     /// <summary>True when the skill is now safely in the registry.</summary>
     public bool Succeeded => Status is SkillPushStatus.Created or SkillPushStatus.Unchanged;

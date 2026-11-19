@@ -24,4 +24,11 @@ internal interface ISkillCapability
     /// subdirectory per skill. Where a skill pulled from the registry is installed. It may not exist yet.
     /// </summary>
     string GlobalSkillsDirectory(HarnessLocation location);
+
+    /// <summary>
+    /// The directory that holds the project skills of the project folder <paramref name="projectRoot"/>, one
+    /// subdirectory per skill (for Claude Code, <c>&lt;projectRoot&gt;/.claude/skills</c>). Where a project skill
+    /// pulled from the registry is installed. It may not exist yet.
+    /// </summary>
+    string ProjectSkillsDirectory(string projectRoot);
 }

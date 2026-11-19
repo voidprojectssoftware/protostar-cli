@@ -6,7 +6,8 @@ namespace Protostar.Cli.Skills;
 /// <remarks>
 /// Lets a push decide that a skill is unchanged without contacting the registry, which is what keeps the
 /// capture hook free on every ordinary skill use. Entries are keyed by the skill's directory, not its
-/// name, so a global and a project skill sharing a name never overwrite each other's record.
+/// name, so a global and a project skill sharing a name never overwrite each other's record, and two clones
+/// of one project keep a record each. The entry names the registry skill (name and project) it was synced as.
 /// </remarks>
 internal interface ISkillLedger
 {
@@ -26,4 +27,9 @@ internal interface ISkillLedger
 /// names were kept. A pull trusts a record only for the registry skill it names, so a folder synced as
 /// <c>foo</c> is never treated as an unedited copy of <c>Foo</c>.
 /// </param>
-internal sealed record SkillLedgerEntry(string ContentHash, int? Version, string? Name = null);
+/// <param name="ProjectId">
+/// The registry project that content was synced under; <c>null</c> for a global skill, and in every record
+/// written before project skills, when every skill was pushed as global. A record speaks only for the registry
+/// skill with this name and this project.
+/// </param>
+internal sealed record SkillLedgerEntry(string ContentHash, int? Version, string? Name = null, Guid? ProjectId = null);

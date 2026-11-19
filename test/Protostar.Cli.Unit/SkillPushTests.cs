@@ -2,7 +2,9 @@ using System.Net;
 using System.Text;
 using Protostar.Cli.Auth;
 using Protostar.Cli.Harness;
+using Protostar.Cli.Projects;
 using Protostar.Cli.Registry;
+using Protostar.Cli.Sessions;
 using Protostar.Cli.Skills;
 using Xunit;
 
@@ -21,7 +23,8 @@ public sealed class SkillPushServiceTests : IDisposable
         var path = Path.Combine(_root, dir ?? $"{scope}-{name}");
         Directory.CreateDirectory(path);
         File.WriteAllText(Path.Combine(path, "SKILL.md"), $"---\nname: {name}\n---\nbody");
-        return new DiscoveredSkill { Name = name, Scope = scope, Path = path };
+        var projectRoot = scope == SkillScope.Project ? Path.Combine(_root, "repo") : null;
+        return new DiscoveredSkill { Name = name, Scope = scope, Path = path, ProjectRoot = projectRoot };
     }
 
     private static StoredToken Session(bool expired = false) => new()
@@ -34,12 +37,13 @@ public sealed class SkillPushServiceTests : IDisposable
     private static SkillPushRequest Request(params string[] names) => new(names, null, null, null, Registry);
 
     private readonly FakeLedger _ledger = new();
+    private readonly FakeFacts _facts = new();
 
     private (ISkillPushService Sut, FakeRegistryApi Api) Build(
         IEnumerable<DiscoveredSkill> skills, StoredToken? session = null, FakeRegistryApi? api = null)
     {
         api ??= new FakeRegistryApi();
-        var sut = new SkillPushService(new FakeSkillService(skills.ToList()), new FakeTokens(session), api, _ledger);
+        var sut = new SkillPushService(new FakeSkillService(skills.ToList()), new FakeTokens(session), api, _ledger, _facts, new FakeMachine());
         return (sut, api);
     }
 
@@ -215,11 +219,11 @@ public sealed class SkillPushServiceTests : IDisposable
     }
 
     [Fact]
-    public async Task Second_skill_with_the_same_name_and_identical_content_is_skipped()
+    public async Task Second_skill_of_the_same_scope_and_name_with_identical_content_is_skipped()
     {
-        var global = Skill("alpha", SkillScope.Global);
-        var project = Skill("alpha", SkillScope.Project);
-        var (sut, api) = Build([global, project], Session());
+        var first = Skill("alpha", SkillScope.Global, "one-alpha");
+        var second = Skill("alpha", SkillScope.Global, "two-alpha");
+        var (sut, api) = Build([first, second], Session());
 
         var result = await sut.PushAsync(Request(), CancellationToken.None);
 
@@ -230,37 +234,110 @@ public sealed class SkillPushServiceTests : IDisposable
     }
 
     [Fact]
-    public async Task Second_skill_with_the_same_name_and_different_content_is_a_conflict()
+    public async Task Second_skill_of_the_same_scope_and_name_with_different_content_is_a_conflict()
     {
-        var global = Skill("alpha", SkillScope.Global);
-        var project = Skill("alpha", SkillScope.Project);
-        File.WriteAllText(Path.Combine(project.Path, "SKILL.md"), "---\nname: alpha\n---\nthe project's own version");
-        var (sut, api) = Build([global, project], Session());
+        var first = Skill("alpha", SkillScope.Global, "one-alpha");
+        var second = Skill("alpha", SkillScope.Global, "two-alpha");
+        File.WriteAllText(Path.Combine(second.Path, "SKILL.md"), "---\nname: alpha\n---\nanother harness's version");
+        var (sut, api) = Build([first, second], Session());
 
         var result = await sut.PushAsync(Request(), CancellationToken.None);
 
         var uploaded = Encoding.UTF8.GetString(Assert.Single(api.Pushed).Files[0].Content);
         Assert.EndsWith("body", uploaded);
         Assert.Equal(SkillPushStatus.Conflict, result.Entries[1].Outcome.Status);
-        Assert.Contains(global.Path, result.Entries[1].Outcome.Message);
+        Assert.Contains(first.Path, result.Entries[1].Outcome.Message);
         Assert.False(result.Succeeded);
     }
 
     [Fact]
     public async Task Same_name_conflict_is_detected_even_when_the_first_copy_is_unchanged_by_the_ledger()
     {
-        var global = Skill("alpha", SkillScope.Global);
-        var (seed, _) = Build([global], Session());
+        var first = Skill("alpha", SkillScope.Global, "one-alpha");
+        var (seed, _) = Build([first], Session());
         await seed.PushAsync(Request(), CancellationToken.None);
-        var project = Skill("alpha", SkillScope.Project);
-        File.WriteAllText(Path.Combine(project.Path, "SKILL.md"), "different");
-        var (sut, api) = Build([global, project], session: null);
+        var second = Skill("alpha", SkillScope.Global, "two-alpha");
+        File.WriteAllText(Path.Combine(second.Path, "SKILL.md"), "different");
+        var (sut, api) = Build([first, second], session: null);
 
         var result = await sut.PushAsync(Request(), CancellationToken.None);
 
         Assert.Empty(api.Pushed);
         Assert.Equal(SkillPushStatus.Unchanged, result.Entries[0].Outcome.Status);
         Assert.Equal(SkillPushStatus.Conflict, result.Entries[1].Outcome.Status);
+    }
+
+    [Fact]
+    public async Task A_global_and_a_project_skill_of_the_same_name_are_both_pushed_each_in_its_own_scope()
+    {
+        var global = Skill("deploy", SkillScope.Global);
+        var project = Skill("deploy", SkillScope.Project);
+        File.WriteAllText(Path.Combine(project.Path, "SKILL.md"), "---\nname: deploy\n---\nthe project's own version");
+        var (sut, api) = Build([global, project], Session());
+
+        var result = await sut.PushAsync(Request(), CancellationToken.None);
+
+        Assert.True(result.Succeeded);
+        Assert.Equal(2, api.Pushed.Count);
+        Assert.Null(api.Pushed[0].Project);
+        Assert.NotNull(api.Pushed[1].Project);
+    }
+
+    [Fact]
+    public async Task A_project_skill_is_pushed_with_its_project_folders_facts_and_this_machines_id()
+    {
+        var project = Skill("deploy", SkillScope.Project);
+        var (sut, api) = Build([project], Session());
+
+        await sut.PushAsync(Request(), CancellationToken.None);
+
+        var sent = Assert.Single(api.Pushed).Project!;
+        Assert.Equal(FakeMachine.Id, sent.MachineId);
+        Assert.Equal(project.ProjectRoot, sent.Facts.WorkingDirectory);
+        Assert.Equal([project.ProjectRoot!], _facts.Asked);
+    }
+
+    [Fact]
+    public async Task A_global_skill_is_pushed_without_project_facts_and_resolves_nothing()
+    {
+        var (sut, api) = Build([Skill("deploy")], Session());
+
+        await sut.PushAsync(Request(), CancellationToken.None);
+
+        Assert.Null(Assert.Single(api.Pushed).Project);
+        Assert.Empty(_facts.Asked);
+    }
+
+    [Fact]
+    public async Task A_project_skill_recorded_as_global_by_an_older_cli_is_pushed_again_as_the_projects()
+    {
+        var project = Skill("deploy", SkillScope.Project);
+        _ledger.Record(new Uri(Registry), project.Path, new SkillLedgerEntry(SkillFileReader.Hash(SkillFileReader.Read(project.Path)), 1, "deploy"));
+        var (sut, api) = Build([project], Session());
+
+        await sut.PushAsync(Request(), CancellationToken.None);
+        var again = await sut.PushAsync(Request(), CancellationToken.None);
+
+        Assert.NotNull(Assert.Single(api.Pushed).Project);
+        Assert.NotNull(_ledger.Get(new Uri(Registry), project.Path)!.ProjectId);
+        Assert.Equal(SkillPushStatus.Unchanged, Assert.Single(again.Entries).Outcome.Status);
+    }
+
+    [Fact]
+    public async Task The_capture_hooks_request_backs_up_both_the_global_and_the_project_skill_of_the_used_name()
+    {
+        // The hook only knows the skill's name and the session's cwd (see CaptureService), so it asks for the
+        // name with the cwd as the project start, and each local copy goes to its own registry skill.
+        var global = Skill("deploy", SkillScope.Global);
+        var project = Skill("deploy", SkillScope.Project);
+        File.WriteAllText(Path.Combine(project.Path, "SKILL.md"), "---\nname: deploy\n---\nproject");
+        var (sut, api) = Build([global, project, Skill("other")], Session());
+
+        var result = await sut.PushAsync(new SkillPushRequest(["deploy"], null, null, _root, Registry), CancellationToken.None);
+
+        Assert.Equal([SkillScope.Global, SkillScope.Project], result.Entries.Select(e => e.Skill.Scope));
+        Assert.All(result.Entries, e => Assert.Equal(SkillPushStatus.Created, e.Outcome.Status));
+        Assert.Equal(2, api.Pushed.Count);
     }
 
     [Fact]
@@ -304,6 +381,31 @@ public sealed class SkillPushServiceTests : IDisposable
         Assert.Equal("alpha", _ledger.Get(new Uri(Registry), skill.Path)!.Name);
     }
 
+    /// <summary>Facts for a folder outside git, recording which folders were asked about.</summary>
+    internal sealed class FakeFacts : IProjectFactsResolver
+    {
+        public List<string> Asked { get; } = [];
+
+        public ProjectFacts Resolve(string workingDirectory)
+        {
+            Asked.Add(workingDirectory);
+            return ProjectFacts.NotGit(workingDirectory, workingDirectory);
+        }
+    }
+
+    internal sealed class FakeMachine : IMachineIdentity
+    {
+        public static readonly Guid Id = Guid.Parse("11111111-2222-3333-4444-555555555555");
+
+        public MachineInfo Get() => new(Id, "test", "linux");
+
+        public bool IsRegisteredWith(Uri registry) => true;
+
+        public void MarkRegistered(Uri registry)
+        {
+        }
+    }
+
     internal sealed class FakeLedger : ISkillLedger
     {
         private readonly Dictionary<string, SkillLedgerEntry> _entries = [];
@@ -328,7 +430,7 @@ public sealed class SkillPushServiceTests : IDisposable
     {
         public RegistryMeta? Meta { get; init; } = new() { ApiMajors = [1] };
         public Dictionary<string, SkillPushOutcome> Outcomes { get; } = [];
-        public List<(string Name, string Token, IReadOnlyList<SkillUploadFile> Files)> Pushed { get; } = [];
+        public List<(string Name, string Token, IReadOnlyList<SkillUploadFile> Files, SkillProject? Project)> Pushed { get; } = [];
         public int MetaCalls { get; private set; }
 
         public Task<RegistryMeta?> GetMetaAsync(Uri registry, CancellationToken cancellationToken)
@@ -338,11 +440,19 @@ public sealed class SkillPushServiceTests : IDisposable
         }
 
         public Task<SkillPushOutcome> PushSkillAsync(
-            Uri registry, string accessToken, string name, IReadOnlyList<SkillUploadFile> files, CancellationToken cancellationToken)
+            Uri registry, string accessToken, string name, IReadOnlyList<SkillUploadFile> files, SkillProject? project, CancellationToken cancellationToken)
         {
-            Pushed.Add((name, accessToken, files));
-            return Task.FromResult(Outcomes.GetValueOrDefault(name) ?? new SkillPushOutcome(SkillPushStatus.Created, 1, null));
+            Pushed.Add((name, accessToken, files, project));
+            var projectId = project is null ? (Guid?)null : ProjectIdOf(project.Facts);
+            return Task.FromResult(Outcomes.GetValueOrDefault(name) ?? new SkillPushOutcome(SkillPushStatus.Created, 1, null, projectId));
         }
+
+        /// <summary>A stable project id for a folder: by root commit for git, else by folder, as the registry keys them.</summary>
+        public static Guid ProjectIdOf(ProjectFacts facts) =>
+            new(System.Security.Cryptography.MD5.HashData(Encoding.UTF8.GetBytes(facts.RootCommit ?? facts.Directory)));
+
+        /// <summary>The key <see cref="Contents"/> holds a skill under: its name, or <c>&lt;project id&gt;/&lt;name&gt;</c>.</summary>
+        public static string Key(string name, Guid? projectId) => projectId is { } id ? $"{id}/{name}" : name;
 
         public List<RegistrySkill> Skills { get; } = [];
         public string? ListError { get; init; }
@@ -353,10 +463,10 @@ public sealed class SkillPushServiceTests : IDisposable
             Task.FromResult(ListError is null ? new RegistrySkillList(Skills, null) : new RegistrySkillList(null, ListError));
 
         public Task<RegistrySkillDownload> GetSkillFilesAsync(
-            Uri registry, string accessToken, string name, int? version, CancellationToken cancellationToken)
+            Uri registry, string accessToken, string name, Guid? projectId, int? version, CancellationToken cancellationToken)
         {
-            Downloaded.Add(name);
-            return Task.FromResult(Contents.TryGetValue(name, out var content)
+            Downloaded.Add(Key(name, projectId));
+            return Task.FromResult(Contents.TryGetValue(Key(name, projectId), out var content)
                 ? new RegistrySkillDownload(content, null)
                 : new RegistrySkillDownload(null, "not found"));
         }
@@ -474,7 +584,7 @@ public sealed class RegistryApiTests
         var handler = new StubHandler(_ => Json(HttpStatusCode.Created, """{"status":"created","version":3}"""));
         using var api = new RegistryApi(handler);
 
-        var outcome = await api.PushSkillAsync(Registry, "tok", "alpha", Files, CancellationToken.None);
+        var outcome = await api.PushSkillAsync(Registry, "tok", "alpha", Files, null, CancellationToken.None);
 
         Assert.Equal(new SkillPushOutcome(SkillPushStatus.Created, 3, null), outcome);
         Assert.Equal(HttpMethod.Post, handler.Method);
@@ -487,11 +597,66 @@ public sealed class RegistryApiTests
     }
 
     [Fact]
+    public async Task A_project_push_sends_the_project_folder_as_a_json_field_and_reads_back_the_project()
+    {
+        var projectId = Guid.NewGuid();
+        var handler = new StubHandler(_ => Json(HttpStatusCode.Created, $$"""{"status":"created","version":1,"projectId":"{{projectId}}","projectName":"github.com/acme/a"}"""));
+        using var api = new RegistryApi(handler);
+        var machine = Guid.NewGuid();
+        var facts = ProjectFacts.NotGit("/w/a", "/w/a");
+
+        var outcome = await api.PushSkillAsync(Registry, "tok", "deploy", Files, new SkillProject(machine, facts), CancellationToken.None);
+
+        Assert.Equal(new SkillPushOutcome(SkillPushStatus.Created, 1, null, projectId, "github.com/acme/a"), outcome);
+        Assert.Contains("name=project", handler.Body);
+        Assert.Contains($"\"machineId\":\"{machine}\"", handler.Body);
+        Assert.Contains("\"workingDirectory\":\"/w/a\"", handler.Body);
+    }
+
+    [Fact]
+    public async Task A_global_push_sends_no_project_field()
+    {
+        var handler = new StubHandler(_ => Json(HttpStatusCode.Created, """{"status":"created","version":1}"""));
+        using var api = new RegistryApi(handler);
+
+        await api.PushSkillAsync(Registry, "tok", "deploy", Files, null, CancellationToken.None);
+
+        Assert.DoesNotContain("name=project", handler.Body);
+    }
+
+    [Fact]
+    public async Task Listing_asks_for_project_skills_too_and_reads_their_project()
+    {
+        var projectId = Guid.NewGuid();
+        var handler = new StubHandler(_ => Json(HttpStatusCode.OK,
+            $$"""{"skills":[{"name":"deploy","version":1,"contentHash":"AB","updatedAt":"2026-11-19T00:00:00Z","projectId":null},{"name":"deploy","version":2,"contentHash":"CD","updatedAt":"2026-11-19T00:00:00Z","projectId":"{{projectId}}","projectName":"a"}]}"""));
+        using var api = new RegistryApi(handler);
+
+        var list = await api.ListSkillsAsync(Registry, "tok", CancellationToken.None);
+
+        Assert.Equal("https://registry.test/v1/skills?includeProjects=true", handler.Uri!.ToString());
+        Assert.Equal([null, projectId], list.Skills!.Select(s => s.ProjectId));
+        Assert.Equal("a", list.Skills![1].ProjectName);
+    }
+
+    [Fact]
+    public async Task Downloading_a_project_skill_names_its_project()
+    {
+        var projectId = Guid.NewGuid();
+        var handler = new StubHandler(_ => Json(HttpStatusCode.NotFound, "{}"));
+        using var api = new RegistryApi(handler);
+
+        await api.GetSkillFilesAsync(Registry, "tok", "deploy", projectId, 3, CancellationToken.None);
+
+        Assert.Equal($"https://registry.test/v1/skills/deploy/files?projectId={projectId}&version=3", handler.Uri!.ToString());
+    }
+
+    [Fact]
     public async Task Ok_maps_to_unchanged_with_the_current_version()
     {
         using var api = new RegistryApi(new StubHandler(_ => Json(HttpStatusCode.OK, """{"status":"unchanged","version":2}""")));
 
-        var outcome = await api.PushSkillAsync(Registry, "tok", "alpha", Files, CancellationToken.None);
+        var outcome = await api.PushSkillAsync(Registry, "tok", "alpha", Files, null, CancellationToken.None);
 
         Assert.Equal(new SkillPushOutcome(SkillPushStatus.Unchanged, 2, null), outcome);
     }
@@ -505,7 +670,7 @@ public sealed class RegistryApiTests
         var body = $$"""{"title":"{{title}}","status":{{(int)status}}}""";
         using var api = new RegistryApi(new StubHandler(_ => Json(status, body, "application/problem+json")));
 
-        var outcome = await api.PushSkillAsync(Registry, "tok", "alpha", Files, CancellationToken.None);
+        var outcome = await api.PushSkillAsync(Registry, "tok", "alpha", Files, null, CancellationToken.None);
 
         Assert.Equal(new SkillPushOutcome(SkillPushStatus.Refused, null, title), outcome);
     }
@@ -515,7 +680,7 @@ public sealed class RegistryApiTests
     {
         using var api = new RegistryApi(new StubHandler(_ => new HttpResponseMessage(HttpStatusCode.Unauthorized)));
 
-        var outcome = await api.PushSkillAsync(Registry, "tok", "alpha", Files, CancellationToken.None);
+        var outcome = await api.PushSkillAsync(Registry, "tok", "alpha", Files, null, CancellationToken.None);
 
         Assert.Equal(SkillPushStatus.Failed, outcome.Status);
         Assert.Contains("auth login", outcome.Message);
@@ -526,7 +691,7 @@ public sealed class RegistryApiTests
     {
         using var api = new RegistryApi(new StubHandler(_ => new HttpResponseMessage(HttpStatusCode.BadGateway)));
 
-        var outcome = await api.PushSkillAsync(Registry, "tok", "alpha", Files, CancellationToken.None);
+        var outcome = await api.PushSkillAsync(Registry, "tok", "alpha", Files, null, CancellationToken.None);
 
         Assert.Equal(SkillPushStatus.Failed, outcome.Status);
         Assert.Contains("502", outcome.Message);
@@ -537,7 +702,7 @@ public sealed class RegistryApiTests
     {
         using var api = new RegistryApi(new StubHandler(_ => throw new HttpRequestException("connection refused")));
 
-        var outcome = await api.PushSkillAsync(Registry, "tok", "alpha", Files, CancellationToken.None);
+        var outcome = await api.PushSkillAsync(Registry, "tok", "alpha", Files, null, CancellationToken.None);
 
         Assert.Equal(SkillPushStatus.Failed, outcome.Status);
         Assert.Contains("connection refused", outcome.Message);

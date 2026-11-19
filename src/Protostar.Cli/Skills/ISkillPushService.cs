@@ -16,11 +16,12 @@ internal interface ISkillPushService
     /// Discovers the requested skills and uploads each one to the registry as a new version.
     /// </summary>
     /// <remarks>
-    /// Skills are sent one request each, so one refused skill never fails the others. When two
-    /// discovered skills share a name, the first in discovery order (global before project) is pushed,
-    /// matching which one the harness itself loads. A later one is skipped when its content is identical,
-    /// and reported as <see cref="SkillPushStatus.Conflict"/> when it differs, since the registry holds one
-    /// skill per name and pushing both would make them overwrite each other.
+    /// Skills are sent one request each, so one refused skill never fails the others. A project skill is
+    /// sent with its project folder's facts so the registry keeps it apart from a global skill or another
+    /// project's skill of the same name. When two discovered skills of one scope share a name, the first in
+    /// discovery order is pushed; a later one is skipped when its content is identical, and reported as
+    /// <see cref="SkillPushStatus.Conflict"/> when it differs, since pushing both would make them overwrite
+    /// each other.
     /// </remarks>
     Task<SkillPushRunResult> PushAsync(SkillPushRequest request, CancellationToken cancellationToken);
 }

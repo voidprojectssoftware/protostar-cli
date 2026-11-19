@@ -19,14 +19,16 @@ internal sealed partial class ClaudeCodeHarness : ISkillCapability
         var skills = new List<DiscoveredSkill>();
 
         skills.AddRange(GetGlobalSkills(location.ConfigDir));
-        skills.AddRange(GetProjectSkills(projectStart));
+        skills.AddRange(GetProjectSkills(location, projectStart));
 
         return skills;
     }
 
     public string GlobalSkillsDirectory(HarnessLocation location) => Path.Combine(location.ConfigDir, SkillsDirName);
 
-    private IEnumerable<DiscoveredSkill> GetProjectSkills(string? projectStart)
+    public string ProjectSkillsDirectory(string projectRoot) => Path.Combine(projectRoot, ProjectConfigDir, SkillsDirName);
+
+    private IEnumerable<DiscoveredSkill> GetProjectSkills(HarnessLocation location, string? projectStart)
     {
         // Project scope is opt-in: a null start means "global only".
         if (string.IsNullOrWhiteSpace(projectStart))
@@ -36,8 +38,21 @@ internal sealed partial class ClaudeCodeHarness : ISkillCapability
         if (projectRoot is null)
             return [];
 
-        return Scan(Path.Combine(projectRoot, ProjectConfigDir, SkillsDirName), SkillScope.Project);
+        // Walking up from anywhere under the home folder finds ~/.claude, which is the global config, not a
+        // project's. Its skills are already reported as global; reporting them again as a project's would push
+        // them as a project skill of the home folder.
+        var skillsDir = ProjectSkillsDirectory(projectRoot);
+        if (SamePath(skillsDir, GlobalSkillsDirectory(location)))
+            return [];
+
+        return Scan(skillsDir, SkillScope.Project).Select(s => s with { ProjectRoot = projectRoot });
     }
+
+    private static bool SamePath(string a, string b) =>
+        string.Equals(
+            Path.TrimEndingDirectorySeparator(Path.GetFullPath(a)),
+            Path.TrimEndingDirectorySeparator(Path.GetFullPath(b)),
+            OperatingSystem.IsWindows() || OperatingSystem.IsMacOS() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
 
     private IEnumerable<DiscoveredSkill> GetGlobalSkills(string globalConfigPath)
     {

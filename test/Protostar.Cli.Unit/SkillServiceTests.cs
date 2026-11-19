@@ -267,5 +267,7 @@ public sealed class SkillServiceTests
         }
 
         public string GlobalSkillsDirectory(HarnessLocation location) => Path.Combine(location.ConfigDir, "skills");
+
+        public string ProjectSkillsDirectory(string projectRoot) => Path.Combine(projectRoot, ".claude", "skills");
     }
 }

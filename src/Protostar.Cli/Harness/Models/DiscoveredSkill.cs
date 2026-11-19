@@ -33,6 +33,13 @@ internal sealed record DiscoveredSkill
     /// <summary>The skill's directory (the unit a push reads).</summary>
     public required string Path { get; init; }
 
+    /// <summary>
+    /// For a <see cref="SkillScope.Project"/> skill, the project folder it was found in (the folder holding the
+    /// harness's project config, such as <c>&lt;repo&gt;/.claude</c>); <c>null</c> for a global skill.
+    /// </summary>
+    /// <remarks>Where a project skill's project is resolved from, so it is pushed as that project's skill.</remarks>
+    public string? ProjectRoot { get; init; }
+
     /// <summary>What the skill does and when to use it; <c>null</c> when the manifest omits it.</summary>
     public string? Description { get; init; }
 

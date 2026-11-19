@@ -22,9 +22,12 @@ internal static class SkillPullPresenter
         }
 
         var showHarness = result.Skills.Select(s => s.Harness.Id).Distinct().Count() > 1;
+        var showProject = result.Skills.Any(s => s.Project is not null);
         var table = new Table().Border(TableBorder.Rounded);
         if (showHarness)
             table.AddColumn("Harness");
+        if (showProject)
+            table.AddColumn("Project");
         table.AddColumn("Name");
         table.AddColumn("Registry");
         table.AddColumn("This machine");
@@ -34,6 +37,8 @@ internal static class SkillPullPresenter
             var cells = new List<string>();
             if (showHarness)
                 cells.Add(Markup.Escape(skill.Harness.Id));
+            if (showProject)
+                cells.Add(Project(skill.Project));
             cells.Add(Markup.Escape(skill.Name));
             cells.Add(skill.Remote is { } remote ? $"v{remote.Version}" : "[grey]-[/]");
             cells.Add(Describe(skill));
@@ -44,6 +49,7 @@ internal static class SkillPullPresenter
 
         var pullable = result.Skills.Count(s => s.State is SkillSyncState.NotInstalled or SkillSyncState.UpdateAvailable);
         var conflicts = result.Skills.Count(s => s.State == SkillSyncState.Conflict);
+        var elsewhere = result.Skills.Count(s => s.State == SkillSyncState.OtherProject);
         AnsiConsole.MarkupLine(pullable > 0
             ? $"{pullable} can be pulled from [grey]{Markup.Escape(authority)}[/]. Run `protostar skills pull` to get them."
             : conflicts > 0
@@ -51,6 +57,8 @@ internal static class SkillPullPresenter
                 : $"Everything in [grey]{Markup.Escape(authority)}[/] is on this machine.");
         if (conflicts > 0)
             AnsiConsole.MarkupLine($"[red]{conflicts} cannot be pulled until the conflict is resolved[/] [grey](--force does not override a conflict)[/].");
+        if (elsewhere > 0)
+            AnsiConsole.MarkupLine($"[grey]{elsewhere} belong to other projects and are only pulled from a checkout of their project.[/]");
         return 0;
     }
 
@@ -68,9 +76,12 @@ internal static class SkillPullPresenter
         }
 
         var showHarness = result.Entries.Select(e => e.Harness.Id).Distinct().Count() > 1;
+        var showProject = result.Entries.Any(e => e.Project is not null);
         var table = new Table().Border(TableBorder.Rounded);
         if (showHarness)
             table.AddColumn("Harness");
+        if (showProject)
+            table.AddColumn("Project");
         table.AddColumn("Name");
         table.AddColumn("Result");
         table.AddColumn("Path");
@@ -79,6 +90,8 @@ internal static class SkillPullPresenter
             var cells = new List<string>();
             if (showHarness)
                 cells.Add(Markup.Escape(entry.Harness.Id));
+            if (showProject)
+                cells.Add(Project(entry.Project));
             cells.Add(Markup.Escape(entry.Name));
             cells.Add(Describe(entry));
             cells.Add($"[grey]{Markup.Escape(entry.Path)}[/]");
@@ -92,12 +105,14 @@ internal static class SkillPullPresenter
         var held = result.Entries.Count(e => e.Status == SkillPullStatus.LocalChanges);
         var failed = result.Entries.Count(e => e.Status == SkillPullStatus.Failed);
         var conflicted = result.Entries.Count(e => e.Status == SkillPullStatus.Conflict);
+        var elsewhere = result.Entries.Count(e => e.Status == SkillPullStatus.OtherProject);
 
         AnsiConsole.MarkupLine(
             $"From [grey]{Markup.Escape(authority)}[/]: {installed} installed, {updated} updated, {current} already up to date" +
             (held > 0 ? $", [yellow]{held} kept because of local changes[/]" : string.Empty) +
             (conflicted > 0 ? $", [red]{conflicted} skipped as conflicts[/]" : string.Empty) +
-            (failed > 0 ? $", [red]{failed} failed[/]" : string.Empty) + ".");
+            (failed > 0 ? $", [red]{failed} failed[/]" : string.Empty) +
+            (elsewhere > 0 ? $", [grey]{elsewhere} left for other projects' checkouts[/]" : string.Empty) + ".");
         if (held > 0)
             AnsiConsole.MarkupLine("[grey]Back up local changes with `protostar skills push`, or overwrite them with `protostar skills pull --force`.[/]");
 
@@ -111,8 +126,11 @@ internal static class SkillPullPresenter
         SkillSyncState.UpdateAvailable => skill.LocalVersion is { } v ? $"[yellow]update available (have v{v})[/]" : "[yellow]update available[/]",
         SkillSyncState.LocalChanges => "[red]local changes[/]",
         SkillSyncState.Conflict => $"[red]conflict:[/] {Markup.Escape(skill.Note ?? string.Empty)}",
+        SkillSyncState.OtherProject => $"[grey]other project:[/] {Markup.Escape(skill.Note ?? string.Empty)}",
         _ => "[grey]only here (not backed up)[/]",
     };
+
+    private static string Project(string? project) => project is null ? "[grey]global[/]" : Markup.Escape(project);
 
     internal static string Describe(SkillPullEntry entry)
     {
@@ -123,6 +141,7 @@ internal static class SkillPullPresenter
             SkillPullStatus.UpToDate => $"[grey]up to date (v{entry.Version})[/]",
             SkillPullStatus.LocalChanges => "[yellow]kept: has local changes[/]",
             SkillPullStatus.Conflict => "[red]conflict:[/]",
+            SkillPullStatus.OtherProject => "[grey]not here:[/]",
             _ => "[red]failed[/]",
         };
         return entry.Message is { } message ? $"{text} {Markup.Escape(message)}" : text;
