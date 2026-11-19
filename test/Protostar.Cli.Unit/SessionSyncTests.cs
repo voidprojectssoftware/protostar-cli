@@ -788,6 +788,170 @@ public sealed class SessionSyncServiceTests : IDisposable
         Assert.Equal(0, _registry.Calls);
     }
 
+    // ── verify ────────────────────────────────────────────────────────────────────
+
+    private Task<SessionSyncResult> Verify() =>
+        Sut().SyncAsync(Request() with { Verify = true }, null, CancellationToken.None);
+
+    private Task<SessionStatusResult> VerifyStatus() => Sut().VerifyAsync(Registry, "claude-code", _root, CancellationToken.None);
+
+    [Fact]
+    public async Task Verify_restores_an_unchanged_transcript_the_registry_lost_which_a_plain_push_cannot_see()
+    {
+        WriteSession(WithDirectory, """{"n":2}""");
+        await Sync();
+        _registry.ForgetTranscript(SessionId);
+        _registry.ResetCounters();
+
+        var plain = await Sync();
+        Assert.Equal(TranscriptSyncStatus.UpToDate, Assert.Single(plain.Transcripts).Status);
+        Assert.Equal(0, _registry.Calls);
+
+        var verified = Assert.Single((await Verify()).Transcripts);
+
+        Assert.Equal(TranscriptSyncStatus.Uploaded, verified.Status);
+        Assert.Equal(BackupCheck.Missing, verified.Verified!.Check);
+        Assert.Equal(File.ReadAllBytes(SessionFile), _registry.Content(SessionId));
+        Assert.Equal([1], _registry.Lookups);
+    }
+
+    [Fact]
+    public async Task Verify_resumes_a_short_transcript_from_the_registry_length_not_from_zero_or_the_ledger()
+    {
+        WriteSession(WithDirectory);
+        var firstLength = (int)new FileInfo(SessionFile).Length;
+        await Sync();
+        AppendRaw("{\"n\":2}\n{\"n\":3}\n");
+        await Sync();
+        _registry.Truncate(SessionId, firstLength);
+        _registry.AppendRequests.Clear();
+
+        var outcome = Assert.Single((await Verify()).Transcripts);
+
+        Assert.Equal(TranscriptSyncStatus.Uploaded, outcome.Status);
+        Assert.Equal(new VerifiedBackup(BackupCheck.Short, 1, firstLength), outcome.Verified);
+        Assert.Equal([(SessionId, 1, (long)firstLength)], _registry.AppendRequests);
+        Assert.Equal(File.ReadAllBytes(SessionFile), _registry.Content(SessionId));
+        Assert.Equal(new FileInfo(SessionFile).Length, _ledger.Get(new Uri(Registry), "claude-code", SessionId)!.Length);
+    }
+
+    [Fact]
+    public async Task Verify_leaves_alone_a_transcript_the_registry_holds_more_of_than_the_ledger_records()
+    {
+        WriteSession(WithDirectory);
+        await Sync();
+        var ahead = File.ReadAllBytes(SessionFile).Concat("{\"elsewhere\":true}\n"u8.ToArray()).ToArray();
+        _registry.ForceContent(SessionId, ahead);
+        AppendRaw("{\"n\":2}\n");
+        _registry.AppendRequests.Clear();
+
+        var result = await Verify();
+
+        var outcome = Assert.Single(result.Transcripts);
+        Assert.Equal(TranscriptSyncStatus.Skipped, outcome.Status);
+        Assert.Equal(BackupCheck.Diverged, outcome.Verified!.Check);
+        Assert.Contains("Left alone", outcome.Message);
+        Assert.Empty(_registry.AppendRequests);
+        Assert.Equal(ahead, _registry.Content(SessionId));
+        Assert.False(result.Complete);
+    }
+
+    [Fact]
+    public async Task Verify_leaves_alone_a_transcript_the_registry_holds_at_another_revision()
+    {
+        WriteSession(WithDirectory);
+        await Sync();
+        _registry.ForceRevision(SessionId, 3);
+        _registry.AppendRequests.Clear();
+
+        var outcome = Assert.Single((await Verify()).Transcripts);
+
+        Assert.Equal(new VerifiedBackup(BackupCheck.Diverged, 3, new FileInfo(SessionFile).Length), outcome.Verified);
+        Assert.Empty(_registry.AppendRequests);
+        Assert.Equal(3, _registry.Revision(SessionId));
+    }
+
+    [Fact]
+    public async Task Verify_confirms_intact_backups_without_uploading()
+    {
+        WriteSession(WithDirectory);
+        await Sync();
+        _registry.ResetCounters();
+
+        var result = await Verify();
+
+        Assert.True(result.Complete);
+        Assert.Equal(BackupCheck.Confirmed, Assert.Single(result.Transcripts).Verified!.Check);
+        Assert.Equal(0, _registry.Appends);
+    }
+
+    [Fact]
+    public async Task Verify_asks_in_batches_never_one_request_per_transcript()
+    {
+        Directory.CreateDirectory(ProjectDir);
+        for (var i = 0; i < 1001; i++)
+            File.WriteAllText(Path.Combine(ProjectDir, $"00000000-0000-0000-0000-{i:D12}.jsonl"), WithDirectory + "\n");
+        await Sync();
+
+        await Verify();
+
+        Assert.Equal([500, 500, 1], _registry.Lookups);
+    }
+
+    [Fact]
+    public async Task Status_verify_reports_missing_and_short_transcripts_and_changes_nothing()
+    {
+        WriteSession(WithDirectory);
+        var firstLength = (int)new FileInfo(SessionFile).Length;
+        await Sync();
+        AppendRaw("{\"n\":2}\n");
+        await Sync();
+        var other = Path.Combine(ProjectDir, "7a000000-0000-0000-0000-000000000001.jsonl");
+        File.WriteAllText(other, WithDirectory + "\n");
+        await Sync();
+        _registry.Truncate(SessionId, firstLength);
+        _registry.ForgetTranscript("7a000000-0000-0000-0000-000000000001");
+        _registry.ResetCounters();
+        var registrations = _registry.MachineRegistrations;
+        _registry.RegistrationOrder.Clear();
+
+        var status = await VerifyStatus();
+
+        Assert.False(status.FullySynced);
+        var shortOne = status.Transcripts.Single(t => t.Transcript.Key == SessionId);
+        Assert.Equal(BackupCheck.Short, shortOne.Verified!.Check);
+        Assert.Equal(firstLength, shortOne.BytesBackedUp);
+        Assert.Equal(new FileInfo(SessionFile).Length - firstLength, shortOne.BytesPending);
+        var missing = status.Transcripts.Single(t => t.Transcript.Key != SessionId);
+        Assert.Equal(BackupCheck.Missing, missing.Verified!.Check);
+        Assert.Equal(new FileInfo(other).Length, missing.BytesPending);
+        Assert.Equal(0, _registry.Appends);
+        Assert.Empty(_registry.RegistrationOrder);
+        Assert.Equal(registrations, _registry.MachineRegistrations);
+        Assert.True(Sut().Status(Registry, "claude-code", _root).FullySynced);
+    }
+
+    [Fact]
+    public async Task Verify_with_the_registry_unreachable_fails_and_uploads_nothing()
+    {
+        WriteSession(WithDirectory);
+        await Sync();
+        _registry.ForgetTranscript(SessionId);
+        _registry.Offline = true;
+
+        var result = await Verify();
+
+        Assert.Equal(SessionSyncFailure.RegistryUnreachable, result.Failure);
+    }
+
+    [Fact]
+    public void A_capture_hook_push_cannot_verify()
+    {
+        var settings = new Protostar.Cli.Commands.SessionsPushCommand.Settings { Session = SessionFile, Verify = true };
+
+        Assert.False(settings.Validate().Successful);
+    }
+
     // ── fakes ─────────────────────────────────────────────────────────────────────
 
     internal sealed class FakeSessions : ISessionSyncService
@@ -802,6 +966,9 @@ public sealed class SessionSyncServiceTests : IDisposable
 
         public SessionStatusResult Status(string? registry, string? harnessId, string? harnessHome) =>
             new(SessionSyncFailure.None, null, new Uri(Registry), []);
+
+        public Task<SessionStatusResult> VerifyAsync(string? registry, string? harnessId, string? harnessHome, CancellationToken cancellationToken) =>
+            Task.FromResult(Status(registry, harnessId, harnessHome));
 
         public Task<SessionListResult> ListAsync(string? registry, string? harnessHome, TranscriptListQuery query, CancellationToken cancellationToken) =>
             Task.FromResult(new SessionListResult(SessionSyncFailure.None, null, new Uri(Registry), []));
@@ -865,6 +1032,28 @@ public sealed class SessionSyncServiceTests : IDisposable
         public int Revision(string key) => _content[key].Revision;
 
         public void ForceContent(string key, byte[] bytes) => _content[key] = (_content[key].Revision, [.. bytes]);
+
+        /// <summary>Stands in for a restored backup: the same revision, holding only its first <paramref name="length"/> bytes.</summary>
+        public void Truncate(string key, int length) => _content[key] = (_content[key].Revision, _content[key].Bytes[..length]);
+
+        public void ForceRevision(string key, int revision) => _content[key] = (revision, _content[key].Bytes);
+
+        /// <summary>How many transcripts each lookup named, in order.</summary>
+        public List<int> Lookups { get; } = [];
+
+        public Task<ApiResult<IReadOnlyList<TranscriptLookup>>> LookupAsync(Uri registry, string accessToken, IReadOnlyList<LocalTranscript> transcripts, CancellationToken cancellationToken)
+        {
+            Calls++;
+            Lookups.Add(transcripts.Count);
+            if (Offline)
+                return Task.FromResult(ApiResult<IReadOnlyList<TranscriptLookup>>.Fail("Could not reach the registry: connection refused"));
+            if (transcripts.Count > ITranscriptApi.MaxLookup)
+                return Task.FromResult(ApiResult<IReadOnlyList<TranscriptLookup>>.Fail("Too many."));
+            IReadOnlyList<TranscriptLookup> answers = [.. transcripts.Select(t => _content.TryGetValue(t.Key, out var held)
+                ? new TranscriptLookup(t.Harness, t.Key, true, held.Revision, held.Bytes.Count)
+                : new TranscriptLookup(t.Harness, t.Key, false, null, null))];
+            return Task.FromResult(ApiResult<IReadOnlyList<TranscriptLookup>>.Success(answers));
+        }
 
         public Task<RegistryMeta?> GetMetaAsync(Uri registry, CancellationToken cancellationToken)
         {

@@ -81,6 +81,24 @@ internal sealed partial class RegistryApi : ITranscriptApi
     }
 
     /// <inheritdoc />
+    public async Task<ApiResult<IReadOnlyList<TranscriptLookup>>> LookupAsync(
+        Uri registry, string accessToken, IReadOnlyList<LocalTranscript> transcripts, CancellationToken cancellationToken)
+    {
+        using var request = Request(HttpMethod.Post, registry, "/v1/transcripts/lookup", accessToken);
+        request.Content = JsonContent.Create(
+            new { transcripts = transcripts.Select(t => new { harness = t.Harness, key = t.Key }) }, options: TranscriptJson.Options);
+
+        var result = await SendAsync<IReadOnlyList<TranscriptLookup>>(
+            request,
+            async response => await response.Content.ReadFromJsonAsync<TranscriptLookup[]>(TranscriptJson.Options) ?? [],
+            cancellationToken);
+        // A registry from before the lookup existed has no such route. Saying so beats a bare status code.
+        return result.Error == Describe(HttpStatusCode.NotFound)
+            ? ApiResult<IReadOnlyList<TranscriptLookup>>.Fail("This registry cannot verify backups yet (it has no transcript lookup). Update the registry.")
+            : result;
+    }
+
+    /// <inheritdoc />
     public async Task<ApiResult<IReadOnlyList<RemoteTranscript>>> ListAsync(
         Uri registry, string accessToken, TranscriptListQuery query, CancellationToken cancellationToken)
     {

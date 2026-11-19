@@ -97,6 +97,24 @@ public sealed class RegistryTranscriptApiTests
         Assert.False(registered.MachineUnknown);
     }
 
+    [Fact]
+    public async Task A_registry_without_the_lookup_says_to_update_it_rather_than_a_bare_404()
+    {
+        // A registry from before the endpoint has no route for it: a 404 with no problem body.
+        var api = new RegistryApi(new StatusHandler(HttpStatusCode.NotFound));
+
+        var result = await api.LookupAsync(Registry, "tok", [Transcript], CancellationToken.None);
+
+        Assert.False(result.Ok);
+        Assert.Contains("Update the registry", result.Error);
+    }
+
+    private sealed class StatusHandler(HttpStatusCode status) : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>
+            Task.FromResult(new HttpResponseMessage(status));
+    }
+
     private static Task<AppendResult> Append(RegistryApi api) =>
         api.AppendAsync(Registry, "tok", Transcript.Harness, Transcript.Key, 1, 0, MachineId, Encoding.UTF8.GetBytes("{}\n"), CancellationToken.None);
 

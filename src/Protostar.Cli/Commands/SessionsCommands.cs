@@ -4,6 +4,7 @@ using Protostar.Cli.Harness;
 using Protostar.Cli.Infrastructure;
 using Protostar.Cli.Registry;
 using Protostar.Cli.Sessions;
+using Spectre.Console;
 using Spectre.Console.Cli;
 
 namespace Protostar.Cli.Commands;
@@ -56,6 +57,16 @@ internal sealed class SessionsPushCommand : AsyncCommand<SessionsPushCommand.Set
         [CommandOption("--throttle <SECONDS>", IsHidden = true)]
         [Description("With --session: skip a transcript whose last push started less than this many seconds ago.")]
         public int? Throttle { get; init; }
+
+        [CommandOption("--verify")]
+        [Description("Ask the registry what it holds of every backed-up transcript, in batches, and back up again what it lost.")]
+        public bool Verify { get; init; }
+
+        // Hooks run on every turn; a verify costs requests even when nothing changed, so it is never part of one.
+        public override ValidationResult Validate() =>
+            Verify && Session is not null
+                ? ValidationResult.Error("--verify cannot be combined with --session; capture hooks never verify.")
+                : ValidationResult.Success();
     }
 
     protected override async Task<int> ExecuteAsync(CommandContext context, Settings settings, CancellationToken cancellation)
@@ -70,14 +81,14 @@ internal sealed class SessionsPushCommand : AsyncCommand<SessionsPushCommand.Set
 
         // Ctrl+C stops between or during chunks, with the ledger and locks left clean, rather than killing the process.
         using var ctrlC = new CtrlCCancellation(cancellation);
-        var request = new SessionSyncRequest(settings.Registry, settings.Harness, settings.HarnessHome, null, null, null);
+        var request = new SessionSyncRequest(settings.Registry, settings.Harness, settings.HarnessHome, null, null, null, settings.Verify);
         var result = await SessionsPresenter.WithProgressAsync(progress => _sessions.SyncAsync(request, progress, ctrlC.Token));
         return SessionsPresenter.RenderSync(result, _catalog);
     }
 }
 
-/// <summary><c>protostar sessions status</c>: what is and is not backed up on this machine. Works offline.</summary>
-internal sealed class SessionsStatusCommand : Command<SessionsStatusCommand.Settings>
+/// <summary><c>protostar sessions status</c>: what is and is not backed up on this machine. Works offline, except with <c>--verify</c>.</summary>
+internal sealed class SessionsStatusCommand : AsyncCommand<SessionsStatusCommand.Settings>
 {
     private readonly ISessionSyncService _sessions;
     private readonly IHarnessCatalog _catalog;
@@ -93,10 +104,19 @@ internal sealed class SessionsStatusCommand : Command<SessionsStatusCommand.Sett
         [CommandOption("-a|--all")]
         [Description("List every transcript, backed up ones too, not only the pending ones.")]
         public bool All { get; init; }
+
+        [CommandOption("--verify")]
+        [Description("Also ask the registry what it holds, to confirm the backups are really there (before wiping a machine). Changes nothing.")]
+        public bool Verify { get; init; }
     }
 
-    protected override int Execute(CommandContext context, Settings settings, CancellationToken cancellation) =>
-        SessionsPresenter.RenderStatus(_sessions.Status(settings.Registry, settings.Harness, settings.HarnessHome), _catalog, settings.All);
+    protected override async Task<int> ExecuteAsync(CommandContext context, Settings settings, CancellationToken cancellation)
+    {
+        var result = settings.Verify
+            ? await _sessions.VerifyAsync(settings.Registry, settings.Harness, settings.HarnessHome, cancellation)
+            : _sessions.Status(settings.Registry, settings.Harness, settings.HarnessHome);
+        return SessionsPresenter.RenderStatus(result, _catalog, settings.All);
+    }
 }
 
 /// <summary><c>protostar sessions list</c>: the sessions backed up from every machine, plus this machine's not backed up yet.</summary>
