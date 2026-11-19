@@ -278,6 +278,9 @@ public sealed class SkillPushServiceTests : IDisposable
     [Fact]
     public async Task A_file_with_a_padded_name_fails_the_skill_before_upload_with_a_clear_message()
     {
+        if (OperatingSystem.IsWindows())
+            return; // Windows strips a trailing space from a file name, so such a file cannot exist there.
+
         var skill = Skill("alpha");
         File.WriteAllText(Path.Combine(skill.Path, "notes.md "), "x");
         var (sut, api) = Build([skill], Session());

@@ -364,7 +364,7 @@ public sealed class SkillPullServiceTests : IDisposable
         var result = await Build().PullAsync(Pull(), CancellationToken.None);
 
         Assert.Equal(SkillPullStatus.Conflict, Assert.Single(result.Entries).Status);
-        Assert.False(Directory.Exists(Path.Combine(SkillsDir, "foo")));
+        Assert.Equal(["FOO"], Directory.GetFileSystemEntries(SkillsDir).Select(Path.GetFileName));
         Assert.Equal(["draft.md"], Directory.GetFiles(path).Select(Path.GetFileName));
     }
 
