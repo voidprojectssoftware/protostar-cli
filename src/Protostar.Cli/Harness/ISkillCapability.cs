@@ -18,4 +18,10 @@ internal interface ISkillCapability
     /// no skills directory at all or <paramref name="projectStart"/> sits in no recognisable project.
     /// </summary>
     IReadOnlyList<DiscoveredSkill> DiscoverSkills(HarnessLocation location, string? projectStart);
+
+    /// <summary>
+    /// The directory that holds this harness's global skills at <paramref name="location"/>, one
+    /// subdirectory per skill. Where a skill pulled from the registry is installed. It may not exist yet.
+    /// </summary>
+    string GlobalSkillsDirectory(HarnessLocation location);
 }

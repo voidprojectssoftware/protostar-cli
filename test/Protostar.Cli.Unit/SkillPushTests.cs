@@ -314,6 +314,23 @@ public sealed class SkillPushServiceTests : IDisposable
             Pushed.Add((name, accessToken, files));
             return Task.FromResult(Outcomes.GetValueOrDefault(name) ?? new SkillPushOutcome(SkillPushStatus.Created, 1, null));
         }
+
+        public List<RegistrySkill> Skills { get; } = [];
+        public string? ListError { get; init; }
+        public Dictionary<string, RegistrySkillContent> Contents { get; } = new(StringComparer.Ordinal);
+        public List<string> Downloaded { get; } = [];
+
+        public Task<RegistrySkillList> ListSkillsAsync(Uri registry, string accessToken, CancellationToken cancellationToken) =>
+            Task.FromResult(ListError is null ? new RegistrySkillList(Skills, null) : new RegistrySkillList(null, ListError));
+
+        public Task<RegistrySkillDownload> GetSkillFilesAsync(
+            Uri registry, string accessToken, string name, int? version, CancellationToken cancellationToken)
+        {
+            Downloaded.Add(name);
+            return Task.FromResult(Contents.TryGetValue(name, out var content)
+                ? new RegistrySkillDownload(content, null)
+                : new RegistrySkillDownload(null, "not found"));
+        }
     }
 }
 

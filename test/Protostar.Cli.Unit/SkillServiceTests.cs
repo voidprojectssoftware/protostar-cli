@@ -265,5 +265,7 @@ public sealed class SkillServiceTests
             LastProjectStart = projectStart;
             return Skills;
         }
+
+        public string GlobalSkillsDirectory(HarnessLocation location) => Path.Combine(location.ConfigDir, "skills");
     }
 }

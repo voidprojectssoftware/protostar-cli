@@ -24,6 +24,8 @@ internal sealed partial class ClaudeCodeHarness : ISkillCapability
         return skills;
     }
 
+    public string GlobalSkillsDirectory(HarnessLocation location) => Path.Combine(location.ConfigDir, SkillsDirName);
+
     private IEnumerable<DiscoveredSkill> GetProjectSkills(string? projectStart)
     {
         // Project scope is opt-in: a null start means "global only".

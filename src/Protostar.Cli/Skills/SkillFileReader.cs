@@ -52,6 +52,24 @@ internal static class SkillFileReader
         return Convert.ToHexStringLower(sha.GetHashAndReset());
     }
 
+    /// <summary>The registry's content hash over <paramref name="files"/>, as uppercase hex.</summary>
+    /// <remarks>
+    /// Mirrors the registry's own digest (SHA-256 over each file's <c>path\n</c> plus its uppercase hex
+    /// SHA-256 and <c>\n</c>, files in ordinal path order), so a local copy can be compared with a registry
+    /// version without downloading it. Distinct from <see cref="Hash"/>, which the ledger keys on.
+    /// </remarks>
+    public static string RegistryHash(IEnumerable<SkillUploadFile> files)
+    {
+        var builder = new System.Text.StringBuilder();
+        foreach (var file in files.OrderBy(f => f.RelativePath, StringComparer.Ordinal))
+        {
+            builder.Append(file.RelativePath).Append('\n')
+                .Append(Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(file.Content))).Append('\n');
+        }
+
+        return Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(builder.ToString())));
+    }
+
     private static void Collect(DirectoryInfo directory, string rootPath, List<SkillUploadFile> files)
     {
         foreach (var entry in directory.EnumerateFileSystemInfos())
