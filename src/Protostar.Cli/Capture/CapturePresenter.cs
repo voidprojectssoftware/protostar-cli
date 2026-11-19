@@ -47,8 +47,11 @@ internal static class CapturePresenter
                 : $"{prefix}: could not back up skill '{result.SkillName}': {Reason(push)}";
         }
 
+        // A global and a project skill can share the used name, and both are backed up (see CaptureService).
+        if (push.Entries.Count > 1)
+            return $"{prefix}: skill '{result.SkillName}': {string.Join("; ", push.Entries.Select(DescribeScoped))}.";
+
         var outcome = push.Entries.FirstOrDefault()?.Outcome;
-        var conflict = push.Entries.Skip(1).FirstOrDefault(e => e.Outcome.Status == SkillPushStatus.Conflict);
         var line = outcome?.Status switch
         {
             SkillPushStatus.Created => $"{prefix}: backed up skill '{result.SkillName}' as v{outcome.Version}.",
@@ -57,9 +60,19 @@ internal static class CapturePresenter
             _ => $"{prefix}: skill '{result.SkillName}' not backed up: {outcome.Message}",
         };
 
-        return conflict is null
-            ? line
-            : $"{line} Conflict: the {conflict.Skill.Scope.ToString().ToLowerInvariant()} copy at {conflict.Skill.Path}: {conflict.Outcome.Message}";
+        return line;
+    }
+
+    // "global backed up as v2", "project (github.com/acme/a) unchanged", or why one was not backed up.
+    private static string DescribeScoped(SkillPushEntry entry)
+    {
+        var scope = entry.Outcome.ProjectName is { } project ? $"project ({project})" : entry.Skill.Scope.ToString().ToLowerInvariant();
+        return entry.Outcome.Status switch
+        {
+            SkillPushStatus.Created => $"{scope} backed up as v{entry.Outcome.Version}",
+            SkillPushStatus.Unchanged => $"{scope} unchanged",
+            _ => $"{scope} at {entry.Skill.Path} not backed up: {entry.Outcome.Message}",
+        };
     }
 
     /// <summary>Writes the line for a background session push, logs it when it needs attention, and returns 0.</summary>

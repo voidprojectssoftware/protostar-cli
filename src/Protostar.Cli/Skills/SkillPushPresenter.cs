@@ -46,7 +46,7 @@ internal static class SkillPushPresenter
         foreach (var entry in result.Entries)
         {
             table.AddRow(
-                Markup.Escape(entry.Skill.Scope.ToString().ToLowerInvariant()),
+                Markup.Escape(Scope(entry)),
                 Markup.Escape(entry.Skill.Name),
                 Describe(entry.Outcome));
         }
@@ -76,6 +76,10 @@ internal static class SkillPushPresenter
         SkillPushStatus.Conflict => $"[red]conflict:[/] {Markup.Escape(outcome.Message ?? string.Empty)}",
         _ => $"[red]failed:[/] {Markup.Escape(outcome.Message ?? string.Empty)}",
     };
+
+    // "global", or "project" with the registry project it was filed under when the registry said.
+    private static string Scope(SkillPushEntry entry) =>
+        entry.Outcome.ProjectName is { } project ? $"project ({project})" : entry.Skill.Scope.ToString().ToLowerInvariant();
 
     private static int Error(string message)
     {

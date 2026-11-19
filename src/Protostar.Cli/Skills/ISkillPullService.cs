@@ -8,9 +8,12 @@ namespace Protostar.Cli.Skills;
 /// installed here, and installs or updates them.
 /// </summary>
 /// <remarks>
-/// Backs <c>protostar skills remote</c> and <c>protostar skills pull</c>. Skills are compared with, and
-/// installed into, each harness's global skills directory; project skills are left alone. Returns data
-/// only; rendering belongs to <see cref="SkillPullPresenter"/>.
+/// Backs <c>protostar skills remote</c> and <c>protostar skills pull</c>. Global skills are compared with,
+/// and installed into, each harness's global skills directory. A project skill is compared and installed
+/// only when the folder the command runs in resolves to that skill's project, and then into that checkout's
+/// own project skills directory (<c>&lt;repo top level&gt;/.claude/skills</c> for Claude Code), so a worktree
+/// installs into itself. Other projects' skills are listed as theirs and never written. Returns data only;
+/// rendering belongs to <see cref="SkillPullPresenter"/>.
 /// </remarks>
 internal interface ISkillPullService
 {
@@ -32,7 +35,8 @@ internal interface ISkillPullService
 /// <param name="HarnessId">Limit to this harness; <c>null</c> for every installed harness that has skills.</param>
 /// <param name="HarnessHome">Override the harness config root.</param>
 /// <param name="Registry">The <c>--registry</c> option; <c>null</c> falls back to the environment and default.</param>
-internal sealed record SkillRemoteRequest(string? HarnessId, string? HarnessHome, string? Registry);
+/// <param name="ProjectStart">The folder whose project's skills are compared; <c>null</c> compares global skills only.</param>
+internal sealed record SkillRemoteRequest(string? HarnessId, string? HarnessHome, string? Registry, string? ProjectStart = null);
 
 /// <summary>What to pull and where.</summary>
 /// <param name="Names">
@@ -42,12 +46,14 @@ internal sealed record SkillRemoteRequest(string? HarnessId, string? HarnessHome
 /// <param name="HarnessHome">Override the harness config root.</param>
 /// <param name="Registry">The <c>--registry</c> option; <c>null</c> falls back to the environment and default.</param>
 /// <param name="Force">Overwrite skills that have local changes.</param>
+/// <param name="ProjectStart">The folder whose project's skills are installed; <c>null</c> pulls global skills only.</param>
 internal sealed record SkillPullRequest(
     IReadOnlyList<string> Names,
     string? HarnessId,
     string? HarnessHome,
     string? Registry,
-    bool Force = false);
+    bool Force = false,
+    string? ProjectStart = null);
 
 /// <summary>Why a remote listing or pull stopped before doing anything.</summary>
 internal enum SkillPullRunFailure
@@ -109,6 +115,12 @@ internal enum SkillSyncState
     /// registry holds two skills whose names differ only by case. See <see cref="SkillComparison.Note"/>.
     /// </summary>
     Conflict,
+
+    /// <summary>
+    /// A project skill of a project other than the one this folder is in. Never compared or written here; see
+    /// <see cref="SkillComparison.Note"/> for which project and where it would go.
+    /// </summary>
+    OtherProject,
 }
 
 /// <summary>One skill name in one harness, compared with the registry.</summary>
@@ -118,7 +130,8 @@ internal enum SkillSyncState
 /// <param name="Remote">The registry's skill; <c>null</c> for <see cref="SkillSyncState.LocalOnly"/>.</param>
 /// <param name="LocalPath">The installed skill directory; <c>null</c> when not installed.</param>
 /// <param name="LocalVersion">The registry version this machine last synced, from the ledger; <c>null</c> when unknown.</param>
-/// <param name="Note">Why it is a <see cref="SkillSyncState.Conflict"/>; <c>null</c> for every other state.</param>
+/// <param name="Note">Why it is a <see cref="SkillSyncState.Conflict"/> or whose it is for <see cref="SkillSyncState.OtherProject"/>; <c>null</c> otherwise.</param>
+/// <param name="Project">The project's display name for a project skill; <c>null</c> for a global skill.</param>
 internal sealed record SkillComparison(
     IHarness Harness,
     string Name,
@@ -126,7 +139,8 @@ internal sealed record SkillComparison(
     RegistrySkill? Remote,
     string? LocalPath,
     int? LocalVersion,
-    string? Note = null);
+    string? Note = null,
+    string? Project = null);
 
 /// <summary>The result of comparing the registry with this machine.</summary>
 internal sealed record SkillRemoteResult(
@@ -159,6 +173,9 @@ internal enum SkillPullStatus
 
     /// <summary>Not written, even with <c>--force</c>, because it would land on something that is not this skill; see the message.</summary>
     Conflict,
+
+    /// <summary>Not written: it belongs to a project other than this folder's. The message says which, and where it would go.</summary>
+    OtherProject,
 }
 
 /// <summary>One skill a pull handled.</summary>
@@ -168,7 +185,8 @@ internal enum SkillPullStatus
 /// <param name="Version">The registry version now installed (or that would have been).</param>
 /// <param name="Path">The skill directory.</param>
 /// <param name="Message">Why it failed, or a note (such as local changes overwritten); <c>null</c> otherwise.</param>
-internal sealed record SkillPullEntry(IHarness Harness, string Name, SkillPullStatus Status, int Version, string Path, string? Message);
+/// <param name="Project">The project's display name for a project skill; <c>null</c> for a global skill.</param>
+internal sealed record SkillPullEntry(IHarness Harness, string Name, SkillPullStatus Status, int Version, string Path, string? Message, string? Project = null);
 
 /// <summary>The result of a pull run.</summary>
 internal sealed record SkillPullRunResult(

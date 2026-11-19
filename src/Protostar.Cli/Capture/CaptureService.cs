@@ -9,9 +9,13 @@ namespace Protostar.Cli.Capture;
 /// </summary>
 /// <remarks>
 /// Acts on Claude Code's <c>PostToolUse</c> event for the <c>Skill</c> tool, whose payload carries
-/// <c>tool_input.skill</c> (the skill name) and <c>cwd</c> (where project skills are found). The push
-/// goes through <see cref="ISkillPushService"/>, whose ledger makes an unchanged skill cost no network
-/// call. Plugin skills (<c>plugin:name</c>) are not local user skills and are ignored.
+/// <c>tool_input.skill</c> (the skill name) and <c>cwd</c> (where project skills are found). Neither the input
+/// (<c>skill</c>, <c>args</c>) nor the tool's response (<c>success</c>, <c>commandName</c>, <c>allowedTools</c>,
+/// <c>model</c>, <c>status</c>) says whether the skill used was a global or a project skill, or gives its path,
+/// and both can share a name. So the hook backs up every local skill of that name: the global one and the one
+/// in <c>cwd</c>'s project, each as its own registry skill. The push goes through
+/// <see cref="ISkillPushService"/>, whose ledger makes the one that did not change cost no network call.
+/// Plugin skills (<c>plugin:name</c>) are not local user skills and are ignored.
 /// <c>Stop</c> and <c>SessionEnd</c> hand the session to <see cref="IBackgroundPush"/> and return at once.
 /// </remarks>
 internal sealed class CaptureService : ICaptureService

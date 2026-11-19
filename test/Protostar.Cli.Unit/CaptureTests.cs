@@ -120,6 +120,21 @@ public sealed class CaptureServiceTests
     }
 
     [Fact]
+    public void Presenter_names_each_scope_when_a_global_and_a_project_skill_share_the_used_name()
+    {
+        var push = new SkillPushRunResult(SkillPushRunFailure.None, null, new Uri("https://registry.test"),
+        [
+            new SkillPushEntry(new DiscoveredSkill { Name = "deploy", Scope = SkillScope.Global, Path = "/g/deploy" }, new SkillPushOutcome(SkillPushStatus.Unchanged, 3, null)),
+            new SkillPushEntry(new DiscoveredSkill { Name = "deploy", Scope = SkillScope.Project, Path = "/r/.claude/skills/deploy" },
+                new SkillPushOutcome(SkillPushStatus.Created, 2, null, Guid.NewGuid(), "github.com/acme/a")),
+        ]);
+
+        var line = CapturePresenter.Describe("PostToolUse", new CaptureResult(CaptureAction.SkillBackedUp, "deploy", push, null));
+
+        Assert.Equal("protostar capture (PostToolUse): skill 'deploy': global unchanged; project (github.com/acme/a) backed up as v2.", line);
+    }
+
+    [Fact]
     public void Presenter_logs_not_logged_in_but_not_an_unknown_skill()
     {
         var notLoggedIn = new CaptureResult(CaptureAction.SkillBackedUp, "alpha", SkillPushRunResult.Fail(SkillPushRunFailure.NotLoggedIn, null), null);

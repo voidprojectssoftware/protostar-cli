@@ -28,7 +28,7 @@ registers four of them in your harness's `settings.json`:
 
 | Hook event | When it fires | What protostar does |
 |---|---|---|
-| `PostToolUse` (matching the `Skill` tool) | Right after you use a skill | Backs the skill up if it changed |
+| `PostToolUse` (matching the `Skill` tool) | Right after you use a skill | Backs the skill up if it changed. The harness says only the skill's name, so a global skill and the current project's skill of that name are both checked, each backed up as its own skill |
 | `Stop` | After each reply | Backs up the new part of the session, at most once every 30 seconds |
 | `SessionEnd` | When the session ends | Backs up the rest of the session |
 | `SessionStart` | When a new harness session begins | Reserved for the upcoming suggestion / push-back loop (does nothing yet) |

@@ -37,6 +37,14 @@ internal sealed class SkillsPullCommand : AsyncCommand<SkillsPullCommand.Setting
         [Description("Override the harness config root (testing or a non-default location).")]
         public string? HarnessHome { get; init; }
 
+        [CommandOption("--project <DIR>")]
+        [Description("The folder whose project skills to install. Defaults to the current directory.")]
+        public string? Project { get; init; }
+
+        [CommandOption("--global-only")]
+        [Description("Only pull global skills; leave project skills alone.")]
+        public bool GlobalOnly { get; init; }
+
         [CommandOption("--registry <URL>")]
         [Description("Registry base URL. Defaults to $PROTOSTAR_REGISTRY_URL, then the built-in dev default.")]
         public string? Registry { get; init; }
@@ -48,8 +56,11 @@ internal sealed class SkillsPullCommand : AsyncCommand<SkillsPullCommand.Setting
 
     protected override async Task<int> ExecuteAsync(CommandContext context, Settings settings, CancellationToken cancellation)
     {
-        var request = new SkillPullRequest(settings.Names, settings.Harness, settings.HarnessHome, settings.Registry, settings.Force);
+        var request = new SkillPullRequest(settings.Names, settings.Harness, settings.HarnessHome, settings.Registry, settings.Force, ProjectStart(settings));
         var result = await _pull.PullAsync(request, cancellation);
         return SkillPullPresenter.RenderPull(result, _catalog);
     }
+
+    private static string? ProjectStart(Settings settings) =>
+        settings.GlobalOnly ? null : settings.Project ?? Directory.GetCurrentDirectory();
 }

@@ -79,10 +79,17 @@ each skill you see one of:
   limit or its SKILL.md is missing), with the reason.
 - **skipped**: another skill with the same name and identical content was already
   pushed in this run, so the registry already has it.
-- **conflict**: another skill with the same name but different content was pushed
-  in this run (global wins over project, matching which one the harness loads).
-  The registry holds one skill per name, so this copy is not backed up; rename one
+- **conflict**: another skill of the same scope with the same name but different
+  content was pushed in this run (two harnesses' global skills, say). The registry
+  holds one skill per name in each scope, so this copy is not backed up; rename one
   of them to back up both.
+
+A project skill (one in a project's `.claude/skills`) is backed up as that
+project's skill: protostar works out the project from the folder the skill's
+`.claude` is in, the same way it files sessions (see `protostar project`). So a
+global `deploy` and a project's `deploy`, or two projects' `deploy`, are separate
+skills in the registry with separate versions. The scope column shows which
+project the registry filed it under.
 - **failed**: the upload did not complete (for example, the registry was
   unreachable).
 
@@ -126,13 +133,22 @@ written. Each skill shows its latest registry version and one of:
   your registry holds two skills whose names differ only by case. `pull` skips it,
   even with `--force`. Move or rename the folder, or rename one of the skills.
 
-Skills are compared with each harness's global skills folder (for Claude Code,
-`~/.claude/skills`). Project skills are not compared.
+- **other project**: a project skill of a project other than the one the current
+  folder is in. It is never compared or pulled here; the note says which project it
+  belongs to and where a pull from a checkout of that project would put it.
+
+Global skills are compared with each harness's global skills folder (for Claude
+Code, `~/.claude/skills`). Project skills are compared only when the current folder
+is in their project, and then with that checkout's own project skills folder
+(`<repo top level>/.claude/skills`; in a git worktree, the worktree's own top
+level). A Project column appears when any project skill is listed.
 
 | Option | Description |
 |---|---|
 | `-H, --harness <ID>` | Only compare with this harness. |
 | `--harness-home <DIR>` | Override the harness config root. |
+| `--project <DIR>` | The folder whose project skills to compare. Defaults to the current directory. |
+| `--global-only` | Only compare global skills. |
 | `--registry <URL>` | Registry to read. Defaults to `PROTOSTAR_REGISTRY_URL`, then `https://localhost:7443`. |
 
 ### `protostar skills pull [NAME...]`
@@ -141,8 +157,11 @@ Install or update skills from your registry on this machine. With no names, ever
 skill in the registry is pulled, which is the quick way to set up a new machine;
 otherwise only the named ones (an exact match first, then ignoring case).
 
-A skill that is not installed is written to the harness's global skills folder
-(`~/.claude/skills/<name>` for Claude Code). A skill that is installed is updated in
+A global skill that is not installed is written to the harness's global skills
+folder (`~/.claude/skills/<name>` for Claude Code). A project skill is pulled only in
+a checkout of its project, into that checkout's `.claude/skills/<name>`, and never
+into any other repo; other projects' skills are reported as **not here** with the
+project they belong to. A skill that is installed is updated in
 place: files the new version dropped are deleted, and version control and
 dependency folders inside it (such as `.git`) are left alone. A skill with **local
 changes** is never overwritten unless you pass `--force`. Back those changes up with
@@ -167,6 +186,8 @@ conflict. Skills kept because of local changes do not count as failures.
 |---|---|
 | `-H, --harness <ID>` | Only install into this harness. |
 | `--harness-home <DIR>` | Override the harness config root. |
+| `--project <DIR>` | The folder whose project skills to install. Defaults to the current directory. |
+| `--global-only` | Only pull global skills. |
 | `--registry <URL>` | Registry to pull from. Defaults to `PROTOSTAR_REGISTRY_URL`, then `https://localhost:7443`. |
 | `--force` | Overwrite skills that have local changes. Never overrides a conflict. |
 

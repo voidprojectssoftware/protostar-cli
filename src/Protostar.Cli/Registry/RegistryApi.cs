@@ -52,10 +52,13 @@ internal sealed partial class RegistryApi : IRegistryApi, IDisposable
         string accessToken,
         string name,
         IReadOnlyList<SkillUploadFile> files,
+        SkillProject? project,
         CancellationToken cancellationToken)
     {
         using var content = new MultipartFormDataContent();
         content.Add(new StringContent(name), "name");
+        if (project is not null)
+            content.Add(new StringContent(JsonSerializer.Serialize(new { machineId = project.MachineId, facts = project.Facts }, TranscriptJson.Options)), "project");
         foreach (var file in files)
         {
             var part = new ByteArrayContent(file.Content);
@@ -80,22 +83,27 @@ internal sealed partial class RegistryApi : IRegistryApi, IDisposable
     /// <inheritdoc />
     public async Task<RegistrySkillList> ListSkillsAsync(Uri registry, string accessToken, CancellationToken cancellationToken)
     {
-        var (body, error) = await GetJsonAsync<ListResponse>(new Uri(registry, "/v1/skills"), accessToken, cancellationToken);
+        var (body, error) = await GetJsonAsync<ListResponse>(new Uri(registry, "/v1/skills?includeProjects=true"), accessToken, cancellationToken);
         if (body?.Skills is not { } skills)
             return new RegistrySkillList(null, error ?? "The registry sent an unreadable skill list.");
 
         return new RegistrySkillList(
             skills.Where(s => s.Name is not null && s.ContentHash is not null)
-                .Select(s => new RegistrySkill(s.Name!, s.Description, s.Version, s.ContentHash!, s.UpdatedAt))
+                .Select(s => new RegistrySkill(s.Name!, s.Description, s.Version, s.ContentHash!, s.UpdatedAt, s.ProjectId, s.ProjectName))
                 .ToList(),
             null);
     }
 
     /// <inheritdoc />
     public async Task<RegistrySkillDownload> GetSkillFilesAsync(
-        Uri registry, string accessToken, string name, int? version, CancellationToken cancellationToken)
+        Uri registry, string accessToken, string name, Guid? projectId, int? version, CancellationToken cancellationToken)
     {
-        var path = $"/v1/skills/{Uri.EscapeDataString(name)}/files" + (version is { } v ? $"?version={v}" : string.Empty);
+        var query = new List<string>();
+        if (projectId is { } project)
+            query.Add($"projectId={project}");
+        if (version is { } v)
+            query.Add($"version={v}");
+        var path = $"/v1/skills/{Uri.EscapeDataString(name)}/files" + (query.Count > 0 ? "?" + string.Join('&', query) : string.Empty);
         var (body, error) = await GetJsonAsync<FilesResponse>(new Uri(registry, path), accessToken, cancellationToken);
         if (body is not { Name: not null, ContentHash: not null, Files: not null })
             return new RegistrySkillDownload(null, error ?? "The registry sent an unreadable skill.");
@@ -140,7 +148,7 @@ internal sealed partial class RegistryApi : IRegistryApi, IDisposable
         {
             var body = await ReadAsync<PushResponse>(response, cancellationToken);
             var pushStatus = status == HttpStatusCode.Created ? SkillPushStatus.Created : SkillPushStatus.Unchanged;
-            return new SkillPushOutcome(pushStatus, body?.Version, null);
+            return new SkillPushOutcome(pushStatus, body?.Version, null, body?.ProjectId, body?.ProjectName);
         }
 
         var problem = await ReadAsync<ProblemResponse>(response, cancellationToken);
@@ -176,6 +184,8 @@ internal sealed partial class RegistryApi : IRegistryApi, IDisposable
     {
         [JsonPropertyName("status")] public string? Status { get; init; }
         [JsonPropertyName("version")] public int? Version { get; init; }
+        [JsonPropertyName("projectId")] public Guid? ProjectId { get; init; }
+        [JsonPropertyName("projectName")] public string? ProjectName { get; init; }
     }
 
     private sealed record ListResponse
@@ -190,6 +200,8 @@ internal sealed partial class RegistryApi : IRegistryApi, IDisposable
         [JsonPropertyName("version")] public int Version { get; init; }
         [JsonPropertyName("contentHash")] public string? ContentHash { get; init; }
         [JsonPropertyName("updatedAt")] public DateTimeOffset UpdatedAt { get; init; }
+        [JsonPropertyName("projectId")] public Guid? ProjectId { get; init; }
+        [JsonPropertyName("projectName")] public string? ProjectName { get; init; }
     }
 
     private sealed record FilesResponse

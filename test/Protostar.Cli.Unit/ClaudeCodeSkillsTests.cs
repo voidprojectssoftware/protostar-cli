@@ -124,6 +124,45 @@ public sealed class ClaudeCodeSkillsTests : IDisposable
     }
 
     [Fact]
+    public void A_project_skill_carries_the_project_folder_it_was_found_in_and_a_global_skill_none()
+    {
+        var config = Sub("config");
+        var project = Sub("project");
+        AddGlobalSkill(config, "alpha", "g");
+        AddProjectSkill(project, "beta", "p");
+        var start = Path.Combine(project, "src");
+        Directory.CreateDirectory(start);
+
+        var result = NewSut().DiscoverSkills(LocationFor(config), start);
+
+        Assert.Null(Single(result, "alpha").ProjectRoot);
+        Assert.Equal(Norm(project), Norm(Single(result, "beta").ProjectRoot!));
+    }
+
+    [Fact]
+    public void The_global_config_folder_found_by_walking_up_from_the_home_folder_is_not_a_project()
+    {
+        // From anywhere under the home folder the walk-up finds ~/.claude, the global config itself.
+        var home = Sub("home");
+        var config = Path.Combine(home, ".claude");
+        AddGlobalSkill(config, "alpha", "g");
+        var start = Path.Combine(home, "notes");
+        Directory.CreateDirectory(start);
+
+        var result = NewSut().DiscoverSkills(LocationFor(config), start);
+
+        Assert.Equal(SkillScope.Global, Assert.Single(result).Scope);
+    }
+
+    [Fact]
+    public void Project_skills_directory_is_the_claude_skills_folder_of_the_project()
+    {
+        var project = Sub("project");
+
+        Assert.Equal(Path.Combine(project, ".claude", "skills"), NewSut().ProjectSkillsDirectory(project));
+    }
+
+    [Fact]
     public void Discovers_both_global_and_project_skills_together()
     {
         var config = Sub("config");
