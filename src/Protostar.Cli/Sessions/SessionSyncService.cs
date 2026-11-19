@@ -266,9 +266,17 @@ internal sealed partial class SessionSyncService : ISessionSyncService
         var planned = located.Select(p => (p.Transcript, p.Plan, Verified: (VerifiedBackup?)null)).ToList();
         if (request.Verify)
         {
-            var verifying = await ConnectAndCheckAsync(registry, located, registerMachine: true, cancellationToken);
-            if (verifying.Stopped)
+            Verification verifying;
+            try
+            {
+                verifying = await ConnectAndCheckAsync(registry, located, registerMachine: true, cancellationToken);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                // Stopped before anything was uploaded; nothing changed, so there is nothing to report per transcript.
                 return new SessionSyncResult(SessionSyncFailure.None, null, registry, [], Stopped: true);
+            }
+
             if (verifying.Failure != SessionSyncFailure.None)
                 return SessionSyncResult.Fail(verifying.Failure, verifying.Detail, registry);
             session = verifying.Session;

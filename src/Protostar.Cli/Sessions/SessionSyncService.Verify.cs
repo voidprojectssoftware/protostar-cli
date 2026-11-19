@@ -44,7 +44,6 @@ internal sealed partial class SessionSyncService
         var verifying = await ConnectAndCheckAsync(registry, located, registerMachine: false, cancellationToken);
         if (verifying.Failure != SessionSyncFailure.None)
             return new SessionStatusResult(verifying.Failure, verifying.Detail, registry, []);
-        cancellationToken.ThrowIfCancellationRequested();
 
         var statuses = located.Select(p =>
         {
@@ -70,8 +69,7 @@ internal sealed partial class SessionSyncService
     };
 
     private sealed record Verification(
-        SessionSyncFailure Failure, string? Detail, Session? Session, Dictionary<(string Harness, string Key), VerifiedBackup>? Checks,
-        bool Stopped = false);
+        SessionSyncFailure Failure, string? Detail, Session? Session, Dictionary<(string Harness, string Key), VerifiedBackup>? Checks);
 
     // Connects, then asks the registry about every transcript the ledger records as registered, in batches.
     // A transcript the ledger records nothing for is pending anyway, so it is not asked about.
@@ -79,31 +77,24 @@ internal sealed partial class SessionSyncService
         Uri registry, IReadOnlyList<(LocalTranscript Transcript, UploadPlan Plan)> located, bool registerMachine,
         CancellationToken cancellationToken)
     {
-        try
+        var connected = await ConnectAsync(registry, cancellationToken, registerMachine);
+        if (connected.Failure != SessionSyncFailure.None)
+            return new Verification(connected.Failure, connected.Detail, null, null);
+
+        var recorded = located.Where(p => p.Plan.Entry is { Registered: true }).ToList();
+        var checks = new Dictionary<(string Harness, string Key), VerifiedBackup>();
+        foreach (var batch in recorded.Chunk(ITranscriptApi.MaxLookup))
         {
-            var connected = await ConnectAsync(registry, cancellationToken, registerMachine);
-            if (connected.Failure != SessionSyncFailure.None)
-                return new Verification(connected.Failure, connected.Detail, null, null);
+            var answer = await _api.LookupAsync(registry, connected.Session!.AccessToken, [.. batch.Select(p => p.Transcript)], cancellationToken);
+            if (!answer.Ok)
+                return new Verification(SessionSyncFailure.RegistryUnreachable, answer.Error, null, null);
 
-            var recorded = located.Where(p => p.Plan.Entry is { Registered: true }).ToList();
-            var checks = new Dictionary<(string Harness, string Key), VerifiedBackup>();
-            foreach (var batch in recorded.Chunk(ITranscriptApi.MaxLookup))
-            {
-                var answer = await _api.LookupAsync(registry, connected.Session!.AccessToken, [.. batch.Select(p => p.Transcript)], cancellationToken);
-                if (!answer.Ok)
-                    return new Verification(SessionSyncFailure.RegistryUnreachable, answer.Error, null, null);
-
-                var held = answer.Value!.GroupBy(a => (a.Harness, a.Key)).ToDictionary(g => g.Key, g => g.First());
-                foreach (var (transcript, plan) in batch)
-                    checks[(transcript.Harness, transcript.Key)] = Classify(plan.Entry!, held.GetValueOrDefault((transcript.Harness, transcript.Key)));
-            }
-
-            return new Verification(SessionSyncFailure.None, null, connected.Session, checks);
+            var held = answer.Value!.GroupBy(a => (a.Harness, a.Key)).ToDictionary(g => g.Key, g => g.First());
+            foreach (var (transcript, plan) in batch)
+                checks[(transcript.Harness, transcript.Key)] = Classify(plan.Entry!, held.GetValueOrDefault((transcript.Harness, transcript.Key)));
         }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-            return new Verification(SessionSyncFailure.None, null, null, null, Stopped: true);
-        }
+
+        return new Verification(SessionSyncFailure.None, null, connected.Session, checks);
     }
 
     // The plan once a check is taken into account. Missing and short transcripts are registered again, which answers
