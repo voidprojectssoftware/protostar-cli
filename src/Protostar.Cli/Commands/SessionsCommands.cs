@@ -60,10 +60,15 @@ internal sealed class SessionsStatusCommand : Command<SessionsStatusCommand.Sett
         _catalog = catalog;
     }
 
-    public sealed class Settings : LocalSessionsSettings;
+    public sealed class Settings : LocalSessionsSettings
+    {
+        [CommandOption("-a|--all")]
+        [Description("List every transcript, backed up ones too, not only the pending ones.")]
+        public bool All { get; init; }
+    }
 
     protected override int Execute(CommandContext context, Settings settings, CancellationToken cancellation) =>
-        SessionsPresenter.RenderStatus(_sessions.Status(settings.Registry, settings.Harness, settings.HarnessHome), _catalog);
+        SessionsPresenter.RenderStatus(_sessions.Status(settings.Registry, settings.Harness, settings.HarnessHome), _catalog, settings.All);
 }
 
 /// <summary><c>protostar sessions list</c>: the sessions backed up from every machine.</summary>

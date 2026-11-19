@@ -83,13 +83,15 @@ internal static class SessionsPresenter
     }
 
     /// <summary>Renders backup status and returns the exit code: 0 when fully backed up, 1 when anything is pending.</summary>
-    public static int RenderStatus(SessionStatusResult result, IHarnessCatalog catalog)
+    /// <remarks>The table lists pending transcripts only, or every transcript when <paramref name="all"/> is set.</remarks>
+    public static int RenderStatus(SessionStatusResult result, IHarnessCatalog catalog, bool all = false)
     {
         if (Failure(result.Failure, result.Detail, result.Registry, catalog) is { } exit)
             return exit;
 
         var pending = result.Transcripts.Where(t => t.BytesPending > 0).OrderByDescending(t => t.LastModifiedAt).ToList();
-        if (pending.Count > 0)
+        var rows = all ? [.. result.Transcripts.OrderByDescending(t => t.LastModifiedAt)] : pending;
+        if (rows.Count > 0)
         {
             var table = new Table().Border(TableBorder.Rounded);
             table.AddColumn("Session");
@@ -97,9 +99,12 @@ internal static class SessionsPresenter
             table.AddColumn(new TableColumn("Pending").RightAligned());
             table.AddColumn("Changed");
             table.AddColumn("State");
-            foreach (var t in pending.Take(MaxRows))
+            foreach (var t in rows.Take(MaxRows))
             {
-                var state = t.Rewritten ? "[yellow]rewritten, re-upload[/]" : t.BytesBackedUp == 0 ? "never backed up" : "new content";
+                var state = t.BytesPending == 0 ? "[green]backed up[/]"
+                    : t.Rewritten ? "[yellow]rewritten, re-upload[/]"
+                    : t.BytesBackedUp == 0 ? "never backed up"
+                    : "new content";
                 table.AddRow(
                     Markup.Escape(Short(t.Transcript.Key)),
                     t.Transcript.Kind == TranscriptKind.Session ? "session" : "[grey]subagent[/]",
@@ -108,8 +113,8 @@ internal static class SessionsPresenter
                     state);
             }
             AnsiConsole.Write(table);
-            if (pending.Count > MaxRows)
-                AnsiConsole.MarkupLine($"[grey]... and {pending.Count - MaxRows} more.[/]");
+            if (rows.Count > MaxRows)
+                AnsiConsole.MarkupLine($"[grey]... and {rows.Count - MaxRows} more.[/]");
         }
 
         var total = result.Transcripts.Count;
