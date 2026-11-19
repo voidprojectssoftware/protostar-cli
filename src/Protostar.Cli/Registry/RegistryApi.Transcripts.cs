@@ -37,7 +37,7 @@ internal sealed partial class RegistryApi : ITranscriptApi
             project,
         }, options: TranscriptJson.Options);
 
-        return await SendAsync(request, ReadPositionAsync, cancellationToken);
+        return await SendAsync(request, ReadPositionAsync, cancellationToken, machineId);
     }
 
     /// <inheritdoc />
@@ -60,6 +60,9 @@ internal sealed partial class RegistryApi : ITranscriptApi
                 return new AppendResult(AppendStatus.Appended, await ReadPositionAsync(response), null);
 
             var problem = await ReadProblemAsync(response, cancellationToken);
+            if (IsUnknownMachine(response, problem, machineId))
+                return new AppendResult(AppendStatus.UnknownMachine, null, problem!.Title);
+
             return response.StatusCode switch
             {
                 HttpStatusCode.Conflict when problem?.Revision is { } r && problem.Length is { } l =>
@@ -102,7 +105,9 @@ internal sealed partial class RegistryApi : ITranscriptApi
     private static string TranscriptPath(string harness, string key) =>
         $"/v1/transcripts/{Uri.EscapeDataString(harness)}/{Uri.EscapeDataString(key)}";
 
-    private async Task<ApiResult<T>> SendAsync<T>(HttpRequestMessage request, Func<HttpResponseMessage, Task<T>> read, CancellationToken cancellationToken)
+    // machineId: the machine the request names, so a refusal for not knowing it comes back as ApiResult.MachineUnknown.
+    private async Task<ApiResult<T>> SendAsync<T>(
+        HttpRequestMessage request, Func<HttpResponseMessage, Task<T>> read, CancellationToken cancellationToken, Guid? machineId = null)
     {
         try
         {
@@ -111,6 +116,8 @@ internal sealed partial class RegistryApi : ITranscriptApi
                 return ApiResult<T>.Success(await read(response));
 
             var problem = await ReadProblemAsync(response, cancellationToken);
+            if (machineId is { } id && IsUnknownMachine(response, problem, id))
+                return ApiResult<T>.UnknownMachine(problem!.Title!);
             return ApiResult<T>.Fail(problem?.Title ?? Describe(response.StatusCode));
         }
         catch (Exception ex) when (ex is HttpRequestException or JsonException or TaskCanceledException && !cancellationToken.IsCancellationRequested)
@@ -138,6 +145,12 @@ internal sealed partial class RegistryApi : ITranscriptApi
             return null;
         }
     }
+
+    // The registry has no code for this refusal, only a 400 whose title names the machine ("Machine <id> is not
+    // registered."), so match that exactly: other 400s (a bad key, a corrupt chunk) must never look like it.
+    private static bool IsUnknownMachine(HttpResponseMessage response, ProblemBody? problem, Guid machineId) =>
+        response.StatusCode == HttpStatusCode.BadRequest &&
+        problem?.Title?.StartsWith($"Machine {machineId} is not registered.", StringComparison.OrdinalIgnoreCase) == true;
 
     private static string Describe(HttpStatusCode status) => status == HttpStatusCode.Unauthorized
         ? "The registry rejected the session. Run `protostar auth login`."

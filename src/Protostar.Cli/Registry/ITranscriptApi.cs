@@ -13,11 +13,15 @@ internal interface ITranscriptApi
     Task<ApiResult<bool>> RegisterMachineAsync(Uri registry, string accessToken, Guid id, string name, string operatingSystem, CancellationToken cancellationToken);
 
     /// <summary><c>PUT /v1/transcripts/{harness}/{key}</c>: registers the transcript and returns where its stored content ends.</summary>
-    /// <remarks><paramref name="project"/> files it under the project of its working directory; <c>null</c> when that is not known yet.</remarks>
+    /// <remarks>
+    /// <paramref name="project"/> files it under the project of its working directory; <c>null</c> when that is not known yet.
+    /// A registry that does not know <paramref name="machineId"/> answers with <see cref="ApiResult{T}.MachineUnknown"/> set.
+    /// </remarks>
     Task<ApiResult<TranscriptPosition>> RegisterTranscriptAsync(
         Uri registry, string accessToken, LocalTranscript transcript, Guid machineId, ProjectFacts? project, CancellationToken cancellationToken);
 
     /// <summary><c>POST /v1/transcripts/{harness}/{key}/content</c>: appends one chunk of whole lines, gzip-compressed on the wire.</summary>
+    /// <remarks>A registry that does not know <paramref name="machineId"/> answers <see cref="AppendStatus.UnknownMachine"/>.</remarks>
     Task<AppendResult> AppendAsync(
         Uri registry, string accessToken, string harness, string key, int revision, long offset, Guid machineId,
         ReadOnlyMemory<byte> chunk, CancellationToken cancellationToken);
@@ -27,13 +31,16 @@ internal interface ITranscriptApi
 }
 
 /// <summary>A value, or why the registry did not return one.</summary>
-internal sealed record ApiResult<T>(T? Value, string? Error)
+/// <param name="MachineUnknown">The registry refused because it has no record of the machine the request named.</param>
+internal sealed record ApiResult<T>(T? Value, string? Error, bool MachineUnknown = false)
 {
     public bool Ok => Error is null;
 
     public static ApiResult<T> Success(T value) => new(value, null);
 
     public static ApiResult<T> Fail(string error) => new(default, error);
+
+    public static ApiResult<T> UnknownMachine(string error) => new(default, error, MachineUnknown: true);
 }
 
 /// <summary>Where a transcript's stored content ends in the registry.</summary>
@@ -53,6 +60,9 @@ internal enum AppendStatus
 
     /// <summary>The request did not complete (network, auth, server error); retrying later may.</summary>
     Failed,
+
+    /// <summary>The registry has no record of the machine that sent the chunk, typically after its database was rebuilt.</summary>
+    UnknownMachine,
 }
 
 /// <summary>The result of appending a chunk.</summary>

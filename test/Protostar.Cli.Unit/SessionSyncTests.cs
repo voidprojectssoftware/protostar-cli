@@ -19,6 +19,7 @@ public sealed class SessionSyncServiceTests : IDisposable
     private readonly FakeRegistry _registry = new();
     private readonly FakeLedger _ledger = new();
     private readonly FakeProjects _projects = new();
+    private readonly FakeMachine _machine = new();
     private StoredToken? _token = new() { Registry = Registry, AccessToken = "tok", ExpiresAtUtc = DateTimeOffset.UtcNow.AddHours(1) };
 
     public void Dispose() => Directory.Delete(_root, recursive: true);
@@ -38,7 +39,7 @@ public sealed class SessionSyncServiceTests : IDisposable
 
     private ISessionSyncService Sut() => new SessionSyncService(
         new FakeCatalog(new ClaudeCodeHarness(new ClaudeCodeSkillParser(), new ClaudeCodeSkillMapper())),
-        new FakeTokens(() => _token), _registry, _registry, _ledger, new FakeMachine(), _projects, TimeProvider.System);
+        new FakeTokens(() => _token), _registry, _registry, _ledger, _machine, _projects, TimeProvider.System);
 
     private SessionSyncRequest Request(TimeSpan? budget = null, TimeSpan? throttle = null, string? sessionPath = null) =>
         new(Registry, "claude-code", _root, sessionPath, budget, throttle);
@@ -494,6 +495,69 @@ public sealed class SessionSyncServiceTests : IDisposable
         Assert.Equal(0, _registry.Calls);
     }
 
+    [Fact]
+    public async Task A_registry_that_forgot_the_machine_gets_it_back_under_the_same_id_and_the_append_goes_through()
+    {
+        WriteSession("""{"n":1}""");
+        await Sync();
+        _registry.ForgetMachines();
+        AppendRaw("{\"n\":2}\n");
+
+        var result = await Sync();
+
+        Assert.Equal(TranscriptSyncStatus.Uploaded, Assert.Single(result.Transcripts).Status);
+        Assert.Equal(File.ReadAllBytes(SessionFile), _registry.Content(SessionId));
+        Assert.Equal([FakeMachine.Id, FakeMachine.Id], _registry.MachineRegistrationIds);
+        Assert.True(_machine.IsRegisteredWith(new Uri(Registry)));
+    }
+
+    [Fact]
+    public async Task A_registry_that_forgot_the_machine_gets_it_back_when_a_new_transcript_registers()
+    {
+        _machine.MarkRegistered(new Uri(Registry));
+        WriteSession("""{"n":1}""");
+
+        var result = await Sync();
+
+        Assert.Equal(TranscriptSyncStatus.Uploaded, Assert.Single(result.Transcripts).Status);
+        Assert.Equal([FakeMachine.Id], _registry.MachineRegistrationIds);
+        Assert.Equal(File.ReadAllBytes(SessionFile), _registry.Content(SessionId));
+    }
+
+    [Fact]
+    public async Task A_failed_re_registration_still_retries_once_because_another_process_may_have_registered_the_machine()
+    {
+        WriteSession("""{"n":1}""");
+        await Sync();
+        _registry.ForgetMachines();
+        _registry.MachineRegistration = MachineRegistrationBehaviour.FailsAfterAnotherProcessRegisters;
+        AppendRaw("{\"n\":2}\n");
+
+        var result = await Sync();
+
+        Assert.Equal(TranscriptSyncStatus.Uploaded, Assert.Single(result.Transcripts).Status);
+        Assert.Equal(File.ReadAllBytes(SessionFile), _registry.Content(SessionId));
+    }
+
+    [Fact]
+    public async Task A_registry_that_still_refuses_after_re_registration_fails_the_transcript_without_looping()
+    {
+        WriteSession("""{"n":1}""");
+        await Sync();
+        _registry.ForgetMachines();
+        _registry.MachineRegistration = MachineRegistrationBehaviour.SucceedsButIsForgotten;
+        AppendRaw("{\"n\":2}\n");
+        _registry.ResetCounters();
+
+        var result = await Sync();
+
+        var outcome = Assert.Single(result.Transcripts);
+        Assert.Equal(TranscriptSyncStatus.Failed, outcome.Status);
+        Assert.Contains("is not registered", outcome.Message);
+        Assert.Equal(2, _registry.MachineRegistrationIds.Count);
+        Assert.Equal(0, _registry.Appends);
+    }
+
     // ── fakes ─────────────────────────────────────────────────────────────────────
 
     internal sealed class FakeSessions : ISessionSyncService
@@ -513,10 +577,30 @@ public sealed class SessionSyncServiceTests : IDisposable
             Task.FromResult(new SessionListResult(SessionSyncFailure.None, null, new Uri(Registry), []));
     }
 
+    private enum MachineRegistrationBehaviour
+    {
+        Succeeds,
+
+        /// <summary>The PUT fails (a lost race), but the machine is registered by the time the caller retries.</summary>
+        FailsAfterAnotherProcessRegisters,
+
+        /// <summary>The PUT succeeds, yet the registry still does not know the machine.</summary>
+        SucceedsButIsForgotten,
+    }
+
     /// <summary>A registry in memory that applies the real position rules: current revision, offset equal to length, revision + 1 at 0.</summary>
     private sealed class FakeRegistry : IRegistryApi, ITranscriptApi
     {
         private readonly Dictionary<string, (int Revision, List<byte> Bytes)> _content = [];
+        private readonly HashSet<Guid> _machines = [];
+
+        public MachineRegistrationBehaviour MachineRegistration { get; set; }
+        public List<Guid> MachineRegistrationIds { get; } = [];
+
+        /// <summary>Stands in for a rebuilt or restored database: transcripts kept, machines gone.</summary>
+        public void ForgetMachines() => _machines.Clear();
+
+        private static string NotRegistered(Guid machineId) => $"Machine {machineId} is not registered.";
 
         public Dictionary<string, LocalTranscript> Registered { get; } = [];
         public List<string> RegistrationOrder { get; } = [];
@@ -556,7 +640,18 @@ public sealed class SessionSyncServiceTests : IDisposable
         {
             Calls++;
             MachineRegistrations++;
-            return Task.FromResult(ApiResult<bool>.Success(true));
+            MachineRegistrationIds.Add(id);
+            switch (MachineRegistration)
+            {
+                case MachineRegistrationBehaviour.FailsAfterAnotherProcessRegisters:
+                    _machines.Add(id);
+                    return Task.FromResult(ApiResult<bool>.Fail("The registry returned 500."));
+                case MachineRegistrationBehaviour.SucceedsButIsForgotten:
+                    return Task.FromResult(ApiResult<bool>.Success(true));
+                default:
+                    _machines.Add(id);
+                    return Task.FromResult(ApiResult<bool>.Success(true));
+            }
         }
 
         public Dictionary<string, List<ProjectFacts?>> Filed { get; } = [];
@@ -564,6 +659,8 @@ public sealed class SessionSyncServiceTests : IDisposable
         public Task<ApiResult<TranscriptPosition>> RegisterTranscriptAsync(Uri registry, string accessToken, LocalTranscript transcript, Guid machineId, ProjectFacts? project, CancellationToken cancellationToken)
         {
             Calls++;
+            if (!_machines.Contains(machineId))
+                return Task.FromResult(ApiResult<TranscriptPosition>.UnknownMachine(NotRegistered(machineId)));
             Registered[transcript.Key] = transcript;
             RegistrationOrder.Add(transcript.Key);
             (Filed.TryGetValue(transcript.Key, out var filed) ? filed : Filed[transcript.Key] = []).Add(project);
@@ -576,6 +673,8 @@ public sealed class SessionSyncServiceTests : IDisposable
         public Task<AppendResult> AppendAsync(Uri registry, string accessToken, string harness, string key, int revision, long offset, Guid machineId, ReadOnlyMemory<byte> chunk, CancellationToken cancellationToken)
         {
             Calls++;
+            if (!_machines.Contains(machineId))
+                return Task.FromResult(new AppendResult(AppendStatus.UnknownMachine, null, NotRegistered(machineId)));
             var (current, bytes) = _content[key];
             var newRevision = revision == current + 1 && offset == 0;
             if (!newRevision && (revision != current || offset != bytes.Count))
@@ -632,9 +731,11 @@ public sealed class SessionSyncServiceTests : IDisposable
 
     private sealed class FakeMachine : IMachineIdentity
     {
+        public static readonly Guid Id = Guid.Parse("11111111-2222-3333-4444-555555555555");
+
         private bool _registered;
 
-        public MachineInfo Get() => new(Guid.Parse("11111111-2222-3333-4444-555555555555"), "test", "linux");
+        public MachineInfo Get() => new(Id, "test", "linux");
 
         public bool IsRegisteredWith(Uri registry) => _registered;
 
