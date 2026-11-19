@@ -43,9 +43,14 @@ internal static class SkillPullPresenter
         AnsiConsole.Write(table);
 
         var pullable = result.Skills.Count(s => s.State is SkillSyncState.NotInstalled or SkillSyncState.UpdateAvailable);
+        var conflicts = result.Skills.Count(s => s.State == SkillSyncState.Conflict);
         AnsiConsole.MarkupLine(pullable > 0
             ? $"{pullable} can be pulled from [grey]{Markup.Escape(authority)}[/]. Run `protostar skills pull` to get them."
-            : $"Everything in [grey]{Markup.Escape(authority)}[/] is on this machine.");
+            : conflicts > 0
+                ? $"Nothing else can be pulled from [grey]{Markup.Escape(authority)}[/]."
+                : $"Everything in [grey]{Markup.Escape(authority)}[/] is on this machine.");
+        if (conflicts > 0)
+            AnsiConsole.MarkupLine($"[red]{conflicts} cannot be pulled until the conflict is resolved[/] [grey](--force does not override a conflict)[/].");
         return 0;
     }
 
@@ -86,10 +91,12 @@ internal static class SkillPullPresenter
         var current = result.Entries.Count(e => e.Status == SkillPullStatus.UpToDate);
         var held = result.Entries.Count(e => e.Status == SkillPullStatus.LocalChanges);
         var failed = result.Entries.Count(e => e.Status == SkillPullStatus.Failed);
+        var conflicted = result.Entries.Count(e => e.Status == SkillPullStatus.Conflict);
 
         AnsiConsole.MarkupLine(
             $"From [grey]{Markup.Escape(authority)}[/]: {installed} installed, {updated} updated, {current} already up to date" +
             (held > 0 ? $", [yellow]{held} kept because of local changes[/]" : string.Empty) +
+            (conflicted > 0 ? $", [red]{conflicted} skipped as conflicts[/]" : string.Empty) +
             (failed > 0 ? $", [red]{failed} failed[/]" : string.Empty) + ".");
         if (held > 0)
             AnsiConsole.MarkupLine("[grey]Back up local changes with `protostar skills push`, or overwrite them with `protostar skills pull --force`.[/]");
@@ -103,6 +110,7 @@ internal static class SkillPullPresenter
         SkillSyncState.NotInstalled => "[blue]not installed[/]",
         SkillSyncState.UpdateAvailable => skill.LocalVersion is { } v ? $"[yellow]update available (have v{v})[/]" : "[yellow]update available[/]",
         SkillSyncState.LocalChanges => "[red]local changes[/]",
+        SkillSyncState.Conflict => $"[red]conflict:[/] {Markup.Escape(skill.Note ?? string.Empty)}",
         _ => "[grey]only here (not backed up)[/]",
     };
 
@@ -114,6 +122,7 @@ internal static class SkillPullPresenter
             SkillPullStatus.Updated => $"[green]updated to v{entry.Version}[/]",
             SkillPullStatus.UpToDate => $"[grey]up to date (v{entry.Version})[/]",
             SkillPullStatus.LocalChanges => "[yellow]kept: has local changes[/]",
+            SkillPullStatus.Conflict => "[red]conflict:[/]",
             _ => "[red]failed[/]",
         };
         return entry.Message is { } message ? $"{text} {Markup.Escape(message)}" : text;

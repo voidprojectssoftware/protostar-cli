@@ -18,7 +18,12 @@ internal interface ISkillLedger
     void Record(Uri registry, string skillPath, SkillLedgerEntry entry);
 }
 
-/// <summary>What was last pushed for one skill.</summary>
+/// <summary>What was last pushed or pulled for one skill.</summary>
 /// <param name="ContentHash">The lowercase hex SHA-256 from <see cref="SkillFileReader.Hash"/>.</param>
 /// <param name="Version">The registry's version number for that content.</param>
-internal sealed record SkillLedgerEntry(string ContentHash, int? Version);
+/// <param name="Name">
+/// The registry skill name that content was synced as, exactly; <c>null</c> in records written before
+/// names were kept. A pull trusts a record only for the registry skill it names, so a folder synced as
+/// <c>foo</c> is never treated as an unedited copy of <c>Foo</c>.
+/// </param>
+internal sealed record SkillLedgerEntry(string ContentHash, int? Version, string? Name = null);

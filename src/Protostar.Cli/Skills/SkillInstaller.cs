@@ -17,9 +17,17 @@ namespace Protostar.Cli.Skills;
 /// An existing skill is updated in place rather than replaced: files the new version no longer has are
 /// deleted, and every other file is written to a temporary file and moved over the old one. What
 /// <see cref="SkillFileReader"/> ignores (<c>.git</c>, <c>node_modules</c>, symbolic links) is left alone,
-/// so a skill kept under version control keeps its history. An updated file keeps its Unix permissions; a
-/// new file that starts with <c>#!</c> is made executable for its owner, because the registry does not store
-/// file modes.
+/// so a skill kept under version control keeps its history. A download that would write into one of those
+/// folders is refused, since the reader would never see the file again. An updated file keeps its Unix
+/// permissions; a new file that starts with <c>#!</c> is made executable for its owner, because the registry
+/// does not store file modes.
+/// </para>
+/// <para>
+/// Stale files are found by exact (ordinal) path, because on a case-sensitive file system <c>a.md</c> and
+/// <c>A.md</c> are two real files. On a case-insensitive one, a folder whose name differs from the new
+/// version's only by case can survive pruning (it still holds an ignored folder, say) and would then
+/// receive the new files under its old name, so the reader would report the old name forever. Before
+/// writing, such an entry is renamed to the new version's spelling; see <see cref="FindCaseOnlyEntry"/>.
 /// </para>
 /// </remarks>
 internal static class SkillInstaller
@@ -29,12 +37,19 @@ internal static class SkillInstaller
     /// when missing.
     /// </summary>
     /// <returns>The files as written, in <see cref="SkillFileReader.Read"/>'s order.</returns>
-    /// <exception cref="SkillInstallException">The download failed a check; nothing was written.</exception>
+    /// <exception cref="SkillInstallException">The download failed a check, or the skill directory is a symbolic link; nothing was written.</exception>
     /// <exception cref="IOException">Writing failed part way.</exception>
     /// <exception cref="UnauthorizedAccessException">The skill directory is not writable.</exception>
     public static IReadOnlyList<SkillUploadFile> Install(string skillDirectory, RegistrySkillContent content)
     {
         var root = Path.GetFullPath(skillDirectory);
+        if (new DirectoryInfo(root) is { LinkTarget: { } linkTarget })
+        {
+            throw new SkillInstallException(
+                $"'{root}' is a symbolic link (to '{linkTarget}'), and protostar never writes through links. " +
+                "Pull into the folder it points to, or replace the link with a real folder.");
+        }
+
         var files = Verify(root, content);
 
         var wanted = new HashSet<string>(files.Select(f => f.RelativePath), StringComparer.Ordinal);
@@ -45,6 +60,8 @@ internal static class SkillInstaller
         }
 
         Directory.CreateDirectory(root);
+        foreach (var file in files)
+            MatchCase(root, file.RelativePath);
         foreach (var file in files)
             Write(root, file);
 
@@ -61,6 +78,10 @@ internal static class SkillInstaller
             var path = file.RelativePath;
             if (!IsSafeRelativePath(path))
                 throw new SkillInstallException($"The registry sent an unsafe file path: '{path}'.");
+            if (SkillFileReader.HasIgnoredSegment(path))
+                throw new SkillInstallException($"The registry sent '{path}', inside a folder protostar never reads (such as .git or node_modules).");
+            if (SkillFileReader.HasPaddedSegment(path))
+                throw new SkillInstallException($"The registry sent '{path}', which has a name starting or ending with whitespace.");
             if (!seen.Add(path))
                 throw new SkillInstallException($"The registry sent '{path}' twice.");
             if (!string.Equals(Convert.ToHexString(SHA256.HashData(file.Content)), file.Sha256, StringComparison.OrdinalIgnoreCase))
@@ -95,13 +116,64 @@ internal static class SkillInstaller
         name.IndexOfAny(['/', '\\', ':', '\0', '*', '?', '"', '<', '>', '|']) < 0 &&
         name.Trim() == name;
 
+    /// <summary>
+    /// The entry in a directory that names <paramref name="wanted"/> only by case, which must be renamed to
+    /// <paramref name="wanted"/>; <c>null</c> when nothing needs renaming.
+    /// </summary>
+    /// <param name="entries">The names actually in the directory.</param>
+    /// <param name="wanted">The name the new version uses.</param>
+    /// <param name="wantedResolves">
+    /// Whether the file system finds <paramref name="wanted"/> in that directory. When no entry is spelled
+    /// exactly <paramref name="wanted"/> yet the name resolves, the file system is case-insensitive and is
+    /// handing back the differently-cased entry. When it does not resolve (a case-sensitive file system),
+    /// a differently-cased entry is a separate file and is left alone.
+    /// </param>
+    internal static string? FindCaseOnlyEntry(IEnumerable<string> entries, string wanted, bool wantedResolves)
+    {
+        var list = entries as IReadOnlyCollection<string> ?? entries.ToList();
+        if (!wantedResolves || list.Contains(wanted, StringComparer.Ordinal))
+            return null;
+        return list.FirstOrDefault(e => string.Equals(e, wanted, StringComparison.OrdinalIgnoreCase));
+    }
+
+    // Walks relativePath's segments under root and renames any existing entry whose name differs only by
+    // case, so the file lands under the new version's spelling on a case-insensitive file system.
+    private static void MatchCase(string root, string relativePath)
+    {
+        var parent = root;
+        foreach (var segment in relativePath.Split('/'))
+        {
+            if (!Directory.Exists(parent))
+                return;
+
+            var candidate = Path.Combine(parent, segment);
+            var resolves = File.Exists(candidate) || Directory.Exists(candidate);
+            var names = new DirectoryInfo(parent).EnumerateFileSystemInfos().Select(e => e.Name).ToList();
+            if (FindCaseOnlyEntry(names, segment, resolves) is { } existing)
+            {
+                // Two moves, because a case-only rename is a no-op or an error on some case-insensitive file systems.
+                var from = Path.Combine(parent, existing);
+                var temp = Path.Combine(parent, $".{segment}.protostar-{Guid.NewGuid():N}");
+                if (Directory.Exists(from))
+                {
+                    Directory.Move(from, temp);
+                    Directory.Move(temp, candidate);
+                }
+                else
+                {
+                    File.Move(from, temp);
+                    File.Move(temp, candidate);
+                }
+            }
+
+            parent = candidate;
+        }
+    }
+
     // Refuses a path whose parent directories, or the file itself, already exist as a symbolic link: writing
     // through one could land outside the skill.
     private static void EnsureNoLinkOnTheWay(string root, string relativePath)
     {
-        if (new DirectoryInfo(root) is { Exists: true, LinkTarget: not null })
-            throw new SkillInstallException($"The skill directory '{root}' is a symbolic link.");
-
         var current = root;
         foreach (var segment in relativePath.Split('/'))
         {

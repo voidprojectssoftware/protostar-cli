@@ -11,10 +11,17 @@ namespace Protostar.Cli.Skills;
 /// </summary>
 /// <remarks>
 /// <para>
-/// A local skill matches a registry skill by name, ignoring case. It is up to date when its files hash to
-/// the registry's content hash. Otherwise the ledger decides: if the local files still match what was last
-/// pushed or pulled, nobody edited them here and the registry simply moved on (an update is available);
-/// if they do not, or there is no record, the difference may be local work and is protected.
+/// A local skill matches a registry skill by exact name first, then ignoring case. It is up to date when
+/// its files hash to the registry's content hash. Otherwise the ledger decides: if the local files still
+/// match what was last pushed or pulled as this same registry skill, nobody edited them here and the
+/// registry simply moved on (an update is available); if they do not, or there is no such record, the
+/// difference may be local work and is protected.
+/// </para>
+/// <para>
+/// Two cases are conflicts that are never written, even with <c>--force</c>. A registry skill with no local
+/// match whose folder name is already taken (by a skill with another name, a folder with no SKILL.md, or
+/// the same name in another case) would overwrite something that is not this skill. Two registry skills
+/// whose names differ only by case would share one folder, so neither is pulled rather than guessing.
 /// </para>
 /// <para>
 /// Everything that can stop the run (bad URL, unknown harness, no session, unreachable or incompatible
@@ -46,14 +53,11 @@ internal sealed class SkillPullService : ISkillPullService
         var comparisons = new List<SkillComparison>();
         foreach (var target in context.Targets)
         {
-            var local = LocalByName(target);
-            foreach (var remote in context.Skills)
-            {
-                local.Remove(remote.Name, out var installed);
-                comparisons.Add(Compare(target.Harness, remote, installed, context.Registry!));
-            }
+            var matches = MatchAll(target, context.Skills, context.Skills, out var leftovers);
+            foreach (var match in matches)
+                comparisons.Add(Compare(target, match, context.Registry!));
 
-            foreach (var leftover in local.Values)
+            foreach (var leftover in leftovers)
                 comparisons.Add(new SkillComparison(target.Harness, leftover.Name, SkillSyncState.LocalOnly, null, leftover.Path, null));
         }
 
@@ -72,22 +76,16 @@ internal sealed class SkillPullService : ISkillPullService
             return SkillPullRunResult.Fail(context.Failure, context.Detail, context.Registry);
 
         var registry = context.Registry!;
-        var byName = context.Skills.ToDictionary(s => s.Name, StringComparer.OrdinalIgnoreCase);
-        if (request.Names.FirstOrDefault(n => !byName.ContainsKey(n)) is { } missing)
+        var selected = Select(context.Skills, request.Names, out var missing);
+        if (missing is not null)
             return SkillPullRunResult.Fail(SkillPullRunFailure.SkillNotFound, missing, registry);
-
-        var selected = request.Names.Count == 0
-            ? context.Skills
-            : request.Names.Distinct(StringComparer.OrdinalIgnoreCase).Select(n => byName[n]).ToList();
 
         var entries = new List<SkillPullEntry>();
         foreach (var target in context.Targets)
         {
-            var local = LocalByName(target);
-            foreach (var remote in selected)
+            foreach (var match in MatchAll(target, selected, context.Skills, out _))
             {
-                local.TryGetValue(remote.Name, out var installed);
-                var comparison = Compare(target.Harness, remote, installed, registry);
+                var comparison = Compare(target, match, registry);
                 entries.Add(await PullOneAsync(target, comparison, registry, context.AccessToken!, request.Force, cancellationToken));
             }
         }
@@ -101,10 +99,16 @@ internal sealed class SkillPullService : ISkillPullService
         var remote = comparison.Remote!;
         var harness = target.Harness;
 
+        if (comparison.State == SkillSyncState.Conflict)
+        {
+            return new SkillPullEntry(harness, remote.Name, SkillPullStatus.Conflict, remote.Version,
+                comparison.LocalPath ?? target.SkillsDirectory, comparison.Note);
+        }
+
         if (comparison.State == SkillSyncState.UpToDate)
         {
             // Make sure the ledger knows, so the capture hook treats this copy as already backed up.
-            RecordInstalled(registry, comparison.LocalPath!, remote.Version);
+            RecordInstalled(registry, comparison.LocalPath!, remote);
             return new SkillPullEntry(harness, remote.Name, SkillPullStatus.UpToDate, remote.Version, comparison.LocalPath!, null);
         }
 
@@ -140,19 +144,29 @@ internal sealed class SkillPullService : ISkillPullService
             return new SkillPullEntry(harness, remote.Name, SkillPullStatus.Failed, content.Version, path, ex.Message);
         }
 
-        _ledger.Record(registry, path, new SkillLedgerEntry(SkillFileReader.Hash(written), content.Version));
+        _ledger.Record(registry, path, new SkillLedgerEntry(SkillFileReader.Hash(written), content.Version, remote.Name));
 
         var status = comparison.LocalPath is null ? SkillPullStatus.Installed : SkillPullStatus.Updated;
         var note = comparison.State == SkillSyncState.LocalChanges ? "Local changes were overwritten (--force)." : null;
         return new SkillPullEntry(harness, remote.Name, status, content.Version, path, note);
     }
 
-    private SkillComparison Compare(IHarness harness, RegistrySkill remote, DiscoveredSkill? installed, Uri registry)
+    private SkillComparison Compare(Target target, Match match, Uri registry)
     {
+        var (remote, installed, conflict, conflictPath) = match;
+        var harness = target.Harness;
+        if (conflict is not null)
+            return new SkillComparison(harness, remote.Name, SkillSyncState.Conflict, remote, conflictPath, null, conflict);
+
         if (installed is null)
             return new SkillComparison(harness, remote.Name, SkillSyncState.NotInstalled, remote, null, null);
 
+        // A record only speaks for the registry skill it was synced as. A record from before names were kept
+        // is trusted only when the local skill's name is exactly the registry's.
         var recorded = _ledger.Get(registry, installed.Path);
+        if (recorded is not null && !string.Equals(recorded.Name ?? installed.Name, remote.Name, StringComparison.Ordinal))
+            recorded = null;
+
         IReadOnlyList<SkillUploadFile> files;
         try
         {
@@ -179,13 +193,14 @@ internal sealed class SkillPullService : ISkillPullService
             : SkillSyncState.LocalChanges;
     }
 
-    private void RecordInstalled(Uri registry, string path, int version)
+    private void RecordInstalled(Uri registry, string path, RegistrySkill remote)
     {
         try
         {
             var hash = SkillFileReader.Hash(SkillFileReader.Read(path));
-            if (_ledger.Get(registry, path) is not { } recorded || recorded.ContentHash != hash || recorded.Version != version)
-                _ledger.Record(registry, path, new SkillLedgerEntry(hash, version));
+            var entry = new SkillLedgerEntry(hash, remote.Version, remote.Name);
+            if (_ledger.Get(registry, path) != entry)
+                _ledger.Record(registry, path, entry);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
@@ -193,14 +208,101 @@ internal sealed class SkillPullService : ISkillPullService
         }
     }
 
-    // The global skills of one harness by name. When two share a name the first (directory order) wins,
-    // matching how the push side treats duplicates.
-    private static Dictionary<string, DiscoveredSkill> LocalByName(Target target)
+    // The registry skills the request names: each name matches exactly when it can, otherwise ignoring case
+    // (which can select two skills that differ only by case; they then come back as conflicts).
+    private static IReadOnlyList<RegistrySkill> Select(IReadOnlyList<RegistrySkill> skills, IReadOnlyList<string> names, out string? missing)
     {
-        var local = new Dictionary<string, DiscoveredSkill>(StringComparer.OrdinalIgnoreCase);
+        missing = null;
+        if (names.Count == 0)
+            return skills;
+
+        var selected = new List<RegistrySkill>();
+        foreach (var name in names)
+        {
+            var found = skills.Where(s => string.Equals(s.Name, name, StringComparison.Ordinal)).ToList();
+            if (found.Count == 0)
+                found = skills.Where(s => string.Equals(s.Name, name, StringComparison.OrdinalIgnoreCase)).ToList();
+            if (found.Count == 0)
+            {
+                missing = name;
+                return [];
+            }
+
+            selected.AddRange(found.Where(f => !selected.Contains(f)));
+        }
+
+        return selected;
+    }
+
+    // Pairs each of `remotes` with the local global skill it updates, or with the reason it cannot be pulled.
+    // `all` is the registry's full list, so a name collision is seen even when only one side was asked for.
+    // `leftovers` are the local skills no registry skill claimed.
+    private static List<Match> MatchAll(Target target, IReadOnlyList<RegistrySkill> remotes, IReadOnlyList<RegistrySkill> all, out List<DiscoveredSkill> leftovers)
+    {
+        // When two local skills share an exact name the first (directory order) wins, matching the push side.
+        var local = new List<DiscoveredSkill>();
         foreach (var skill in target.Capability.DiscoverSkills(target.Location, projectStart: null))
-            local.TryAdd(skill.Name, skill);
-        return local;
+        {
+            if (!local.Any(l => string.Equals(l.Name, skill.Name, StringComparison.Ordinal)))
+                local.Add(skill);
+        }
+
+        var claimed = new HashSet<DiscoveredSkill>();
+        var matches = new List<Match>();
+        foreach (var remote in remotes)
+        {
+            var exact = local.FirstOrDefault(l => string.Equals(l.Name, remote.Name, StringComparison.Ordinal));
+            var twins = all.Where(s => string.Equals(s.Name, remote.Name, StringComparison.OrdinalIgnoreCase)).Select(s => s.Name).ToList();
+            if (twins.Count > 1)
+            {
+                foreach (var l in local.Where(l => string.Equals(l.Name, remote.Name, StringComparison.OrdinalIgnoreCase)))
+                    claimed.Add(l);
+                var list = string.Join(", ", twins.Order(StringComparer.Ordinal).Select(n => $"'{n}'"));
+                matches.Add(new Match(remote, null,
+                    $"The registry has skills named {list}, which differ only by case and would share one folder here. Rename one of them, then pull again.",
+                    exact?.Path));
+                continue;
+            }
+
+            var installed = exact ?? local.FirstOrDefault(l => !claimed.Contains(l) && string.Equals(l.Name, remote.Name, StringComparison.OrdinalIgnoreCase));
+            if (installed is not null)
+            {
+                claimed.Add(installed);
+                matches.Add(new Match(remote, installed, null, null));
+                continue;
+            }
+
+            if (OccupiedFolder(target.SkillsDirectory, remote.Name) is { } occupied)
+            {
+                matches.Add(new Match(remote, null,
+                    $"A folder named '{Path.GetFileName(occupied)}' already exists here and is not this skill, so it was left alone. Move or rename it, then pull again.",
+                    occupied));
+                continue;
+            }
+
+            matches.Add(new Match(remote, null, null, null));
+        }
+
+        leftovers = local.Where(l => !claimed.Contains(l)).ToList();
+        return matches;
+    }
+
+    // An existing entry in the skills folder whose name equals `name` ignoring case, so `FOO` is caught on a
+    // case-sensitive file system as well; null when the name is free.
+    private static string? OccupiedFolder(string skillsDirectory, string name)
+    {
+        try
+        {
+            if (!Directory.Exists(skillsDirectory))
+                return null;
+            return new DirectoryInfo(skillsDirectory).EnumerateFileSystemInfos()
+                .FirstOrDefault(e => string.Equals(e.Name, name, StringComparison.OrdinalIgnoreCase))?.FullName;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // Cannot prove the name is free, so treat the folder as taken.
+            return Path.Combine(skillsDirectory, name);
+        }
     }
 
     // Resolves the registry, the harnesses, the session, and the registry's skill list: every check that can
@@ -260,6 +362,9 @@ internal sealed class SkillPullService : ISkillPullService
         if (harness is ISkillCapability capability && harness.TryLocate(harnessHome, out var location))
             targets.Add(new Target(harness, capability, location, capability.GlobalSkillsDirectory(location)));
     }
+
+    // A registry skill and what it lines up with here: the installed copy, or why it is a conflict and where.
+    private sealed record Match(RegistrySkill Remote, DiscoveredSkill? Installed, string? Conflict, string? ConflictPath);
 
     private sealed record Target(IHarness Harness, ISkillCapability Capability, HarnessLocation Location, string SkillsDirectory);
 

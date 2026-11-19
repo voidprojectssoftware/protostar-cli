@@ -8,13 +8,27 @@ namespace Protostar.Cli.Skills;
 /// <remarks>
 /// Paths are relative to the skill's root with <c>/</c> separators on every OS, which is what the
 /// registry stores, so the same skill pushed from Windows and Linux hashes the same. Version-control
-/// and dependency folders are skipped because they are not part of the skill. Symbolic links below the
-/// root are not followed, so a link loop or a link out of the skill can never be uploaded.
+/// and dependency folders (<see cref="IsIgnoredName"/>) are skipped because they are not part of the
+/// skill, and so is a file with one of those names (a submodule's <c>.git</c> file, for one). Symbolic
+/// links below the root are not followed, so a link loop or a link out of the skill can never be uploaded.
 /// </remarks>
 internal static class SkillFileReader
 {
-    private static readonly HashSet<string> IgnoredDirectories =
+    // The one definition of what is never part of a skill. The installer refuses these paths through
+    // HasIgnoredSegment, and the registry's RelativePath refuses the same names at push.
+    private static readonly HashSet<string> IgnoredNames =
         new(StringComparer.OrdinalIgnoreCase) { ".git", ".hg", ".svn", "node_modules", "__pycache__", ".venv" };
+
+    /// <summary>True when a file or folder called <paramref name="name"/> is never part of a skill (compared ignoring case).</summary>
+    public static bool IsIgnoredName(string name) => IgnoredNames.Contains(name);
+
+    /// <summary>True when any <c>/</c>-separated segment of <paramref name="relativePath"/> is <see cref="IsIgnoredName">ignored</see>.</summary>
+    /// <remarks>Such a path is never read back from disk, so a skill holding one could never hash the same on both sides.</remarks>
+    public static bool HasIgnoredSegment(string relativePath) => relativePath.Split('/').Any(IsIgnoredName);
+
+    /// <summary>True when any <c>/</c>-separated segment of <paramref name="relativePath"/> starts or ends with whitespace.</summary>
+    /// <remarks>The registry refuses such paths rather than trimming them, so the CLI refuses them too.</remarks>
+    public static bool HasPaddedSegment(string relativePath) => relativePath.Split('/').Any(s => s.Trim() != s);
 
     /// <summary>Reads the files under <paramref name="skillDirectory"/>, ordered by relative path.</summary>
     /// <exception cref="IOException">A file or directory could not be read.</exception>
@@ -74,13 +88,12 @@ internal static class SkillFileReader
     {
         foreach (var entry in directory.EnumerateFileSystemInfos())
         {
-            if (entry.LinkTarget is not null)
+            if (entry.LinkTarget is not null || IsIgnoredName(entry.Name))
                 continue;
 
             if (entry is DirectoryInfo child)
             {
-                if (!IgnoredDirectories.Contains(child.Name))
-                    Collect(child, rootPath, files);
+                Collect(child, rootPath, files);
                 continue;
             }
 

@@ -20,8 +20,10 @@ internal interface ISkillPullService
     /// <summary>Installs or updates the requested registry skills on this machine.</summary>
     /// <remarks>
     /// A skill with local changes is never overwritten unless <see cref="SkillPullRequest.Force"/> is set;
-    /// it is reported as <see cref="SkillPullStatus.LocalChanges"/> instead. After a pull the ledger records
-    /// the installed content, so the capture hook does not push it straight back.
+    /// it is reported as <see cref="SkillPullStatus.LocalChanges"/> instead. A
+    /// <see cref="SkillPullStatus.Conflict"/> is never written, even with <c>Force</c>: that flag means
+    /// "overwrite my edits to this skill", not "overwrite an unrelated folder". After a pull the ledger
+    /// records the installed content, so the capture hook does not push it straight back.
     /// </remarks>
     Task<SkillPullRunResult> PullAsync(SkillPullRequest request, CancellationToken cancellationToken);
 }
@@ -33,7 +35,9 @@ internal interface ISkillPullService
 internal sealed record SkillRemoteRequest(string? HarnessId, string? HarnessHome, string? Registry);
 
 /// <summary>What to pull and where.</summary>
-/// <param name="Names">Registry skill names to pull (case-insensitive); empty pulls every registry skill.</param>
+/// <param name="Names">
+/// Registry skill names to pull, matched exactly first and then ignoring case; empty pulls every registry skill.
+/// </param>
 /// <param name="HarnessId">Limit to this harness; <c>null</c> for every installed harness that has skills.</param>
 /// <param name="HarnessHome">Override the harness config root.</param>
 /// <param name="Registry">The <c>--registry</c> option; <c>null</c> falls back to the environment and default.</param>
@@ -99,6 +103,12 @@ internal enum SkillSyncState
 
     /// <summary>Installed here but not in the registry.</summary>
     LocalOnly,
+
+    /// <summary>
+    /// Cannot be pulled safely: a folder with the skill's name exists here but is not this skill, or the
+    /// registry holds two skills whose names differ only by case. See <see cref="SkillComparison.Note"/>.
+    /// </summary>
+    Conflict,
 }
 
 /// <summary>One skill name in one harness, compared with the registry.</summary>
@@ -108,13 +118,15 @@ internal enum SkillSyncState
 /// <param name="Remote">The registry's skill; <c>null</c> for <see cref="SkillSyncState.LocalOnly"/>.</param>
 /// <param name="LocalPath">The installed skill directory; <c>null</c> when not installed.</param>
 /// <param name="LocalVersion">The registry version this machine last synced, from the ledger; <c>null</c> when unknown.</param>
+/// <param name="Note">Why it is a <see cref="SkillSyncState.Conflict"/>; <c>null</c> for every other state.</param>
 internal sealed record SkillComparison(
     IHarness Harness,
     string Name,
     SkillSyncState State,
     RegistrySkill? Remote,
     string? LocalPath,
-    int? LocalVersion);
+    int? LocalVersion,
+    string? Note = null);
 
 /// <summary>The result of comparing the registry with this machine.</summary>
 internal sealed record SkillRemoteResult(
@@ -144,6 +156,9 @@ internal enum SkillPullStatus
 
     /// <summary>The download or the write failed; see the message.</summary>
     Failed,
+
+    /// <summary>Not written, even with <c>--force</c>, because it would land on something that is not this skill; see the message.</summary>
+    Conflict,
 }
 
 /// <summary>One skill a pull handled.</summary>
@@ -162,8 +177,12 @@ internal sealed record SkillPullRunResult(
     Uri? Registry,
     IReadOnlyList<SkillPullEntry> Entries)
 {
-    /// <summary>True when the run went ahead and no skill failed. Skills left alone for local changes do not count as failures.</summary>
-    public bool Succeeded => Failure == SkillPullRunFailure.None && Entries.All(e => e.Status != SkillPullStatus.Failed);
+    /// <summary>
+    /// True when the run went ahead and no skill failed or conflicted. Skills left alone for local changes
+    /// do not count as failures, since <c>--force</c> is the documented way past them; a conflict has no
+    /// flag that resolves it, so it needs the user's attention.
+    /// </summary>
+    public bool Succeeded => Failure == SkillPullRunFailure.None && Entries.All(e => e.Status is not (SkillPullStatus.Failed or SkillPullStatus.Conflict));
 
     public static SkillPullRunResult Fail(SkillPullRunFailure failure, string? detail, Uri? registry = null) =>
         new(failure, detail, registry, []);

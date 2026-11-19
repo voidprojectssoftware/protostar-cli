@@ -324,6 +324,208 @@ public sealed class SkillPullServiceTests : IDisposable
         Assert.Empty(_api.Downloaded);
     }
 
+    // ----- Item 1: never write into a folder that is not the matched skill -----
+
+    [Fact]
+    public async Task Pull_never_writes_into_a_folder_that_holds_a_skill_with_another_name_even_with_force()
+    {
+        var path = Local("foo", ("SKILL.md", Manifest("bar", "bar's work")), ("notes.md", "unpushed"));
+        Publish("foo", 1, ("SKILL.md", Manifest("foo", "registry")));
+
+        var result = await Build().PullAsync(Pull() with { Force = true }, CancellationToken.None);
+
+        var entry = Assert.Single(result.Entries, e => e.Name == "foo");
+        Assert.Equal(SkillPullStatus.Conflict, entry.Status);
+        Assert.Equal(path, entry.Path);
+        Assert.Equal(Manifest("bar", "bar's work"), File.ReadAllText(Path.Combine(path, "SKILL.md")));
+        Assert.Equal("unpushed", File.ReadAllText(Path.Combine(path, "notes.md")));
+        Assert.Empty(_api.Downloaded);
+        Assert.False(result.Succeeded);
+    }
+
+    [Fact]
+    public async Task Pull_never_writes_into_a_work_in_progress_folder_with_no_skill_md()
+    {
+        var path = Local("foo", ("draft.md", "half done"));
+        Publish("foo", 1);
+
+        var result = await Build().PullAsync(Pull("foo") with { Force = true }, CancellationToken.None);
+
+        Assert.Equal(SkillPullStatus.Conflict, Assert.Single(result.Entries).Status);
+        Assert.Equal(["draft.md"], Directory.GetFiles(path).Select(Path.GetFileName));
+    }
+
+    [Fact]
+    public async Task Pull_treats_a_folder_differing_only_by_case_as_taken()
+    {
+        var path = Local("FOO", ("draft.md", "half done"));
+        Publish("foo", 1);
+
+        var result = await Build().PullAsync(Pull(), CancellationToken.None);
+
+        Assert.Equal(SkillPullStatus.Conflict, Assert.Single(result.Entries).Status);
+        Assert.False(Directory.Exists(Path.Combine(SkillsDir, "foo")));
+        Assert.Equal(["draft.md"], Directory.GetFiles(path).Select(Path.GetFileName));
+    }
+
+    [Fact]
+    public async Task Compare_shows_a_taken_folder_as_a_conflict_with_the_reason()
+    {
+        var path = Local("foo", ("SKILL.md", Manifest("bar")));
+        Publish("foo", 1);
+
+        var result = await Build().CompareAsync(Remote(), CancellationToken.None);
+
+        var foo = result.Skills.Single(s => s.Name == "foo");
+        Assert.Equal(SkillSyncState.Conflict, foo.State);
+        Assert.Equal(path, foo.LocalPath);
+        Assert.Contains("already exists", foo.Note);
+        Assert.Equal(SkillSyncState.LocalOnly, result.Skills.Single(s => s.Name == "bar").State);
+    }
+
+    // ----- Item 2: registry names that differ only by case -----
+
+    [Fact]
+    public async Task Pull_of_registry_names_differing_only_by_case_does_not_crash_and_pulls_neither()
+    {
+        Publish("foo", 1, ("SKILL.md", Manifest("foo", "lower")));
+        Publish("Foo", 1, ("SKILL.md", Manifest("Foo", "upper")));
+
+        var result = await Build().PullAsync(Pull() with { Force = true }, CancellationToken.None);
+
+        Assert.Equal(SkillPullRunFailure.None, result.Failure);
+        Assert.Equal(2, result.Entries.Count);
+        Assert.All(result.Entries, e => Assert.Equal(SkillPullStatus.Conflict, e.Status));
+        Assert.False(Directory.Exists(SkillsDir));
+        Assert.Empty(_api.Downloaded);
+    }
+
+    [Fact]
+    public async Task Pull_by_exact_name_still_refuses_when_a_case_twin_exists()
+    {
+        var path = Local("foo", ("SKILL.md", Manifest("foo", "old")));
+        RecordSynced(path, 1);
+        Publish("foo", 2, ("SKILL.md", Manifest("foo", "lower")));
+        Publish("Foo", 5, ("SKILL.md", Manifest("Foo", "upper")));
+
+        var result = await Build().PullAsync(Pull("foo"), CancellationToken.None);
+
+        var entry = Assert.Single(result.Entries);
+        Assert.Equal(SkillPullStatus.Conflict, entry.Status);
+        Assert.Equal(Manifest("foo", "old"), File.ReadAllText(Path.Combine(path, "SKILL.md")));
+    }
+
+    [Fact]
+    public async Task Compare_reports_both_case_twins_as_conflicts_and_not_the_local_copy_as_only_here()
+    {
+        Local("foo", ("SKILL.md", Manifest("foo")));
+        Publish("foo", 1);
+        Publish("Foo", 1, ("SKILL.md", Manifest("Foo")));
+
+        var result = await Build().CompareAsync(Remote(), CancellationToken.None);
+
+        Assert.Equal(2, result.Skills.Count);
+        Assert.All(result.Skills, s => Assert.Equal(SkillSyncState.Conflict, s.State));
+    }
+
+    [Fact]
+    public async Task A_sync_record_for_another_registry_name_does_not_make_a_folder_look_unedited()
+    {
+        // The folder was synced as 'foo'; the registry now only has 'Foo'. Without the name in the record,
+        // the matching hash would read as "unedited, update available" and Foo's content would replace it.
+        var path = Local("foo", ("SKILL.md", Manifest("foo", "mine")));
+        _ledger.Record(RegistryUri, path, new SkillLedgerEntry(SkillFileReader.Hash(SkillFileReader.Read(path)), 1, "foo"));
+        Publish("Foo", 3, ("SKILL.md", Manifest("Foo", "theirs")));
+
+        var result = await Build().PullAsync(Pull(), CancellationToken.None);
+
+        Assert.Equal(SkillPullStatus.LocalChanges, Assert.Single(result.Entries).Status);
+        Assert.Equal(Manifest("foo", "mine"), File.ReadAllText(Path.Combine(path, "SKILL.md")));
+    }
+
+    [Fact]
+    public async Task Pull_records_the_registry_name_in_the_ledger()
+    {
+        Publish("alpha", 1);
+
+        await Build().PullAsync(Pull(), CancellationToken.None);
+
+        Assert.Equal("alpha", _ledger.Get(RegistryUri, Path.GetFullPath(Path.Combine(SkillsDir, "alpha")))!.Name);
+    }
+
+    // ----- Item 3: paths under folders the reader ignores -----
+
+    [Theory]
+    [InlineData(".git/hooks/pre-commit")]
+    [InlineData("node_modules/x/index.js")]
+    [InlineData("scripts/__pycache__/a.pyc")]
+    [InlineData(".GIT/config")]
+    public async Task Pull_refuses_a_download_with_a_path_inside_an_ignored_folder(string ignored)
+    {
+        Publish("alpha", 1, ("SKILL.md", Manifest("alpha")), (ignored, "#!/bin/sh\nevil"));
+
+        var result = await Build().PullAsync(Pull(), CancellationToken.None);
+
+        var entry = Assert.Single(result.Entries);
+        Assert.Equal(SkillPullStatus.Failed, entry.Status);
+        Assert.Contains("never reads", entry.Message);
+        Assert.False(Directory.Exists(Path.Combine(SkillsDir, "alpha")));
+    }
+
+    // ----- Item 4: normalisation -----
+
+    [Theory]
+    [InlineData("notes.md ")]
+    [InlineData(" lead/x.md")]
+    [InlineData("dir /x.md")]
+    public async Task Pull_refuses_a_download_with_a_padded_path_segment(string padded)
+    {
+        Publish("alpha", 1, ("SKILL.md", Manifest("alpha")), (padded, "x"));
+
+        var result = await Build().PullAsync(Pull(), CancellationToken.None);
+
+        Assert.Equal(SkillPullStatus.Failed, Assert.Single(result.Entries).Status);
+        Assert.False(Directory.Exists(Path.Combine(SkillsDir, "alpha")));
+    }
+
+    [Fact]
+    public async Task Pull_on_a_case_sensitive_file_system_prunes_a_file_differing_only_by_case()
+    {
+        if (OperatingSystem.IsWindows() || OperatingSystem.IsMacOS())
+            return; // Needs a case-sensitive file system, where a.md and A.md are two real files.
+
+        var path = Local("alpha", ("SKILL.md", Manifest("alpha", "old")), ("A.md", "upper"), ("a.md", "lower"));
+        RecordSynced(path, 1);
+        Publish("alpha", 2, ("SKILL.md", Manifest("alpha", "new")), ("a.md", "new lower"));
+
+        await Build().PullAsync(Pull(), CancellationToken.None);
+
+        Assert.Equal(["SKILL.md", "a.md"], SkillFileReader.Read(path).Select(f => f.RelativePath));
+        Assert.Equal("new lower", File.ReadAllText(Path.Combine(path, "a.md")));
+    }
+
+    [Fact]
+    public async Task Pull_refuses_to_write_when_the_skill_folder_itself_is_a_symbolic_link_and_says_so()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var real = Directory.CreateDirectory(Path.Combine(_home, "real-alpha")).FullName;
+        File.WriteAllText(Path.Combine(real, "SKILL.md"), Manifest("alpha", "old"));
+        Directory.CreateDirectory(SkillsDir);
+        var link = Path.Combine(SkillsDir, "alpha");
+        Directory.CreateSymbolicLink(link, real);
+        RecordSynced(link, 1);
+        Publish("alpha", 2, ("SKILL.md", Manifest("alpha", "new")));
+
+        var result = await Build().PullAsync(Pull(), CancellationToken.None);
+
+        var entry = Assert.Single(result.Entries);
+        Assert.Equal(SkillPullStatus.Failed, entry.Status);
+        Assert.Contains("is a symbolic link (to", entry.Message);
+        Assert.Equal(Manifest("alpha", "old"), File.ReadAllText(Path.Combine(real, "SKILL.md")));
+    }
+
     private sealed class Tokens(StoredToken? session) : IAccessTokenProvider
     {
         public Task<StoredToken?> GetSessionAsync(Uri registry, CancellationToken cancellationToken) => Task.FromResult(session);
@@ -345,5 +547,29 @@ public sealed class RegistryHashTests
         var actual = SkillFileReader.RegistryHash([new SkillUploadFile("scripts/x.sh", b), new SkillUploadFile("SKILL.md", a)]);
 
         Assert.Equal(expected, actual);
+    }
+}
+
+/// <summary>Tests for <see cref="SkillInstaller.FindCaseOnlyEntry"/>, the case-only rename decision.</summary>
+public sealed class SkillInstallerCaseTests
+{
+    [Fact]
+    public void Renames_a_folder_the_file_system_resolved_only_by_ignoring_case()
+    {
+        // Case-insensitive file system: "docs" resolves, but the entry on disk is still spelled "Docs".
+        Assert.Equal("Docs", SkillInstaller.FindCaseOnlyEntry(["Docs", "SKILL.md"], "docs", wantedResolves: true));
+    }
+
+    [Fact]
+    public void Leaves_a_differently_cased_entry_alone_on_a_case_sensitive_file_system()
+    {
+        // Case-sensitive: "docs" does not resolve, so "Docs" is a separate folder, not an old spelling.
+        Assert.Null(SkillInstaller.FindCaseOnlyEntry(["Docs", "SKILL.md"], "docs", wantedResolves: false));
+    }
+
+    [Fact]
+    public void Does_nothing_when_the_exact_spelling_is_already_there()
+    {
+        Assert.Null(SkillInstaller.FindCaseOnlyEntry(["Docs", "docs"], "docs", wantedResolves: true));
     }
 }

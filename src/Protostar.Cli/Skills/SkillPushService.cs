@@ -93,6 +93,15 @@ internal sealed class SkillPushService : ISkillPushService
                 continue;
             }
 
+            // The registry refuses a path segment with leading or trailing whitespace rather than trimming
+            // it (a trimmed path would not match the file hashed here), so say so before uploading.
+            if (files.FirstOrDefault(f => SkillFileReader.HasPaddedSegment(f.RelativePath)) is { } padded)
+            {
+                entries[i] = new SkillPushEntry(skill, new SkillPushOutcome(SkillPushStatus.Failed, null,
+                    $"'{padded.RelativePath}' has a file or folder name that starts or ends with whitespace, which the registry does not accept. Rename it and push again."));
+                continue;
+            }
+
             if (!request.Force && _ledger.Get(registry, skill.Path) is { } recorded && recorded.ContentHash == hash)
             {
                 entries[i] = new SkillPushEntry(skill, new SkillPushOutcome(SkillPushStatus.Unchanged, recorded.Version, null));
@@ -121,7 +130,7 @@ internal sealed class SkillPushService : ISkillPushService
                 var skill = selected[index];
                 var outcome = await _registry.PushSkillAsync(registry, session.AccessToken, skill.Name, files, cancellationToken);
                 if (outcome.Succeeded)
-                    _ledger.Record(registry, skill.Path, new SkillLedgerEntry(hash, outcome.Version));
+                    _ledger.Record(registry, skill.Path, new SkillLedgerEntry(hash, outcome.Version, skill.Name));
                 entries[index] = new SkillPushEntry(skill, outcome);
             }
         }
