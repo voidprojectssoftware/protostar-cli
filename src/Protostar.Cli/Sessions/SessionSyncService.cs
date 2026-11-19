@@ -7,7 +7,7 @@ using Protostar.Cli.Registry;
 namespace Protostar.Cli.Sessions;
 
 /// <summary>Backs up session transcripts to the registry, and reports what is backed up.</summary>
-/// <remarks>Shared by <c>protostar sessions push</c>, <c>sessions status</c> and the capture hooks.</remarks>
+/// <remarks>Shared by <c>protostar sessions push</c>, <c>sessions status</c>, <c>sessions list</c> and the capture hooks.</remarks>
 internal interface ISessionSyncService
 {
     /// <summary>Uploads whatever the registry does not have yet of the requested transcripts.</summary>
@@ -16,12 +16,34 @@ internal interface ISessionSyncService
     /// <summary>Compares the transcripts on disk with the ledger, without contacting the registry.</summary>
     SessionStatusResult Status(string? registry, string? harnessId, string? harnessHome);
 
-    /// <summary>Lists the sessions the registry holds, from every machine.</summary>
-    Task<SessionListResult> ListAsync(string? registry, TranscriptListQuery query, CancellationToken cancellationToken);
+    /// <summary>Lists the sessions the registry holds, from every machine, plus this machine's sessions not fully backed up yet.</summary>
+    /// <remarks>
+    /// <paramref name="query"/> filters both kinds of row. When the registry cannot be asked (not logged in, unreachable),
+    /// the result carries the failure and still lists this machine's pending sessions.
+    /// </remarks>
+    Task<SessionListResult> ListAsync(string? registry, string? harnessHome, TranscriptListQuery query, CancellationToken cancellationToken);
 }
 
-/// <summary>Sessions the registry holds, or why they could not be listed.</summary>
-internal sealed record SessionListResult(SessionSyncFailure Failure, string? Detail, Uri? Registry, IReadOnlyList<RemoteTranscript> Sessions);
+/// <summary>The sessions to list, newest first, and why the registry's part is missing when it is.</summary>
+/// <param name="Sessions">On a registry failure, only this machine's pending sessions; empty when the failure came before reading them.</param>
+internal sealed record SessionListResult(SessionSyncFailure Failure, string? Detail, Uri? Registry, IReadOnlyList<ListedSession> Sessions);
+
+/// <summary>One row of <c>sessions list</c>.</summary>
+/// <param name="Session">The registry's record, or for a session it does not have yet one made from the file: no title or counts, the file's size as its length.</param>
+/// <param name="Pending">What this machine has not backed up yet; <c>null</c> when the registry has all of it, or the session is from another machine.</param>
+internal sealed record ListedSession(RemoteTranscript Session, PendingBackup? Pending)
+{
+    /// <summary>The later of the registry's last activity and when the file last changed.</summary>
+    public DateTimeOffset? When => Pending is { } pending && !(Session.LastActivityAt > pending.ChangedAt) ? pending.ChangedAt : Session.LastActivityAt;
+}
+
+/// <summary>A session on this machine with content the registry does not have yet.</summary>
+/// <param name="Bytes">Bytes still to upload, across the session and its subagents.</param>
+/// <param name="InRegistry">Whether the registry already holds part of it.</param>
+/// <param name="FromFile">Whether the row was made from the file because the registry's list did not include it, so it has no title or counts.</param>
+/// <param name="Path">The session's transcript file.</param>
+/// <param name="ChangedAt">When the session or one of its subagents last changed.</param>
+internal sealed record PendingBackup(long Bytes, bool InRegistry, bool FromFile, string Path, DateTimeOffset ChangedAt);
 
 /// <summary>What to sync.</summary>
 /// <param name="Registry">The <c>--registry</c> option, or <c>null</c> for the environment or default.</param>
@@ -150,7 +172,7 @@ internal sealed record SessionStatusResult(SessionSyncFailure Failure, string? D
 /// registered the machine first; if the retry is refused too, the transcript fails as any other refusal does.
 /// </para>
 /// </remarks>
-internal sealed class SessionSyncService : ISessionSyncService
+internal sealed partial class SessionSyncService : ISessionSyncService
 {
     /// <summary>Upload size per request, before compression.</summary>
     internal const int ChunkBytes = 8 * 1024 * 1024;
@@ -165,12 +187,14 @@ internal sealed class SessionSyncService : ISessionSyncService
     private readonly ISessionLedger _ledger;
     private readonly IMachineIdentity _machine;
     private readonly IProjectFactsResolver _projects;
+    private readonly IProjectApi _projectApi;
     private readonly TimeProvider _time;
 
     public SessionSyncService(
         IHarnessCatalog catalog, IAccessTokenProvider tokens, IRegistryApi meta, ITranscriptApi api,
-        ISessionLedger ledger, IMachineIdentity machine, IProjectFactsResolver projects, TimeProvider time)
+        ISessionLedger ledger, IMachineIdentity machine, IProjectFactsResolver projects, IProjectApi projectApi, TimeProvider time)
     {
+        _projectApi = projectApi;
         _catalog = catalog;
         _tokens = tokens;
         _meta = meta;
@@ -306,24 +330,6 @@ internal sealed class SessionSyncService : ISessionSyncService
         }
 
         return new SessionStatusResult(SessionSyncFailure.None, null, registry, statuses);
-    }
-
-    /// <inheritdoc />
-    public async Task<SessionListResult> ListAsync(string? registryOption, TranscriptListQuery query, CancellationToken cancellationToken)
-    {
-        if (!TryResolve(registryOption, null, out var registry, out _, out var failure, out var detail))
-            return new SessionListResult(failure, detail, registry, []);
-
-        var stored = await _tokens.GetSessionAsync(registry, cancellationToken);
-        if (stored is null)
-            return new SessionListResult(SessionSyncFailure.NotLoggedIn, null, registry, []);
-        if (stored.IsExpired)
-            return new SessionListResult(SessionSyncFailure.SessionExpired, null, registry, []);
-
-        var listed = await _api.ListAsync(registry, stored.AccessToken, query, cancellationToken);
-        return listed.Ok
-            ? new SessionListResult(SessionSyncFailure.None, null, registry, listed.Value!)
-            : new SessionListResult(SessionSyncFailure.RegistryUnreachable, listed.Error, registry, []);
     }
 
     // ── planning ──────────────────────────────────────────────────────────────────

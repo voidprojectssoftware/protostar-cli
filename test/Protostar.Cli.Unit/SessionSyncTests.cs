@@ -39,7 +39,7 @@ public sealed class SessionSyncServiceTests : IDisposable
 
     private ISessionSyncService Sut() => new SessionSyncService(
         new FakeCatalog(new ClaudeCodeHarness(new ClaudeCodeSkillParser(), new ClaudeCodeSkillMapper())),
-        new FakeTokens(() => _token), _registry, _registry, _ledger, _machine, _projects, TimeProvider.System);
+        new FakeTokens(() => _token), _registry, _registry, _ledger, _machine, _projects, _registry, TimeProvider.System);
 
     private SessionSyncRequest Request(TimeSpan? budget = null, TimeSpan? throttle = null, string? sessionPath = null) =>
         new(Registry, "claude-code", _root, sessionPath, budget, throttle);
@@ -558,6 +558,130 @@ public sealed class SessionSyncServiceTests : IDisposable
         Assert.Equal(0, _registry.Appends);
     }
 
+    // ── listing ───────────────────────────────────────────────────────────────────
+
+    private static readonly string[] BackedUpIds =
+        ["aaaaaaaa-1111-4111-8111-000000000001", "aaaaaaaa-1111-4111-8111-000000000002", "aaaaaaaa-1111-4111-8111-000000000003"];
+
+    private const string AppendedId = "bbbbbbbb-2222-4222-8222-000000000004";
+    private const string NeverId = "cccccccc-3333-4333-8333-000000000005";
+
+    private string WriteSessionAs(string id, string cwd = "/home/me/src/protostar")
+    {
+        Directory.CreateDirectory(ProjectDir);
+        var path = Path.Combine(ProjectDir, id + ".jsonl");
+        File.WriteAllText(path, $$"""{"type":"user","cwd":"{{cwd}}"}""" + "\n");
+        return path;
+    }
+
+    // Three sessions fully backed up, one appended to after its backup, one never backed up; the registry lists the four it has.
+    private async Task ArrangeHistoryAsync()
+    {
+        foreach (var id in BackedUpIds.Append(AppendedId))
+            WriteSessionAs(id);
+        await Sync();
+        foreach (var id in BackedUpIds.Append(AppendedId))
+        {
+            _registry.Listed.Add(new RemoteTranscript
+            {
+                Harness = "claude-code", Key = id, Kind = "session", Title = "Session " + id[..8], Project = "github.com/me/protostar",
+                ProjectId = _registry.Resolves.ProjectId, MachineId = FakeMachine.Id, MachineName = "test",
+                LastActivityAt = DateTimeOffset.UtcNow.AddHours(-1), Length = 40,
+            });
+        }
+
+        File.AppendAllText(Path.Combine(ProjectDir, AppendedId + ".jsonl"), "{\"n\":2}\n");
+        WriteSessionAs(NeverId);
+    }
+
+    private Task<SessionListResult> List(string? project = null, Guid? machine = null, int limit = 25) =>
+        Sut().ListAsync(Registry, _root, new TranscriptListQuery(project, machine, "claude-code", null, limit), CancellationToken.None);
+
+    [Fact]
+    public async Task Listing_shows_a_partly_backed_up_session_once_with_its_pending_bytes_and_a_new_one_as_pending()
+    {
+        await ArrangeHistoryAsync();
+        File.SetLastWriteTimeUtc(Path.Combine(ProjectDir, NeverId + ".jsonl"), DateTime.UtcNow.AddMinutes(1));
+
+        var result = await List();
+
+        Assert.Equal(SessionSyncFailure.None, result.Failure);
+        Assert.Equal(5, result.Sessions.Count);
+        Assert.Equal(5, result.Sessions.Select(r => r.Session.Key).Distinct().Count());
+        var appended = Assert.Single(result.Sessions, r => r.Session.Key == AppendedId);
+        Assert.Equal("Session bbbbbbbb", appended.Session.Title);
+        Assert.Equal(new PendingBackup(8, true, false, Path.Combine(ProjectDir, AppendedId + ".jsonl"), appended.Pending!.ChangedAt), appended.Pending);
+        var never = Assert.Single(result.Sessions, r => r.Session.Key == NeverId);
+        Assert.False(never.Pending!.InRegistry);
+        Assert.True(never.Pending.FromFile);
+        Assert.Equal("github.com/me/protostar", never.Session.Project);
+        Assert.Equal(_registry.Resolves.ProjectId, never.Session.ProjectId);
+        Assert.Equal(new FileInfo(never.Pending.Path).Length, never.Session.Length);
+        Assert.Equal(3, result.Sessions.Count(r => r.Pending is null));
+        Assert.Equal(NeverId, result.Sessions[0].Session.Key);
+    }
+
+    [Fact]
+    public async Task The_project_filter_applies_to_pending_sessions_by_name_or_id()
+    {
+        await ArrangeHistoryAsync();
+
+        Assert.Equal(5, (await List(project: "PROTOSTAR")).Sessions.Count);
+        Assert.Equal(5, (await List(project: _registry.Resolves.ProjectId.ToString())).Sessions.Count);
+        Assert.Empty((await List(project: "other")).Sessions);
+    }
+
+    [Fact]
+    public async Task Another_machine_s_list_has_no_local_pending_rows()
+    {
+        await ArrangeHistoryAsync();
+
+        Assert.Empty((await List(machine: Guid.NewGuid())).Sessions);
+    }
+
+    [Fact]
+    public async Task A_folder_is_resolved_with_the_registry_once_and_only_until_the_limit_is_filled()
+    {
+        await ArrangeHistoryAsync();
+        WriteSessionAs("dddddddd-4444-4444-8444-000000000006");
+        WriteSessionAs("eeeeeeee-5555-4555-8555-000000000007");
+        _registry.Listed.Clear();
+
+        var result = await List(limit: 2);
+
+        Assert.Equal(2, result.Sessions.Count);
+        Assert.Equal(1, _registry.Resolutions);
+    }
+
+    [Fact]
+    public async Task With_the_registry_unreachable_the_pending_sessions_are_still_listed_with_the_failure()
+    {
+        await ArrangeHistoryAsync();
+        _registry.Offline = true;
+
+        var result = await List();
+
+        Assert.Equal(SessionSyncFailure.RegistryUnreachable, result.Failure);
+        Assert.Equal([NeverId, AppendedId], result.Sessions.Select(r => r.Session.Key).OrderByDescending(k => k));
+        Assert.All(result.Sessions, r => Assert.Equal("protostar", r.Session.Project));
+        Assert.Equal(2, (await List(project: "protostar")).Sessions.Count);
+        Assert.Empty((await List(project: _registry.Resolves.ProjectId.ToString())).Sessions);
+    }
+
+    [Fact]
+    public async Task Logged_out_the_pending_sessions_are_listed_without_a_network_call()
+    {
+        await ArrangeHistoryAsync();
+        _token = null;
+        _registry.ResetCounters();
+
+        var result = await List();
+
+        Assert.Equal(SessionSyncFailure.NotLoggedIn, result.Failure);
+        Assert.Equal(2, result.Sessions.Count);
+        Assert.Equal(0, _registry.Calls);
+    }
+
     // ── fakes ─────────────────────────────────────────────────────────────────────
 
     internal sealed class FakeSessions : ISessionSyncService
@@ -573,7 +697,7 @@ public sealed class SessionSyncServiceTests : IDisposable
         public SessionStatusResult Status(string? registry, string? harnessId, string? harnessHome) =>
             new(SessionSyncFailure.None, null, new Uri(Registry), []);
 
-        public Task<SessionListResult> ListAsync(string? registry, TranscriptListQuery query, CancellationToken cancellationToken) =>
+        public Task<SessionListResult> ListAsync(string? registry, string? harnessHome, TranscriptListQuery query, CancellationToken cancellationToken) =>
             Task.FromResult(new SessionListResult(SessionSyncFailure.None, null, new Uri(Registry), []));
     }
 
@@ -589,7 +713,7 @@ public sealed class SessionSyncServiceTests : IDisposable
     }
 
     /// <summary>A registry in memory that applies the real position rules: current revision, offset equal to length, revision + 1 at 0.</summary>
-    private sealed class FakeRegistry : IRegistryApi, ITranscriptApi
+    private sealed class FakeRegistry : IRegistryApi, ITranscriptApi, IProjectApi
     {
         private readonly Dictionary<string, (int Revision, List<byte> Bytes)> _content = [];
         private readonly HashSet<Guid> _machines = [];
@@ -692,8 +816,40 @@ public sealed class SessionSyncServiceTests : IDisposable
             return Task.FromResult(new AppendResult(AppendStatus.Appended, new TranscriptPosition(revision, bytes.Count), null));
         }
 
-        public Task<ApiResult<IReadOnlyList<RemoteTranscript>>> ListAsync(Uri registry, string accessToken, TranscriptListQuery query, CancellationToken cancellationToken) =>
-            Task.FromResult(ApiResult<IReadOnlyList<RemoteTranscript>>.Success([]));
+        /// <summary>What <c>GET /v1/transcripts</c> answers, before the query's filters.</summary>
+        public List<RemoteTranscript> Listed { get; } = [];
+        public List<TranscriptListQuery> ListQueries { get; } = [];
+
+        public Task<ApiResult<IReadOnlyList<RemoteTranscript>>> ListAsync(Uri registry, string accessToken, TranscriptListQuery query, CancellationToken cancellationToken)
+        {
+            Calls++;
+            ListQueries.Add(query);
+            if (Offline)
+                return Task.FromResult(ApiResult<IReadOnlyList<RemoteTranscript>>.Fail("Could not reach the registry: connection refused"));
+            var page = Listed
+                .Where(t => query.Project is null || (t.Project?.Contains(query.Project, StringComparison.OrdinalIgnoreCase) ?? false) || t.ProjectId?.ToString() == query.Project)
+                .Where(t => query.Machine is null || t.MachineId == query.Machine)
+                .Take(query.Limit)
+                .ToList();
+            return Task.FromResult(ApiResult<IReadOnlyList<RemoteTranscript>>.Success(page));
+        }
+
+        /// <summary>The project <c>POST /v1/projects/resolve</c> answers for every folder.</summary>
+        public RemoteProject Resolves { get; set; } = new() { ProjectId = Guid.Parse("aaaaaaaa-0000-0000-0000-000000000001"), Name = "github.com/me/protostar", RecognisedBy = "remote" };
+        public int Resolutions { get; private set; }
+
+        public Task<ApiResult<RemoteProject>> ResolveProjectAsync(Uri registry, string accessToken, Guid machineId, ProjectFacts facts, CancellationToken cancellationToken)
+        {
+            Calls++;
+            Resolutions++;
+            return Task.FromResult(ApiResult<RemoteProject>.Success(Resolves));
+        }
+
+        public Task<ApiResult<ProjectLinkChange>> LinkFolderAsync(Uri registry, string accessToken, Guid machineId, ProjectFacts facts, string project, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
+        public Task<ApiResult<ProjectLinkChange>> UnlinkFolderAsync(Uri registry, string accessToken, Guid machineId, ProjectFacts facts, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
     }
 
     private sealed class FakeProjects : IProjectFactsResolver

@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Protostar.Cli.Harness;
 using Protostar.Cli.Registry;
 using Spectre.Console;
@@ -189,53 +190,105 @@ internal static class SessionsPresenter
         return result.FullySynced ? 0 : 1;
     }
 
-    /// <summary>Renders the registry's sessions as a table, or as JSON for agents and scripts.</summary>
+    /// <summary>Renders the sessions as a table, or as JSON for agents and scripts, and returns the exit code.</summary>
+    /// <remarks>
+    /// When the registry could not be asked, this machine's pending sessions are still listed, followed by why the
+    /// rest are missing, and the exit code is 1. In JSON each row is the registry's record with a <c>pending</c>
+    /// object added for bytes not backed up yet (a row made from the file has no title and zero counts, and says
+    /// <c>fromFile</c>), and the failure goes to standard error.
+    /// </remarks>
     public static int RenderList(SessionListResult result, IHarnessCatalog catalog, bool json)
     {
-        if (Failure(result.Failure, result.Detail, result.Registry, catalog) is { } exit)
+        var partial = result.Failure is not (SessionSyncFailure.None or SessionSyncFailure.InvalidRegistry or SessionSyncFailure.UnknownHarness);
+        if (!partial && Failure(result.Failure, result.Detail, result.Registry, catalog) is { } exit)
             return exit;
 
         if (json)
         {
-            Console.Out.WriteLine(JsonSerializer.Serialize(result.Sessions, TranscriptJson.Options));
-            return 0;
+            var rows = new JsonArray([.. result.Sessions.Select(ToJson)]);
+            Console.Out.WriteLine(rows.ToJsonString(TranscriptJson.Options));
+            if (partial)
+                Console.Error.WriteLine(FailureMessage(result.Failure, result.Detail, result.Registry, catalog));
+            return partial ? 1 : 0;
         }
 
-        if (result.Sessions.Count == 0)
+        if (result.Sessions.Count == 0 && !partial)
         {
             AnsiConsole.MarkupLine("[grey]No sessions backed up yet. Run `protostar sessions push`.[/]");
             return 0;
         }
 
-        var table = new Table().Border(TableBorder.Rounded);
-        table.AddColumn("Last active");
-        table.AddColumn("Title");
-        table.AddColumn("Project");
-        table.AddColumn("Machine");
-        table.AddColumn("Harness");
-        table.AddColumn(new TableColumn("Prompts").RightAligned());
-        table.AddColumn(new TableColumn("Size").RightAligned());
-        table.AddColumn("Id");
-        foreach (var s in result.Sessions)
+        if (result.Sessions.Count > 0)
         {
-            table.AddRow(
-                Markup.Escape(s.LastActivityAt?.ToLocalTime().ToString("yyyy-MM-dd HH:mm") ?? "-"),
-                Markup.Escape(Truncate(s.Title ?? "(untitled)", 48)),
-                Markup.Escape(s.Project ?? "-") + (s.ProjectSubpath is { } sub ? $" [grey]{Markup.Escape(sub)}[/]" : ""),
-                Markup.Escape(s.MachineName ?? "-"),
-                Markup.Escape(s.Harness),
-                s.UserMessages.ToString(System.Globalization.CultureInfo.InvariantCulture),
-                Bytes(s.Length),
-                Markup.Escape(Short(s.Key)) + (s.SubagentCount > 0 ? $" [grey]+{s.SubagentCount}[/]" : ""));
+            var table = new Table().Border(TableBorder.Rounded);
+            table.AddColumn("Last active");
+            table.AddColumn("Title");
+            table.AddColumn("Project");
+            table.AddColumn("Machine");
+            table.AddColumn("Harness");
+            table.AddColumn(new TableColumn("Prompts").RightAligned());
+            table.AddColumn(new TableColumn("Size").RightAligned());
+            table.AddColumn("Backup");
+            table.AddColumn("Id");
+            foreach (var row in result.Sessions)
+            {
+                var s = row.Session;
+                var fromFile = row.Pending is { FromFile: true };
+                table.AddRow(
+                    Markup.Escape(row.When?.ToLocalTime().ToString("yyyy-MM-dd HH:mm") ?? "-"),
+                    // Only the registry knows a title; for a session it has none of, the file says where it is.
+                    fromFile ? $"[grey]{Markup.Escape(TruncateStart(row.Pending!.Path, 48))}[/]"
+                        : Markup.Escape(Truncate(s.Title ?? "(untitled)", 48)),
+                    Markup.Escape(s.Project ?? "-") + (s.ProjectSubpath is { } sub ? $" [grey]{Markup.Escape(sub)}[/]" : ""),
+                    Markup.Escape(s.MachineName ?? "-"),
+                    Markup.Escape(s.Harness),
+                    fromFile ? "-" : s.UserMessages.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                    Bytes(s.Length),
+                    row.Pending switch
+                    {
+                        null => "[green]backed up[/]",
+                        { InRegistry: true } p => $"[yellow]{Bytes(p.Bytes)} pending[/]",
+                        _ => "[yellow]not backed up[/]",
+                    },
+                    Markup.Escape(Short(s.Key)) + (s.SubagentCount > 0 ? $" [grey]+{s.SubagentCount}[/]" : ""));
+            }
+            AnsiConsole.Write(table);
         }
-        AnsiConsole.Write(table);
-        return 0;
+
+        var pending = result.Sessions.Count(r => r.Pending is not null);
+        if (pending > 0)
+            AnsiConsole.MarkupLine($"[yellow]{Count(pending, "session")} on this machine not fully backed up.[/] Run `protostar sessions push`.");
+
+        if (!partial)
+            return 0;
+        AnsiConsole.MarkupLine(
+            $"[red]{Markup.Escape(FailureMessage(result.Failure, result.Detail, result.Registry, catalog)!)}[/] " +
+            (result.Sessions.Count == 0
+                ? "[grey]No pending sessions on this machine to show.[/]"
+                : "[grey]Showing only sessions on this machine that are not backed up yet.[/]"));
+        return 1;
+    }
+
+    private static JsonNode ToJson(ListedSession row)
+    {
+        var node = JsonSerializer.SerializeToNode(row.Session, TranscriptJson.Options)!;
+        if (row.Pending is { } pending)
+            node["pending"] = JsonSerializer.SerializeToNode(pending, TranscriptJson.Options);
+        return node;
     }
 
     private static int? Failure(SessionSyncFailure failure, string? detail, Uri? registry, IHarnessCatalog catalog)
     {
+        if (FailureMessage(failure, detail, registry, catalog) is not { } message)
+            return null;
+        AnsiConsole.MarkupLine($"[red]{Markup.Escape(message)}[/]");
+        return 1;
+    }
+
+    private static string? FailureMessage(SessionSyncFailure failure, string? detail, Uri? registry, IHarnessCatalog catalog)
+    {
         var authority = registry?.GetLeftPart(UriPartial.Authority) ?? "";
-        string? message = failure switch
+        return failure switch
         {
             SessionSyncFailure.None => null,
             SessionSyncFailure.InvalidRegistry => detail,
@@ -245,10 +298,6 @@ internal static class SessionsPresenter
             SessionSyncFailure.Incompatible => detail,
             _ => $"Could not reach the registry at {authority}." + (detail is null ? "" : $" {detail}"),
         };
-        if (message is null)
-            return null;
-        AnsiConsole.MarkupLine($"[red]{Markup.Escape(message)}[/]");
-        return 1;
     }
 
     internal static string Describe(TranscriptSyncOutcome t) => t.Status switch
@@ -278,6 +327,9 @@ internal static class SessionsPresenter
     private static string Count(int n, string noun) => n == 1 ? $"1 {noun}" : $"{n} {noun}s";
 
     private static string Truncate(string text, int max) => text.Length <= max ? text : text[..(max - 3)] + "...";
+
+    // Keeps the end, where a path's file name is.
+    private static string TruncateStart(string text, int max) => text.Length <= max ? text : "..." + text[^(max - 3)..];
 
     private static string Ago(DateTimeOffset when)
     {

@@ -99,7 +99,7 @@ internal sealed class SessionsStatusCommand : Command<SessionsStatusCommand.Sett
         SessionsPresenter.RenderStatus(_sessions.Status(settings.Registry, settings.Harness, settings.HarnessHome), _catalog, settings.All);
 }
 
-/// <summary><c>protostar sessions list</c>: the sessions backed up from every machine.</summary>
+/// <summary><c>protostar sessions list</c>: the sessions backed up from every machine, plus this machine's not backed up yet.</summary>
 internal sealed class SessionsListCommand : AsyncCommand<SessionsListCommand.Settings>
 {
     private readonly ISessionSyncService _sessions;
@@ -111,7 +111,7 @@ internal sealed class SessionsListCommand : AsyncCommand<SessionsListCommand.Set
         _catalog = catalog;
     }
 
-    public sealed class Settings : SessionsSettings
+    public sealed class Settings : LocalSessionsSettings
     {
         [CommandOption("-p|--project <ID|NAME>")]
         [Description("Only sessions in this project: its id, or text in its name (for example the repo name).")]
@@ -136,8 +136,8 @@ internal sealed class SessionsListCommand : AsyncCommand<SessionsListCommand.Set
 
     protected override async Task<int> ExecuteAsync(CommandContext context, Settings settings, CancellationToken cancellation)
     {
-        var query = new TranscriptListQuery(settings.Project, settings.Machine, null, settings.Since, settings.Limit);
-        var result = await _sessions.ListAsync(settings.Registry, query, cancellation);
+        var query = new TranscriptListQuery(settings.Project, settings.Machine, settings.Harness, settings.Since, settings.Limit);
+        var result = await _sessions.ListAsync(settings.Registry, settings.HarnessHome, query, cancellation);
         return SessionsPresenter.RenderList(result, _catalog, settings.Json);
     }
 }
