@@ -147,7 +147,6 @@ internal sealed class SkillPullService : ISkillPullService
     {
         var remote = comparison.Remote!;
         var harness = target.Harness;
-
         var project = target.ProjectName;
 
         if (comparison.State == SkillSyncState.Conflict)
