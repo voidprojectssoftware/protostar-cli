@@ -2,6 +2,7 @@ using System.Text;
 using Protostar.Cli.Auth;
 using Protostar.Cli.Harness;
 using Protostar.Cli.Harness.ClaudeCode;
+using Protostar.Cli.Projects;
 using Protostar.Cli.Registry;
 using Protostar.Cli.Sessions;
 using Protostar.Cli.Skills;
@@ -17,6 +18,7 @@ public sealed class SessionSyncServiceTests : IDisposable
     private readonly string _root = Directory.CreateTempSubdirectory("pstar-sessions-").FullName;
     private readonly FakeRegistry _registry = new();
     private readonly FakeLedger _ledger = new();
+    private readonly FakeProjects _projects = new();
     private StoredToken? _token = new() { Registry = Registry, AccessToken = "tok", ExpiresAtUtc = DateTimeOffset.UtcNow.AddHours(1) };
 
     public void Dispose() => Directory.Delete(_root, recursive: true);
@@ -36,7 +38,7 @@ public sealed class SessionSyncServiceTests : IDisposable
 
     private ISessionSyncService Sut() => new SessionSyncService(
         new FakeCatalog(new ClaudeCodeHarness(new ClaudeCodeSkillParser(), new ClaudeCodeSkillMapper())),
-        new FakeTokens(() => _token), _registry, _registry, _ledger, new FakeMachine(), TimeProvider.System);
+        new FakeTokens(() => _token), _registry, _registry, _ledger, new FakeMachine(), _projects, TimeProvider.System);
 
     private SessionSyncRequest Request(TimeSpan? budget = null, TimeSpan? throttle = null, string? sessionPath = null) =>
         new(Registry, "claude-code", _root, sessionPath, budget, throttle);
@@ -346,6 +348,64 @@ public sealed class SessionSyncServiceTests : IDisposable
         Assert.Empty(SessionSyncService.ReadWholeLines(SessionFile, 8));
     }
 
+    // ── projects ──────────────────────────────────────────────────────────────────
+
+    [Fact]
+    public async Task A_session_is_registered_with_the_facts_of_the_directory_its_lines_record()
+    {
+        WriteSession("""{"type":"permission-mode"}""", """{"type":"user","cwd":"/home/me/src/widget"}""");
+
+        await Sync();
+
+        var facts = Assert.Single(_registry.Filed[SessionId]);
+        Assert.Equal("/home/me/src/widget", facts!.WorkingDirectory);
+    }
+
+    [Fact]
+    public async Task A_transcript_backed_up_before_projects_is_registered_again_once_with_facts()
+    {
+        WriteSession("""{"type":"user","cwd":"/home/me/src/widget"}""");
+        await Sync();
+        _ledger.Save(new Uri(Registry), "claude-code", SessionId, _ledger.Get(new Uri(Registry), "claude-code", SessionId)! with { Project = null });
+        _registry.ResetCounters();
+
+        var first = await Sync();
+        _registry.ResetCounters();
+        var second = await Sync();
+
+        Assert.Equal(TranscriptSyncStatus.UpToDate, Assert.Single(first.Transcripts).Status);
+        Assert.Equal(2, _registry.Filed[SessionId].Count);
+        Assert.NotNull(_registry.Filed[SessionId][1]);
+        Assert.Equal(File.ReadAllBytes(SessionFile), _registry.Content(SessionId));
+        Assert.True(second.Complete);
+        Assert.Equal(0, _registry.Calls);
+    }
+
+    [Fact]
+    public async Task A_session_registered_before_it_recorded_a_directory_sends_facts_with_its_next_upload()
+    {
+        WriteSession("""{"type":"permission-mode"}""");
+        await Sync();
+        AppendRaw("""{"type":"user","cwd":"/home/me/notes"}""" + "\n");
+
+        await Sync();
+
+        Assert.Equal([null, "/home/me/notes"], _registry.Filed[SessionId].Select(f => f?.WorkingDirectory));
+    }
+
+    [Fact]
+    public async Task A_session_with_no_directory_and_nothing_new_stays_offline()
+    {
+        WriteSession("""{"type":"permission-mode"}""");
+        await Sync();
+        _registry.ResetCounters();
+
+        var result = await Sync();
+
+        Assert.True(result.Complete);
+        Assert.Equal(0, _registry.Calls);
+    }
+
     // ── fakes ─────────────────────────────────────────────────────────────────────
 
     internal sealed class FakeSessions : ISessionSyncService
@@ -407,10 +467,13 @@ public sealed class SessionSyncServiceTests : IDisposable
             return Task.FromResult(ApiResult<bool>.Success(true));
         }
 
-        public Task<ApiResult<TranscriptPosition>> RegisterTranscriptAsync(Uri registry, string accessToken, LocalTranscript transcript, Guid machineId, CancellationToken cancellationToken)
+        public Dictionary<string, List<ProjectFacts?>> Filed { get; } = [];
+
+        public Task<ApiResult<TranscriptPosition>> RegisterTranscriptAsync(Uri registry, string accessToken, LocalTranscript transcript, Guid machineId, ProjectFacts? project, CancellationToken cancellationToken)
         {
             Calls++;
             Registered[transcript.Key] = transcript;
+            (Filed.TryGetValue(transcript.Key, out var filed) ? filed : Filed[transcript.Key] = []).Add(project);
             if (!_content.ContainsKey(transcript.Key))
                 _content[transcript.Key] = (1, []);
             var (revision, bytes) = _content[transcript.Key];
@@ -438,6 +501,17 @@ public sealed class SessionSyncServiceTests : IDisposable
 
         public Task<ApiResult<IReadOnlyList<RemoteTranscript>>> ListAsync(Uri registry, string accessToken, TranscriptListQuery query, CancellationToken cancellationToken) =>
             Task.FromResult(ApiResult<IReadOnlyList<RemoteTranscript>>.Success([]));
+    }
+
+    private sealed class FakeProjects : IProjectFactsResolver
+    {
+        public List<string> Asked { get; } = [];
+
+        public ProjectFacts Resolve(string workingDirectory)
+        {
+            Asked.Add(workingDirectory);
+            return ProjectFacts.NotGit(workingDirectory, workingDirectory);
+        }
     }
 
     private sealed class FakeLedger : ISessionLedger

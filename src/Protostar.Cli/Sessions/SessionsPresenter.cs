@@ -162,7 +162,7 @@ internal static class SessionsPresenter
             table.AddRow(
                 Markup.Escape(s.LastActivityAt?.ToLocalTime().ToString("yyyy-MM-dd HH:mm") ?? "-"),
                 Markup.Escape(Truncate(s.Title ?? "(untitled)", 48)),
-                Markup.Escape(s.Project ?? "-"),
+                Markup.Escape(s.Project ?? "-") + (s.ProjectSubpath is { } sub ? $" [grey]{Markup.Escape(sub)}[/]" : ""),
                 Markup.Escape(s.MachineName ?? "-"),
                 Markup.Escape(s.Harness),
                 s.UserMessages.ToString(System.Globalization.CultureInfo.InvariantCulture),

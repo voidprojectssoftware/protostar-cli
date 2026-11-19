@@ -3,7 +3,8 @@ namespace Protostar.Cli.Harness;
 /// <summary>Capability: a harness whose session transcripts protostar can find on disk.</summary>
 /// <remarks>
 /// A transcript is one append-only JSONL file: a whole session, or one subagent's run inside a session.
-/// The CLI only finds and uploads the files; the registry understands their format.
+/// The CLI finds and uploads the files and the registry understands their format, with one exception:
+/// <see cref="ReadWorkingDirectory"/>, because only the CLI can run git in that directory to find its project.
 /// </remarks>
 internal interface ISessionCapability
 {
@@ -16,6 +17,11 @@ internal interface ISessionCapability
     /// </summary>
     /// <returns>An empty list when the path is not one of this harness's transcripts.</returns>
     IReadOnlyList<LocalTranscript> LocateSession(string transcriptPath);
+
+    /// <summary>The working directory the transcript's session ran in, as the harness recorded it.</summary>
+    /// <returns><c>null</c> when the file records none yet (or cannot be read).</returns>
+    /// <remarks>Read from the file's own lines, never decoded from the folder it sits in, which is lossy (ADR 0002).</remarks>
+    string? ReadWorkingDirectory(LocalTranscript transcript);
 }
 
 /// <summary>Whether a transcript is a whole session or one subagent's run.</summary>

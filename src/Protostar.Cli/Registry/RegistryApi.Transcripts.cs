@@ -5,6 +5,7 @@ using System.Net.Http.Json;
 using System.Security.Cryptography;
 using System.Text.Json;
 using Protostar.Cli.Harness;
+using Protostar.Cli.Projects;
 
 namespace Protostar.Cli.Registry;
 
@@ -22,7 +23,7 @@ internal sealed partial class RegistryApi : ITranscriptApi
 
     /// <inheritdoc />
     public async Task<ApiResult<TranscriptPosition>> RegisterTranscriptAsync(
-        Uri registry, string accessToken, LocalTranscript transcript, Guid machineId, CancellationToken cancellationToken)
+        Uri registry, string accessToken, LocalTranscript transcript, Guid machineId, ProjectFacts? project, CancellationToken cancellationToken)
     {
         using var request = Request(HttpMethod.Put, registry, TranscriptPath(transcript.Harness, transcript.Key), accessToken);
         JsonElement? metadata = transcript.MetadataJson is { } json ? JsonDocument.Parse(json).RootElement.Clone() : null;
@@ -33,6 +34,7 @@ internal sealed partial class RegistryApi : ITranscriptApi
             machineId,
             sourcePath = transcript.Path,
             metadata,
+            project,
         }, options: TranscriptJson.Options);
 
         return await SendAsync(request, ReadPositionAsync, cancellationToken);

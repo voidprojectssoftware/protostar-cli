@@ -65,6 +65,46 @@ internal sealed partial class ClaudeCodeHarness : ISessionCapability
         return result;
     }
 
+    // The cwd is on nearly every line, so it is found in the first few; the cap only bounds a file that has none.
+    private const int WorkingDirectoryScanBytes = 1024 * 1024;
+
+    public string? ReadWorkingDirectory(LocalTranscript transcript)
+    {
+        try
+        {
+            using var file = new FileStream(transcript.Path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            using var reader = new StreamReader(file);
+            var read = 0L;
+            while (read < WorkingDirectoryScanBytes && reader.ReadLine() is { } line)
+            {
+                read += line.Length + 1;
+                if (!line.Contains("\"cwd\"", StringComparison.Ordinal))
+                    continue;
+                try
+                {
+                    using var doc = System.Text.Json.JsonDocument.Parse(line);
+                    if (doc.RootElement.ValueKind == System.Text.Json.JsonValueKind.Object &&
+                        doc.RootElement.TryGetProperty("cwd", out var cwd) &&
+                        cwd.ValueKind == System.Text.Json.JsonValueKind.String &&
+                        cwd.GetString() is { Length: > 0 } directory)
+                    {
+                        return directory;
+                    }
+                }
+                catch (System.Text.Json.JsonException)
+                {
+                    // A torn or malformed line; keep looking.
+                }
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return null;
+        }
+
+        return null;
+    }
+
     private static IEnumerable<string> ProjectRoots(HarnessLocation location)
     {
         var roots = new List<string> { Path.Combine(location.ConfigDir, "projects") };

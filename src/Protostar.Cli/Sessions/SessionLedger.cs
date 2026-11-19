@@ -30,8 +30,20 @@ internal interface ISessionLedger
 /// <param name="Registered">Whether the transcript has been registered with the registry.</param>
 /// <param name="LastSyncedAt">When the registry last confirmed this position.</param>
 /// <param name="LastAttemptAt">When a sync last started for it, for throttling hooks.</param>
+/// <param name="Project">Whether its project facts reached the registry; <c>null</c> for entries written before projects existed.</param>
 internal sealed record SessionLedgerEntry(
-    int Revision, long Length, string? TailSha256, bool Registered, DateTimeOffset? LastSyncedAt, DateTimeOffset? LastAttemptAt);
+    int Revision, long Length, string? TailSha256, bool Registered, DateTimeOffset? LastSyncedAt, DateTimeOffset? LastAttemptAt,
+    ProjectFiling? Project = null);
+
+/// <summary>Whether a registered transcript's project facts reached the registry.</summary>
+internal enum ProjectFiling
+{
+    /// <summary>Registered before its file recorded a working directory, so without facts. Sent with its next upload.</summary>
+    Pending,
+
+    /// <summary>Registered with facts for its working directory.</summary>
+    Sent,
+}
 
 /// <summary>Production <see cref="ISessionLedger"/> under <c>~/.protostar/sessions/</c>.</summary>
 internal sealed class SessionLedger : ISessionLedger
