@@ -22,27 +22,28 @@ internal sealed partial class ClaudeCodeHarness : IHarness
 
     public bool TryLocate(string? rootOverride, out HarnessLocation location)
     {
-        var (configDir, explicitSource) = ResolveConfigDir(rootOverride);
-        location = new HarnessLocation(configDir, Path.Combine(configDir, "settings.json"));
+        var (configDir, explicitSource, pinned) = ResolveConfigDir(rootOverride);
+        location = new HarnessLocation(configDir, Path.Combine(configDir, "settings.json"), pinned);
 
         return explicitSource || Directory.Exists(configDir);
     }
 
     // Resolution order: --harness-home > PROTOSTAR_HARNESS_ROOT > CLAUDE_CONFIG_DIR > ~/.claude.
-    private static (string dir, bool explicitSource) ResolveConfigDir(string? rootOverride)
+    // Only the first two pin the root: CLAUDE_CONFIG_DIR is the harness's own setting, not a protostar override.
+    private static (string dir, bool explicitSource, bool pinned) ResolveConfigDir(string? rootOverride)
     {
         if (!string.IsNullOrWhiteSpace(rootOverride))
-            return (rootOverride, true);
+            return (rootOverride, true, true);
 
         var generic = Environment.GetEnvironmentVariable("PROTOSTAR_HARNESS_ROOT");
         if (!string.IsNullOrWhiteSpace(generic))
-            return (generic, true);
+            return (generic, true, true);
 
         var claude = Environment.GetEnvironmentVariable("CLAUDE_CONFIG_DIR");
         if (!string.IsNullOrWhiteSpace(claude))
-            return (claude, true);
+            return (claude, true, false);
 
         var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-        return (Path.Combine(home, ".claude"), false);
+        return (Path.Combine(home, ".claude"), false, false);
     }
 }
