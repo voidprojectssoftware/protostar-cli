@@ -30,6 +30,8 @@ services.AddSingleton<IMachineIdentity, MachineIdentity>();
 services.AddSingleton(TimeProvider.System);
 services.AddSingleton<IProjectFactsResolver, ProjectFactsResolver>();
 services.AddSingleton<ISessionSyncService, SessionSyncService>();
+services.AddSingleton<IProjectApi>(sp => sp.GetRequiredService<RegistryApi>());
+services.AddSingleton<IProjectService, ProjectService>();
 services.AddSingleton<ISkillLedger, SkillLedger>();
 services.AddSingleton<ISkillPushService, SkillPushService>();
 services.AddSingleton<ISkillPullService, SkillPullService>();
@@ -82,6 +84,18 @@ app.Configure(config =>
             .WithDescription("Show what is and is not backed up on this machine. Works offline; exits 1 while anything is pending.");
         sessions.AddCommand<SessionsListCommand>("list")
             .WithDescription("List sessions backed up from every machine.");
+    });
+
+    config.AddBranch<ProjectSettings>("project", project =>
+    {
+        project.SetDescription("See which project this folder belongs to, the same on every machine, and link or unlink it.");
+        project.SetDefaultCommand<ProjectShowCommand>();
+        project.AddCommand<ProjectShowCommand>("show")
+            .WithDescription("Show this folder's project and how it was recognised (the default).");
+        project.AddCommand<ProjectLinkCommand>("link")
+            .WithDescription("Link this folder to a project, by id or name. Its sessions move with it.");
+        project.AddCommand<ProjectUnlinkCommand>("unlink")
+            .WithDescription("Unlink this folder; a fork's folder with no link gets a project of its own.");
     });
 
     config.AddBranch("auth", auth =>
