@@ -1,6 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Protostar.Cli.Harness;
+using Protostar.Cli.Projects;
 
 namespace Protostar.Cli.Registry;
 
@@ -12,7 +13,9 @@ internal interface ITranscriptApi
     Task<ApiResult<bool>> RegisterMachineAsync(Uri registry, string accessToken, Guid id, string name, string operatingSystem, CancellationToken cancellationToken);
 
     /// <summary><c>PUT /v1/transcripts/{harness}/{key}</c>: registers the transcript and returns where its stored content ends.</summary>
-    Task<ApiResult<TranscriptPosition>> RegisterTranscriptAsync(Uri registry, string accessToken, LocalTranscript transcript, Guid machineId, CancellationToken cancellationToken);
+    /// <remarks><paramref name="project"/> files it under the project of its working directory; <c>null</c> when that is not known yet.</remarks>
+    Task<ApiResult<TranscriptPosition>> RegisterTranscriptAsync(
+        Uri registry, string accessToken, LocalTranscript transcript, Guid machineId, ProjectFacts? project, CancellationToken cancellationToken);
 
     /// <summary><c>POST /v1/transcripts/{harness}/{key}/content</c>: appends one chunk of whole lines, gzip-compressed on the wire.</summary>
     Task<AppendResult> AppendAsync(
@@ -67,7 +70,9 @@ internal sealed record RemoteTranscript
     [JsonPropertyName("parentKey")] public string? ParentKey { get; init; }
     [JsonPropertyName("title")] public string? Title { get; init; }
     [JsonPropertyName("firstPrompt")] public string? FirstPrompt { get; init; }
+    [JsonPropertyName("projectId")] public Guid? ProjectId { get; init; }
     [JsonPropertyName("project")] public string? Project { get; init; }
+    [JsonPropertyName("projectSubpath")] public string? ProjectSubpath { get; init; }
     [JsonPropertyName("workingDirectory")] public string? WorkingDirectory { get; init; }
     [JsonPropertyName("gitBranch")] public string? GitBranch { get; init; }
     [JsonPropertyName("machineId")] public Guid MachineId { get; init; }

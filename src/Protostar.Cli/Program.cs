@@ -8,6 +8,7 @@ using Protostar.Cli.Harness;
 using Protostar.Cli.Harness.ClaudeCode;
 using Protostar.Cli.Hooks;
 using Protostar.Cli.Infrastructure;
+using Protostar.Cli.Projects;
 using Protostar.Cli.Registry;
 using Protostar.Cli.Sessions;
 using Protostar.Cli.Skills;
@@ -27,6 +28,7 @@ services.AddSingleton<ITranscriptApi>(sp => sp.GetRequiredService<RegistryApi>()
 services.AddSingleton<ISessionLedger, SessionLedger>();
 services.AddSingleton<IMachineIdentity, MachineIdentity>();
 services.AddSingleton(TimeProvider.System);
+services.AddSingleton<IProjectFactsResolver, ProjectFactsResolver>();
 services.AddSingleton<ISessionSyncService, SessionSyncService>();
 services.AddSingleton<ISkillLedger, SkillLedger>();
 services.AddSingleton<ISkillPushService, SkillPushService>();

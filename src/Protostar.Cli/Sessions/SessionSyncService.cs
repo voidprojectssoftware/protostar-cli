@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using Protostar.Cli.Auth;
 using Protostar.Cli.Harness;
+using Protostar.Cli.Projects;
 using Protostar.Cli.Registry;
 
 namespace Protostar.Cli.Sessions;
@@ -113,6 +114,11 @@ internal sealed record SessionStatusResult(SessionSyncFailure Failure, string? D
 /// including a final line still being written, and append each one. A <c>409</c> carries the registry's real
 /// position, which is adopted and the upload resumed from there.
 /// </para>
+/// <para>
+/// Registering a transcript sends the project facts of the working directory its lines record, from
+/// <see cref="IProjectFactsResolver"/>, so the registry can file it under its project (ADR 0002). A transcript
+/// registered before this existed is registered again once, with facts, even when nothing else changed.
+/// </para>
 /// <para>Uploads within a run are sequential; the per-transcript lock stops two processes uploading the same file.</para>
 /// </remarks>
 internal sealed class SessionSyncService : ISessionSyncService
@@ -129,11 +135,12 @@ internal sealed class SessionSyncService : ISessionSyncService
     private readonly ITranscriptApi _api;
     private readonly ISessionLedger _ledger;
     private readonly IMachineIdentity _machine;
+    private readonly IProjectFactsResolver _projects;
     private readonly TimeProvider _time;
 
     public SessionSyncService(
         IHarnessCatalog catalog, IAccessTokenProvider tokens, IRegistryApi meta, ITranscriptApi api,
-        ISessionLedger ledger, IMachineIdentity machine, TimeProvider time)
+        ISessionLedger ledger, IMachineIdentity machine, IProjectFactsResolver projects, TimeProvider time)
     {
         _catalog = catalog;
         _tokens = tokens;
@@ -141,6 +148,7 @@ internal sealed class SessionSyncService : ISessionSyncService
         _api = api;
         _ledger = ledger;
         _machine = machine;
+        _projects = projects;
         _time = time;
     }
 
@@ -274,8 +282,9 @@ internal sealed class SessionSyncService : ISessionSyncService
         if (rewritten)
             return new UploadPlan(entry, size, false, true);
 
-        // Bytes past the stored length that do not yet form a whole line are not uploadable yet.
-        var upToDate = size == entry.Length || !HasCompleteLineAfter(transcript.Path, entry.Length);
+        // Bytes past the stored length that do not yet form a whole line are not uploadable yet. A transcript
+        // registered before project facts existed is not up to date until it has been registered again with them.
+        var upToDate = (size == entry.Length || !HasCompleteLineAfter(transcript.Path, entry.Length)) && entry.Project is not null;
         return new UploadPlan(entry, size, upToDate, false);
     }
 
@@ -301,17 +310,20 @@ internal sealed class SessionSyncService : ISessionSyncService
         int revision;
         long offset;
 
-        if (entry is null || !entry.Registered)
+        var filing = entry?.Project;
+        if (entry is null || !entry.Registered || filing != ProjectFiling.Sent)
         {
-            var registered = await _api.RegisterTranscriptAsync(registry, session.AccessToken, transcript, session.MachineId, cancellationToken);
+            var project = ProjectFactsFor(transcript);
+            var registered = await _api.RegisterTranscriptAsync(registry, session.AccessToken, transcript, session.MachineId, project, cancellationToken);
             if (!registered.Ok)
                 return Failed(transcript, plan, 0, registered.Error!);
+            filing = project is null ? ProjectFiling.Pending : ProjectFiling.Sent;
 
             // Record the registry's real position. It may already hold part of this file (for example from before
             // the ledger was lost); if it holds more than the file now has, the file was rewritten: start over.
             var position = registered.Value!;
             _ledger.Save(registry, transcript.Harness, transcript.Key, new SessionLedgerEntry(
-                position.Revision, position.Length, SessionLedger.TailHash(transcript.Path, position.Length), true, null, now));
+                position.Revision, position.Length, SessionLedger.TailHash(transcript.Path, position.Length), true, null, now, filing));
             (revision, offset) = position.Length <= plan.Size ? (position.Revision, position.Length) : (position.Revision + 1, 0);
         }
         else
@@ -352,7 +364,7 @@ internal sealed class SessionSyncService : ISessionSyncService
                     offset += chunk.Length;
                     sent += chunk.Length;
                     _ledger.Save(registry, transcript.Harness, transcript.Key, new SessionLedgerEntry(
-                        revision, offset, SessionLedger.TailHash(transcript.Path, offset), true, _time.GetUtcNow(), now));
+                        revision, offset, SessionLedger.TailHash(transcript.Path, offset), true, _time.GetUtcNow(), now, filing));
                     break;
 
                 case AppendStatus.Mismatch when result.Position is { } position && ++mismatches <= 3:
@@ -373,6 +385,12 @@ internal sealed class SessionSyncService : ISessionSyncService
         TranscriptSyncOutcome Finish(TranscriptSyncStatus status, string? message) =>
             new(transcript, status, sent, Math.Max(0, SafeLength(transcript.Path) - offset), plan.Rewritten, message);
     }
+
+    // The facts of the directory the transcript's session ran in, or null while its file records none.
+    private ProjectFacts? ProjectFactsFor(LocalTranscript transcript) =>
+        _catalog.ById(transcript.Harness) is ISessionCapability sessions && sessions.ReadWorkingDirectory(transcript) is { } directory
+            ? _projects.Resolve(directory)
+            : null;
 
     private static TranscriptSyncOutcome Failed(LocalTranscript transcript, UploadPlan plan, long sent, string message) =>
         new(transcript, TranscriptSyncStatus.Failed, sent, Math.Max(0, plan.Size - (plan.Rewritten ? 0 : plan.Entry?.Length ?? 0) - sent), plan.Rewritten, message);

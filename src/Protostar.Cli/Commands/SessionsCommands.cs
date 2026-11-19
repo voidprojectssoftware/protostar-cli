@@ -107,8 +107,8 @@ internal sealed class SessionsListCommand : AsyncCommand<SessionsListCommand.Set
 
     public sealed class Settings : SessionsSettings
     {
-        [CommandOption("-p|--project <TEXT>")]
-        [Description("Only sessions whose working directory contains this text.")]
+        [CommandOption("-p|--project <ID|NAME>")]
+        [Description("Only sessions in this project: its id, or text in its name (for example the repo name).")]
         public string? Project { get; init; }
 
         [CommandOption("--machine <ID>")]
