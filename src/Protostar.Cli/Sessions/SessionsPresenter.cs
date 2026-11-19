@@ -152,11 +152,14 @@ internal static class SessionsPresenter
         if (Failure(result.Failure, result.Detail, result.Registry, catalog) is { } exit)
             return exit;
 
-        var pending = result.Transcripts
-            .Where(t => t.BytesPending > 0 || t.Verified?.Check == BackupCheck.Diverged)
-            .OrderByDescending(t => t.LastModifiedAt)
-            .ToList();
-        var rows = all ? [.. result.Transcripts.OrderByDescending(t => t.LastModifiedAt)] : pending;
+        var pending = result.Transcripts.Where(t => t.BytesPending > 0).OrderByDescending(t => t.LastModifiedAt).ToList();
+        // A transcript the registry holds differently needs the user's attention though nothing is pending to upload.
+        var rows = all
+            ? [.. result.Transcripts.OrderByDescending(t => t.LastModifiedAt)]
+            : result.Transcripts
+                .Where(t => t.BytesPending > 0 || t.Verified?.Check == BackupCheck.Diverged)
+                .OrderByDescending(t => t.LastModifiedAt)
+                .ToList();
         if (rows.Count > 0)
         {
             var table = new Table().Border(TableBorder.Rounded);
