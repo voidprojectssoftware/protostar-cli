@@ -58,7 +58,9 @@ internal static class SkillPullPresenter
         if (conflicts > 0)
             AnsiConsole.MarkupLine($"[red]{conflicts} cannot be pulled until the conflict is resolved[/] [grey](--force does not override a conflict)[/].");
         if (elsewhere > 0)
-            AnsiConsole.MarkupLine($"[grey]{elsewhere} belong to other projects and are only pulled from a checkout of their project.[/]");
+            AnsiConsole.MarkupLine(elsewhere == 1
+                ? "[grey]1 belongs to another project and is only pulled from a checkout of that project.[/]"
+                : $"[grey]{elsewhere} belong to other projects and are only pulled from a checkout of their project.[/]");
         return 0;
     }
 

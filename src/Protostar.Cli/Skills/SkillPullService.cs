@@ -132,6 +132,13 @@ internal sealed class SkillPullService : ISkillPullService
             }
         }
 
+        entries = entries
+            .OrderBy(e => e.Harness.Id, StringComparer.Ordinal)
+            .ThenBy(e => e.Name, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(e => e.Project is not null)
+            .ThenBy(e => e.Project, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
         return new SkillPullRunResult(SkillPullRunFailure.None, null, registry, entries);
     }
 
