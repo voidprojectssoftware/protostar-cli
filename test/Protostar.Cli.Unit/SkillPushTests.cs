@@ -275,6 +275,35 @@ public sealed class SkillPushServiceTests : IDisposable
         Assert.Equal(0, api.MetaCalls);
     }
 
+    [Fact]
+    public async Task A_file_with_a_padded_name_fails_the_skill_before_upload_with_a_clear_message()
+    {
+        if (OperatingSystem.IsWindows())
+            return; // Windows strips a trailing space from a file name, so such a file cannot exist there.
+
+        var skill = Skill("alpha");
+        File.WriteAllText(Path.Combine(skill.Path, "notes.md "), "x");
+        var (sut, api) = Build([skill], Session());
+
+        var result = await sut.PushAsync(Request(), CancellationToken.None);
+
+        var outcome = Assert.Single(result.Entries).Outcome;
+        Assert.Equal(SkillPushStatus.Failed, outcome.Status);
+        Assert.Contains("starts or ends with whitespace", outcome.Message);
+        Assert.Empty(api.Pushed);
+    }
+
+    [Fact]
+    public async Task A_successful_push_records_the_skill_name_in_the_ledger()
+    {
+        var skill = Skill("alpha");
+        var (sut, _) = Build([skill], Session());
+
+        await sut.PushAsync(Request(), CancellationToken.None);
+
+        Assert.Equal("alpha", _ledger.Get(new Uri(Registry), skill.Path)!.Name);
+    }
+
     internal sealed class FakeLedger : ISkillLedger
     {
         private readonly Dictionary<string, SkillLedgerEntry> _entries = [];
@@ -313,6 +342,23 @@ public sealed class SkillPushServiceTests : IDisposable
         {
             Pushed.Add((name, accessToken, files));
             return Task.FromResult(Outcomes.GetValueOrDefault(name) ?? new SkillPushOutcome(SkillPushStatus.Created, 1, null));
+        }
+
+        public List<RegistrySkill> Skills { get; } = [];
+        public string? ListError { get; init; }
+        public Dictionary<string, RegistrySkillContent> Contents { get; } = new(StringComparer.Ordinal);
+        public List<string> Downloaded { get; } = [];
+
+        public Task<RegistrySkillList> ListSkillsAsync(Uri registry, string accessToken, CancellationToken cancellationToken) =>
+            Task.FromResult(ListError is null ? new RegistrySkillList(Skills, null) : new RegistrySkillList(null, ListError));
+
+        public Task<RegistrySkillDownload> GetSkillFilesAsync(
+            Uri registry, string accessToken, string name, int? version, CancellationToken cancellationToken)
+        {
+            Downloaded.Add(name);
+            return Task.FromResult(Contents.TryGetValue(name, out var content)
+                ? new RegistrySkillDownload(content, null)
+                : new RegistrySkillDownload(null, "not found"));
         }
     }
 }
@@ -367,6 +413,19 @@ public sealed class SkillFileReaderTests : IDisposable
         Write("SKILL.md");
         Write(Path.Combine(".git", "HEAD"));
         Write(Path.Combine("node_modules", "pkg", "index.js"));
+
+        var files = SkillFileReader.Read(_root);
+
+        Assert.Equal("SKILL.md", Assert.Single(files).RelativePath);
+    }
+
+    [Fact]
+    public void Skips_a_file_with_an_ignored_name_such_as_a_submodule_git_file()
+    {
+        // The registry refuses these names at push, so reading one would fail the whole skill.
+        Write("SKILL.md");
+        Write(".git", "gitdir: ../.git/modules/alpha");
+        Write(Path.Combine("lib", "node_modules"), "x");
 
         var files = SkillFileReader.Read(_root);
 

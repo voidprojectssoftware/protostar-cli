@@ -30,6 +30,7 @@ services.AddSingleton(TimeProvider.System);
 services.AddSingleton<ISessionSyncService, SessionSyncService>();
 services.AddSingleton<ISkillLedger, SkillLedger>();
 services.AddSingleton<ISkillPushService, SkillPushService>();
+services.AddSingleton<ISkillPullService, SkillPullService>();
 services.AddSingleton<ICaptureService, CaptureService>();
 
 // Harnesses and their collaborators live in the container too: register one IHarness per harness
@@ -59,10 +60,14 @@ app.Configure(config =>
         .IsHidden();
     config.AddBranch("skills", skills =>
     {
-        skills.SetDescription("List skills on this machine, or back them up to the registry.");
+        skills.SetDescription("List skills on this machine, back them up to the registry, or pull them from it.");
         skills.SetDefaultCommand<SkillsCommand>();
         skills.AddCommand<SkillsPushCommand>("push")
             .WithDescription("Back up local skills to the registry (all, or the named ones).");
+        skills.AddCommand<SkillsRemoteCommand>("remote")
+            .WithDescription("List the skills in the registry and whether each is on this machine.");
+        skills.AddCommand<SkillsPullCommand>("pull")
+            .WithDescription("Install or update skills from the registry (all, or the named ones).");
     });
 
     config.AddBranch("sessions", sessions =>

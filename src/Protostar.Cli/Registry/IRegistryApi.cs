@@ -32,7 +32,54 @@ internal interface IRegistryApi
         string name,
         IReadOnlyList<SkillUploadFile> files,
         CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Lists the caller's skills from <c>GET /v1/skills</c>, each described by its current version.
+    /// </summary>
+    Task<RegistrySkillList> ListSkillsAsync(Uri registry, string accessToken, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Downloads one version of the caller's skill, files included, from <c>GET /v1/skills/{name}/files</c>.
+    /// </summary>
+    /// <param name="registry">The registry base URL.</param>
+    /// <param name="accessToken">A current bearer token for that registry.</param>
+    /// <param name="name">The skill's exact name, as <see cref="ListSkillsAsync"/> reported it.</param>
+    /// <param name="version">The version to fetch; <c>null</c> for the current version.</param>
+    /// <param name="cancellationToken">Cancels the download.</param>
+    Task<RegistrySkillDownload> GetSkillFilesAsync(
+        Uri registry,
+        string accessToken,
+        string name,
+        int? version,
+        CancellationToken cancellationToken);
 }
+
+/// <summary>One skill in the caller's registry, described by its current version.</summary>
+/// <param name="Name">The skill's name, unique per user.</param>
+/// <param name="Description">The current version's description; <c>null</c> when omitted.</param>
+/// <param name="Version">The current version number.</param>
+/// <param name="ContentHash">The registry's content hash; compare with <c>SkillFileReader.RegistryHash</c>.</param>
+/// <param name="UpdatedAt">When the current version was pushed.</param>
+internal sealed record RegistrySkill(string Name, string? Description, int Version, string ContentHash, DateTimeOffset UpdatedAt);
+
+/// <summary>The result of listing skills: the skills, or why they could not be listed.</summary>
+/// <param name="Skills">The caller's skills; <c>null</c> when the request failed.</param>
+/// <param name="Error">Why the request failed; <c>null</c> on success.</param>
+internal sealed record RegistrySkillList(IReadOnlyList<RegistrySkill>? Skills, string? Error);
+
+/// <summary>One version of a skill with every file's bytes.</summary>
+internal sealed record RegistrySkillContent(string Name, int Version, string ContentHash, IReadOnlyList<RegistrySkillFile> Files);
+
+/// <summary>One downloaded file.</summary>
+/// <param name="RelativePath">The path relative to the skill root, as the registry sent it (not yet validated).</param>
+/// <param name="Sha256">The registry's hex SHA-256 of <paramref name="Content"/>.</param>
+/// <param name="Content">The file's bytes.</param>
+internal sealed record RegistrySkillFile(string RelativePath, string Sha256, byte[] Content);
+
+/// <summary>The result of downloading a skill version.</summary>
+/// <param name="Content">The version; <c>null</c> when the request failed.</param>
+/// <param name="Error">Why the request failed; <c>null</c> on success.</param>
+internal sealed record RegistrySkillDownload(RegistrySkillContent? Content, string? Error);
 
 /// <summary>One file of a skill being uploaded.</summary>
 /// <param name="RelativePath">The path relative to the skill's root, with <c>/</c> separators.</param>

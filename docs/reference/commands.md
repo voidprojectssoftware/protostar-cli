@@ -87,8 +87,11 @@ each skill you see one of:
   unreachable).
 
 Every file in the skill's directory is uploaded, except version control and
-dependency folders (`.git`, `node_modules`, `__pycache__`, `.venv`) and symbolic
-links. The exit code is `0` when every skill reached the registry, otherwise `1`.
+dependency folders (`.git`, `.hg`, `.svn`, `node_modules`, `__pycache__`, `.venv`),
+files with those names, and symbolic links. A skill with a file or folder whose name
+starts or ends with whitespace fails before upload, because the registry does not
+accept such names; rename it and push again. The registry also refuses a skill whose
+`SKILL.md` name contains `/` or `\`. The exit code is `0` when every skill reached the registry, otherwise `1`.
 
 Takes the same options as `protostar skills`, plus:
 
@@ -101,6 +104,71 @@ protostar remembers what it last backed up to each registry in
 `~/.protostar/skill-ledger.json`, so a skill that has not changed is reported as
 unchanged without contacting the registry. Use `--force` if the registry has lost
 something the ledger says it has.
+
+### `protostar skills remote`
+
+List the skills in your registry and how each one compares with this machine. You
+must be [signed in](../get-started/authenticate.md) first. Nothing is downloaded or
+written. Each skill shows its latest registry version and one of:
+
+- **up to date**: this machine has exactly the registry's latest version.
+- **not installed**: the skill is in the registry but not on this machine.
+- **update available (have vN)**: this machine has an older version that has not
+  been edited here since it was last pushed or pulled.
+- **local changes**: this machine's copy differs from the registry and may hold
+  work done here (or protostar has no record of it). `pull` will not overwrite it
+  without `--force`.
+- **only here (not backed up)**: the skill is on this machine but not in the
+  registry. Back it up with `protostar skills push`.
+- **conflict**: the skill cannot be pulled safely, and the reason is shown. Either
+  a folder with the skill's name already exists and is not this skill (a skill with
+  another name, a folder with no `SKILL.md`, or the same name in different case), or
+  your registry holds two skills whose names differ only by case. `pull` skips it,
+  even with `--force`. Move or rename the folder, or rename one of the skills.
+
+Skills are compared with each harness's global skills folder (for Claude Code,
+`~/.claude/skills`). Project skills are not compared.
+
+| Option | Description |
+|---|---|
+| `-H, --harness <ID>` | Only compare with this harness. |
+| `--harness-home <DIR>` | Override the harness config root. |
+| `--registry <URL>` | Registry to read. Defaults to `PROTOSTAR_REGISTRY_URL`, then `https://localhost:7443`. |
+
+### `protostar skills pull [NAME...]`
+
+Install or update skills from your registry on this machine. With no names, every
+skill in the registry is pulled, which is the quick way to set up a new machine;
+otherwise only the named ones (an exact match first, then ignoring case).
+
+A skill that is not installed is written to the harness's global skills folder
+(`~/.claude/skills/<name>` for Claude Code). A skill that is installed is updated in
+place: files the new version dropped are deleted, and version control and
+dependency folders inside it (such as `.git`) are left alone. A skill with **local
+changes** is never overwritten unless you pass `--force`. Back those changes up with
+`protostar skills push` instead if you want to keep them. A **conflict** is never
+written, even with `--force`: that flag overwrites your edits to the skill, never an
+unrelated folder.
+
+Before anything is written, every file is checked against the checksum the registry
+sent. A path that would land outside the skill folder, pass through a symbolic
+link, go inside a folder protostar never reads (such as `.git` or `node_modules`),
+or have a name that starts or ends with whitespace fails the skill. So does a skill
+folder that is itself a symbolic link: pull into the folder it points to instead. After a pull, the ledger records the installed
+content, so the capture hook does not push it straight back.
+
+The registry does not store file permissions. An updated file keeps its existing
+permissions, and a new file that starts with `#!` is made executable for you.
+
+The exit code is `0` unless a skill failed to download or write, or was skipped as a
+conflict. Skills kept because of local changes do not count as failures.
+
+| Option | Description |
+|---|---|
+| `-H, --harness <ID>` | Only install into this harness. |
+| `--harness-home <DIR>` | Override the harness config root. |
+| `--registry <URL>` | Registry to pull from. Defaults to `PROTOSTAR_REGISTRY_URL`, then `https://localhost:7443`. |
+| `--force` | Overwrite skills that have local changes. Never overrides a conflict. |
 
 ## `protostar auth`
 

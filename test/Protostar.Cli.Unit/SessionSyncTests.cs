@@ -334,6 +334,12 @@ public sealed class SessionSyncServiceTests : IDisposable
         public Task<SkillPushOutcome> PushSkillAsync(Uri registry, string accessToken, string name, IReadOnlyList<SkillUploadFile> files, CancellationToken cancellationToken) =>
             throw new NotSupportedException();
 
+        public Task<RegistrySkillList> ListSkillsAsync(Uri registry, string accessToken, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
+        public Task<RegistrySkillDownload> GetSkillFilesAsync(Uri registry, string accessToken, string name, int? version, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
         public Task<ApiResult<bool>> RegisterMachineAsync(Uri registry, string accessToken, Guid id, string name, string operatingSystem, CancellationToken cancellationToken)
         {
             Calls++;

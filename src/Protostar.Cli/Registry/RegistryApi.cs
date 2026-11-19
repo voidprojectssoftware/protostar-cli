@@ -77,6 +77,60 @@ internal sealed partial class RegistryApi : IRegistryApi, IDisposable
         }
     }
 
+    /// <inheritdoc />
+    public async Task<RegistrySkillList> ListSkillsAsync(Uri registry, string accessToken, CancellationToken cancellationToken)
+    {
+        var (body, error) = await GetJsonAsync<ListResponse>(new Uri(registry, "/v1/skills"), accessToken, cancellationToken);
+        if (body?.Skills is not { } skills)
+            return new RegistrySkillList(null, error ?? "The registry sent an unreadable skill list.");
+
+        return new RegistrySkillList(
+            skills.Where(s => s.Name is not null && s.ContentHash is not null)
+                .Select(s => new RegistrySkill(s.Name!, s.Description, s.Version, s.ContentHash!, s.UpdatedAt))
+                .ToList(),
+            null);
+    }
+
+    /// <inheritdoc />
+    public async Task<RegistrySkillDownload> GetSkillFilesAsync(
+        Uri registry, string accessToken, string name, int? version, CancellationToken cancellationToken)
+    {
+        var path = $"/v1/skills/{Uri.EscapeDataString(name)}/files" + (version is { } v ? $"?version={v}" : string.Empty);
+        var (body, error) = await GetJsonAsync<FilesResponse>(new Uri(registry, path), accessToken, cancellationToken);
+        if (body is not { Name: not null, ContentHash: not null, Files: not null })
+            return new RegistrySkillDownload(null, error ?? "The registry sent an unreadable skill.");
+
+        var files = body.Files
+            .Select(f => new RegistrySkillFile(f.Path ?? string.Empty, f.Sha256 ?? string.Empty, f.Content ?? []))
+            .ToList();
+        return new RegistrySkillDownload(new RegistrySkillContent(body.Name, body.Version, body.ContentHash, files), null);
+    }
+
+    // An authenticated GET that reads a JSON body, turning every failure into a message instead of throwing.
+    private async Task<(T? Body, string? Error)> GetJsonAsync<T>(Uri url, string accessToken, CancellationToken cancellationToken)
+        where T : class
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Get, url);
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
+
+        try
+        {
+            using var response = await _http.SendAsync(request, cancellationToken);
+            if (response.IsSuccessStatusCode)
+                return (await ReadAsync<T>(response, cancellationToken), null);
+
+            var problem = await ReadAsync<ProblemResponse>(response, cancellationToken);
+            var reason = problem?.Title ?? problem?.Detail;
+            return response.StatusCode == HttpStatusCode.Unauthorized
+                ? (null, reason ?? "The registry rejected the session. Run `protostar auth login`.")
+                : (null, reason ?? $"The registry returned {(int)response.StatusCode}.");
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException && !cancellationToken.IsCancellationRequested)
+        {
+            return (null, $"Could not reach the registry: {ex.Message}");
+        }
+    }
+
     // 201 is a new version and 200 an unchanged push, both carrying the push body. Any 4xx is the
     // registry refusing this skill (its problem title says why); anything else is a failure to retry.
     private static async Task<SkillPushOutcome> ToOutcomeAsync(HttpResponseMessage response, CancellationToken cancellationToken)
@@ -122,6 +176,35 @@ internal sealed partial class RegistryApi : IRegistryApi, IDisposable
     {
         [JsonPropertyName("status")] public string? Status { get; init; }
         [JsonPropertyName("version")] public int? Version { get; init; }
+    }
+
+    private sealed record ListResponse
+    {
+        [JsonPropertyName("skills")] public List<ListItem>? Skills { get; init; }
+    }
+
+    private sealed record ListItem
+    {
+        [JsonPropertyName("name")] public string? Name { get; init; }
+        [JsonPropertyName("description")] public string? Description { get; init; }
+        [JsonPropertyName("version")] public int Version { get; init; }
+        [JsonPropertyName("contentHash")] public string? ContentHash { get; init; }
+        [JsonPropertyName("updatedAt")] public DateTimeOffset UpdatedAt { get; init; }
+    }
+
+    private sealed record FilesResponse
+    {
+        [JsonPropertyName("name")] public string? Name { get; init; }
+        [JsonPropertyName("version")] public int Version { get; init; }
+        [JsonPropertyName("contentHash")] public string? ContentHash { get; init; }
+        [JsonPropertyName("files")] public List<FileItem>? Files { get; init; }
+    }
+
+    private sealed record FileItem
+    {
+        [JsonPropertyName("path")] public string? Path { get; init; }
+        [JsonPropertyName("sha256")] public string? Sha256 { get; init; }
+        [JsonPropertyName("content")] public byte[]? Content { get; init; }
     }
 
     private sealed record ProblemResponse
