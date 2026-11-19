@@ -69,3 +69,20 @@ signature. Inherit in the right direction: the interface or base type owns the c
 implementation or override carries a bare `<inheritdoc />`, which auto-resolves to the member it implements
 (no `cref` needed). Reserve `<inheritdoc cref="..."/>` for links the compiler can't infer, such as a
 sync/async twin.
+
+## Process
+
+Work arrives as GitHub issues (board: voidprojectssoftware project #1, "Protostar"). Before working one,
+read `docs/process/working-an-issue.md` (branches, commits, PRs, and who merges) and
+`docs/process/review.md` (what "done" means: three lenses).
+
+Agents never merge. PRs land only through `node scripts/merge-pr.mjs <n>`, which refuses unless the
+required checks are green on an up-to-date branch.
+
+Enforcement layers (`node scripts/check-setup.mjs` reports them):
+
+- `scripts/merge-pr.mjs`: the sanctioned merge, refuses red or stale checks.
+- `scripts/guard-merge.mjs`: PreToolUse hook in `.claude/settings.json`, denies raw merges and pushes to
+  `main` in sessions that loaded it.
+- `scripts/check-main-provenance.mjs`: run by `.github/workflows/provenance.yml` on every push to `main`,
+  fails when something landed outside the above.
