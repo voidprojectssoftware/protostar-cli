@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using Protostar.Cli.Capture;
 using Protostar.Cli.Harness;
 using Protostar.Cli.Registry;
 using Protostar.Cli.Sessions;
@@ -27,6 +28,10 @@ internal class LocalSessionsSettings : SessionsSettings
 }
 
 /// <summary><c>protostar sessions push</c>: backs up every session transcript on this machine.</summary>
+/// <remarks>
+/// With the hidden <c>--session</c> option it is the background push a capture hook starts (see
+/// <see cref="BackgroundPush"/>): one session, no progress display, and problems go to <c>capture.log</c>.
+/// </remarks>
 internal sealed class SessionsPushCommand : AsyncCommand<SessionsPushCommand.Settings>
 {
     private readonly ISessionSyncService _sessions;
@@ -38,10 +43,27 @@ internal sealed class SessionsPushCommand : AsyncCommand<SessionsPushCommand.Set
         _catalog = catalog;
     }
 
-    public sealed class Settings : LocalSessionsSettings;
+    public sealed class Settings : LocalSessionsSettings
+    {
+        [CommandOption("--session <PATH>", IsHidden = true)]
+        [Description("Push only this session transcript (and its subagents), detached from the terminal. Started by the capture hooks.")]
+        public string? Session { get; init; }
+
+        [CommandOption("--throttle <SECONDS>", IsHidden = true)]
+        [Description("With --session: skip a transcript whose last push started less than this many seconds ago.")]
+        public int? Throttle { get; init; }
+    }
 
     protected override async Task<int> ExecuteAsync(CommandContext context, Settings settings, CancellationToken cancellation)
     {
+        if (settings.Session is { } session)
+        {
+            BackgroundPush.DetachFromTerminal();
+            var throttle = settings.Throttle is { } seconds ? TimeSpan.FromSeconds(seconds) : (TimeSpan?)null;
+            var one = new SessionSyncRequest(settings.Registry, settings.Harness, settings.HarnessHome, session, null, throttle);
+            return CapturePresenter.RenderBackgroundPush(await _sessions.SyncAsync(one, null, cancellation), Console.Out, CaptureLog.Append);
+        }
+
         var request = new SessionSyncRequest(settings.Registry, settings.Harness, settings.HarnessHome, null, null, null);
         var result = await SessionsPresenter.WithProgressAsync(progress => _sessions.SyncAsync(request, progress, cancellation));
         return SessionsPresenter.RenderSync(result, _catalog);

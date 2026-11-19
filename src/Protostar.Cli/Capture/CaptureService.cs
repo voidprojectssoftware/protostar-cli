@@ -1,5 +1,4 @@
 using System.Text.Json;
-using Protostar.Cli.Sessions;
 using Protostar.Cli.Skills;
 
 namespace Protostar.Cli.Capture;
@@ -13,32 +12,34 @@ namespace Protostar.Cli.Capture;
 /// <c>tool_input.skill</c> (the skill name) and <c>cwd</c> (where project skills are found). The push
 /// goes through <see cref="ISkillPushService"/>, whose ledger makes an unchanged skill cost no network
 /// call. Plugin skills (<c>plugin:name</c>) are not local user skills and are ignored.
+/// <c>Stop</c> and <c>SessionEnd</c> hand the session to <see cref="IBackgroundPush"/> and return at once.
 /// </remarks>
 internal sealed class CaptureService : ICaptureService
 {
-    /// <summary>Time allowed for uploading after each reply; the harness waits for the hook.</summary>
-    internal static readonly TimeSpan StopBudget = TimeSpan.FromSeconds(3);
-
-    /// <summary>Minimum time between syncs of one session from <c>Stop</c> hooks.</summary>
-    internal static readonly TimeSpan StopThrottle = TimeSpan.FromSeconds(20);
-
-    /// <summary>Time allowed for the final upload when a session ends.</summary>
-    internal static readonly TimeSpan SessionEndBudget = TimeSpan.FromSeconds(5);
+    /// <summary>Minimum time between pushes of one session started by <c>Stop</c> hooks.</summary>
+    /// <remarks>
+    /// <c>Stop</c> fires once per reply. The push runs in the background, so the window costs the user no time
+    /// either way; what it bounds is the work: at most two pushes a minute per session, each a process start and
+    /// a few requests, however fast the replies come. 30 seconds is also the most of a live session a crash can
+    /// lose beyond the reply in flight, which is a fair trade for a backup that is otherwise free. A normal end
+    /// is covered by <c>SessionEnd</c>, which is never throttled.
+    /// </remarks>
+    internal static readonly TimeSpan StopThrottle = TimeSpan.FromSeconds(30);
 
     private readonly ISkillPushService _push;
-    private readonly ISessionSyncService _sessions;
+    private readonly IBackgroundPush _background;
 
-    public CaptureService(ISkillPushService push, ISessionSyncService sessions)
+    public CaptureService(ISkillPushService push, IBackgroundPush background)
     {
         _push = push;
-        _sessions = sessions;
+        _background = background;
     }
 
     /// <inheritdoc />
     public async Task<CaptureResult> HandleAsync(string hookEvent, string payload, CancellationToken cancellationToken)
     {
         if (hookEvent is "Stop" or "SessionEnd")
-            return await SyncSessionAsync(hookEvent, payload, cancellationToken);
+            return HandOffSession(hookEvent, payload);
 
         if (!string.Equals(hookEvent, "PostToolUse", StringComparison.Ordinal))
             return Ignore(null, $"{hookEvent} is not acted on yet.");
@@ -66,29 +67,23 @@ internal sealed class CaptureService : ICaptureService
         }
     }
 
-    // Syncs the session named by the payload's transcript_path (and its subagents), within a small time budget.
-    // Stop fires after every reply, so it is throttled; SessionEnd always runs.
-    private async Task<CaptureResult> SyncSessionAsync(string hookEvent, string payload, CancellationToken cancellationToken)
+    // Hands the session named by the payload's transcript_path (and its subagents) to a detached push, so the
+    // harness is not kept waiting for the upload. Stop fires after every reply, so it is throttled; SessionEnd
+    // always runs.
+    private CaptureResult HandOffSession(string hookEvent, string payload)
     {
         if (ReadString(payload, "transcript_path") is not { } transcriptPath || !File.Exists(transcriptPath))
             return Ignore(null, "No transcript to back up.");
 
         try
         {
-            var stop = hookEvent == "Stop";
-            var request = new SessionSyncRequest(
-                Registry: null, HarnessId: null, HarnessHome: null, SessionPath: transcriptPath,
-                Budget: stop ? StopBudget : SessionEndBudget, Throttle: stop ? StopThrottle : null);
-            var result = await _sessions.SyncAsync(request, progress: null, cancellationToken);
-            return new CaptureResult(CaptureAction.SessionBackedUp, null, null, null, result);
-        }
-        catch (OperationCanceledException)
-        {
-            return new CaptureResult(CaptureAction.Failed, null, null, "Timed out backing up the session.");
+            _background.Start(transcriptPath, hookEvent == "Stop" ? StopThrottle : null);
+            return new CaptureResult(CaptureAction.SessionHandedOff, null, null, null);
         }
         catch (Exception ex)
         {
-            return new CaptureResult(CaptureAction.Failed, null, null, ex.Message);
+            // Process start failures surface as several exception types; none may fail the harness.
+            return new CaptureResult(CaptureAction.Failed, null, null, $"Could not start the session backup: {ex.Message}");
         }
     }
 

@@ -31,6 +31,7 @@ services.AddSingleton<ISessionSyncService, SessionSyncService>();
 services.AddSingleton<ISkillLedger, SkillLedger>();
 services.AddSingleton<ISkillPushService, SkillPushService>();
 services.AddSingleton<ISkillPullService, SkillPullService>();
+services.AddSingleton<IBackgroundPush, BackgroundPush>();
 services.AddSingleton<ICaptureService, CaptureService>();
 
 // Harnesses and their collaborators live in the container too: register one IHarness per harness

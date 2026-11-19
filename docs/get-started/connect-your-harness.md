@@ -24,23 +24,25 @@ grow — when more harnesses are supported, `install-hooks` will detect them too
 ## What "hooks" are
 
 A harness like Claude Code can run a command when certain events happen. Protostar
-registers two of them in your harness's `settings.json`:
+registers four of them in your harness's `settings.json`:
 
 | Hook event | When it fires | What protostar does |
 |---|---|---|
-| `PostToolUse` (matching the `Skill` tool) | Right after you use a skill | Captures the event — the trigger for the whole loop |
+| `PostToolUse` (matching the `Skill` tool) | Right after you use a skill | Backs the skill up if it changed |
+| `Stop` | After each reply | Backs up the new part of the session, at most once every 30 seconds |
+| `SessionEnd` | When the session ends | Backs up the rest of the session |
 | `SessionStart` | When a new harness session begins | Reserved for the upcoming suggestion / push-back loop (does nothing yet) |
 
-Both hooks call `protostar capture`, which reads the event and acknowledges it.
-The hooks are designed to be invisible in normal use: capture **never blocks the
-harness** and always exits cleanly, so it cannot slow down or break your session.
+Every hook calls `protostar capture`. The hooks are designed to be invisible in
+normal use: capture **never blocks the harness** and always exits cleanly, so it
+cannot slow down or break your session. The session hooks do not upload anything
+themselves: they start a background `protostar sessions push` for the session and
+return at once.
 
-:::info What capture does today
-Right now `capture` acknowledges each event (you can see it in your harness's
-transcript) but does not yet upload anything. **Syncing captures to the registry**
-is not built yet. Installing the hooks now means you are wired up the moment sync
-ships — nothing to redo.
-:::
+If you are offline, nothing is lost: what has not reached the registry stays
+pending on your machine, and the next sync (the next reply, or
+`protostar sessions push`) sends it. Problems you may need to act on, such as not
+being signed in, are written to `~/.protostar/capture.log`.
 
 ## Install the hooks
 

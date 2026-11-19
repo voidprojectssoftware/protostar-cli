@@ -207,13 +207,18 @@ is documented here only for completeness. You should not need to run it by hand.
 When Claude Code uses one of your skills, `capture` backs that skill up to the
 registry if it changed since its last backup, the same way
 [`skills push`](#protostar-skills-push-name) does for one skill. An unchanged skill
-costs no network call. Plugin skills (`plugin:name`) are not backed up. Other hook
-events are acknowledged and ignored for now.
+costs no network call. Plugin skills (`plugin:name`) are not backed up.
+
+On `Stop` (after each reply) and `SessionEnd`, `capture` starts a background
+`protostar sessions push` for that session and returns at once, without waiting for
+the upload. A `Stop` push is skipped when the session's last push started less
+than 30 seconds ago; `SessionEnd` always pushes. Only one push of a transcript
+runs at a time. Other hook events are acknowledged and ignored for now.
 
 The hook never blocks or fails your session: it gives up after 15 seconds and
 always exits `0`. It writes one line to the session transcript, and problems you
 may need to act on (not signed in, registry unreachable, skill refused) are also
-appended to `~/.protostar/capture.log`.
+appended to `~/.protostar/capture.log`, by the hook or by the background push.
 
 | Option | Description |
 |---|---|

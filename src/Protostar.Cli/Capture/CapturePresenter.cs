@@ -5,7 +5,7 @@ using Protostar.Cli.Skills;
 namespace Protostar.Cli.Capture;
 
 /// <summary>
-/// The output of <c>protostar capture</c>: one plain line, and the exit code, which is always 0.
+/// The output of <c>protostar capture</c> and of the background session push it starts: one plain line, and exit code 0.
 /// </summary>
 /// <remarks>
 /// For a successful hook Claude Code shows stdout in the transcript only, never to the model, so the
@@ -32,8 +32,10 @@ internal static class CapturePresenter
         var prefix = $"protostar capture ({hookEvent})";
         if (result.Action == CaptureAction.Ignored)
             return $"{prefix}: nothing to do.";
-        if (result.Action == CaptureAction.SessionBackedUp && result.Sessions is { } sessions)
-            return $"{prefix}: {DescribeSessions(sessions)}";
+        if (result.Action == CaptureAction.SessionHandedOff)
+            return $"{prefix}: backing up the session in the background.";
+        if (result.Action == CaptureAction.Failed && result.SkillName is null)
+            return $"{prefix}: {result.Message}";
         if (result.Action == CaptureAction.Failed || result.Push is null)
             return $"{prefix}: could not back up skill '{result.SkillName}': {result.Message}";
 
@@ -60,7 +62,23 @@ internal static class CapturePresenter
             : $"{line} Conflict: the {conflict.Skill.Scope.ToString().ToLowerInvariant()} copy at {conflict.Skill.Path}: {conflict.Outcome.Message}";
     }
 
-    private static string DescribeSessions(SessionSyncResult sync)
+    /// <summary>Writes the line for a background session push, logs it when it needs attention, and returns 0.</summary>
+    /// <remarks>
+    /// The push was started by a hook and nobody sees its output, so the line goes to the log when something is
+    /// wrong. Exit code 0 whatever happened: the hook that started it has long since returned.
+    /// </remarks>
+    public static int RenderBackgroundPush(SessionSyncResult result, TextWriter output, Action<string> log)
+    {
+        var line = $"protostar sessions push (background): {DescribeSessions(result)}";
+        output.WriteLine(line);
+
+        if (result.Failure != SessionSyncFailure.None || result.Transcripts.Any(t => t.Status == TranscriptSyncStatus.Failed))
+            log($"{DateTimeOffset.UtcNow:O} {line}");
+
+        return 0;
+    }
+
+    internal static string DescribeSessions(SessionSyncResult sync)
     {
         if (sync.Failure != SessionSyncFailure.None)
         {
@@ -78,7 +96,7 @@ internal static class CapturePresenter
         if (failed is not null)
             return $"session not fully backed up: {failed.Message}";
         if (sync.Transcripts.Any(t => t.Status is TranscriptSyncStatus.Partial))
-            return $"backed up {SessionsPresenter.Bytes(sent)} of the session; the rest goes after the next reply.";
+            return $"backed up {SessionsPresenter.Bytes(sent)} of the session; the rest goes next time.";
         if (sync.Transcripts.FirstOrDefault(t => t.Status is TranscriptSyncStatus.Skipped) is { } skipped)
             return sent > 0
                 ? $"backed up {SessionsPresenter.Bytes(sent)} of the session; {SessionsPresenter.Bytes(skipped.BytesPending)} waits: {skipped.Message}"
@@ -97,8 +115,6 @@ internal static class CapturePresenter
     // Worth a log line: anything other than success, ignore, or "not a local skill".
     private static bool NeedsAttention(CaptureResult result) =>
         result.Action == CaptureAction.Failed ||
-        (result.Sessions is { } sessions &&
-         (sessions.Failure != SessionSyncFailure.None || sessions.Transcripts.Any(t => t.Status == TranscriptSyncStatus.Failed))) ||
         (result.Push is { } push &&
          (push.Failure is not (SkillPushRunFailure.None or SkillPushRunFailure.SkillNotFound) ||
           push.Entries.Any(e => e.Outcome.Status is SkillPushStatus.Refused or SkillPushStatus.Failed or SkillPushStatus.Conflict)));

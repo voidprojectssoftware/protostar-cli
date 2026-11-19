@@ -168,10 +168,9 @@ internal sealed class SessionSyncService : ISessionSyncService
                 continue;
             }
 
-            if (request.Throttle is { } throttle && plan.Entry is { Registered: true, LastAttemptAt: { } last } &&
-                _time.GetUtcNow() - last < throttle)
+            if (Throttled(request, plan))
             {
-                outcomes.Add(Skipped(transcript, plan, "Synced moments ago; waiting for the throttle window."));
+                outcomes.Add(Skipped(transcript, plan, ThrottledMessage));
                 continue;
             }
 
@@ -194,6 +193,21 @@ internal sealed class SessionSyncService : ISessionSyncService
             if (held is null)
             {
                 outcomes.Add(Skipped(transcript, plan, "Another protostar process is uploading it."));
+                continue;
+            }
+
+            // Plan again under the lock: another process (a push from an earlier hook) may have uploaded since,
+            // and uploading from the stale plan would write its old position back over the ledger.
+            plan = Plan(registry, transcript);
+            if (plan.UpToDate)
+            {
+                outcomes.Add(new TranscriptSyncOutcome(transcript, TranscriptSyncStatus.UpToDate, 0, 0, false, null));
+                continue;
+            }
+
+            if (Throttled(request, plan))
+            {
+                outcomes.Add(Skipped(transcript, plan, ThrottledMessage));
                 continue;
             }
 
@@ -264,6 +278,12 @@ internal sealed class SessionSyncService : ISessionSyncService
         var upToDate = size == entry.Length || !HasCompleteLineAfter(transcript.Path, entry.Length);
         return new UploadPlan(entry, size, upToDate, false);
     }
+
+    private const string ThrottledMessage = "Synced moments ago; waiting for the throttle window.";
+
+    private bool Throttled(SessionSyncRequest request, UploadPlan plan) =>
+        request.Throttle is { } throttle && plan.Entry is { Registered: true, LastAttemptAt: { } last } &&
+        _time.GetUtcNow() - last < throttle;
 
     private static TranscriptSyncOutcome Skipped(LocalTranscript transcript, UploadPlan plan, string reason) =>
         new(transcript, TranscriptSyncStatus.Skipped, 0, Math.Max(0, plan.Size - (plan.Rewritten ? 0 : plan.Entry?.Length ?? 0)), plan.Rewritten, reason);

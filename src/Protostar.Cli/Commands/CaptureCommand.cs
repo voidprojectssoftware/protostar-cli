@@ -1,5 +1,4 @@
 using System.ComponentModel;
-using Protostar.Cli.Auth;
 using Protostar.Cli.Capture;
 using Spectre.Console.Cli;
 
@@ -10,7 +9,7 @@ namespace Protostar.Cli.Commands;
 /// </summary>
 /// <remarks>
 /// Reads the hook's JSON payload from stdin and hands it to <see cref="ICaptureService"/>, which backs
-/// up a used skill when it changed. Bounded by <see cref="Timeout"/>, and always exits 0 so it never
+/// up a used skill when it changed, or hands a session to a background push. Bounded by <see cref="Timeout"/>, and always exits 0 so it never
 /// blocks or fails the harness.
 /// </remarks>
 internal sealed class CaptureCommand : AsyncCommand<CaptureCommand.Settings>
@@ -40,19 +39,6 @@ internal sealed class CaptureCommand : AsyncCommand<CaptureCommand.Settings>
         timeout.CancelAfter(Timeout);
 
         var result = await _capture.HandleAsync(hook, payload, timeout.Token);
-        return CapturePresenter.Render(hook, result, Console.Out, AppendLog);
-    }
-
-    private static void AppendLog(string line)
-    {
-        try
-        {
-            Directory.CreateDirectory(ProtostarPaths.ConfigDir());
-            File.AppendAllText(Path.Combine(ProtostarPaths.ConfigDir(), "capture.log"), line + Environment.NewLine);
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            // Logging is best effort; the hook must still succeed.
-        }
+        return CapturePresenter.Render(hook, result, Console.Out, CaptureLog.Append);
     }
 }
