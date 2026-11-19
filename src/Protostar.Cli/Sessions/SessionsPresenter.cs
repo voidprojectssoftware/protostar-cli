@@ -10,31 +10,73 @@ internal static class SessionsPresenter
 {
     private const int MaxRows = 40;
 
-    /// <summary>Runs <paramref name="sync"/> under a progress bar when attached to a terminal, plainly otherwise.</summary>
+    /// <summary>Runs <paramref name="sync"/> under a live progress bar on a terminal, or with a few plain lines otherwise.</summary>
+    /// <remarks>
+    /// The bar measures bytes, so it moves within a large transcript, not only between transcripts. Redirected output
+    /// (a log, a pipe, an agent's shell) gets one line once the run is planned and one per tenth of the bytes, with no
+    /// redraws, so it stays short and readable however large the history is.
+    /// </remarks>
     public static async Task<SessionSyncResult> WithProgressAsync(Func<IProgress<SessionSyncProgress>?, Task<SessionSyncResult>> sync)
     {
         if (!AnsiConsole.Profile.Capabilities.Interactive || Console.IsOutputRedirected)
-            return await sync(null);
+            return await sync(new PlainProgress());
 
         SessionSyncResult? result = null;
         await AnsiConsole.Progress()
             .AutoClear(true)
-            .Columns(new TaskDescriptionColumn(), new ProgressBarColumn(), new PercentageColumn(), new RemainingTimeColumn())
+            .Columns(
+                new TaskDescriptionColumn(), new ProgressBarColumn(), new PercentageColumn(), new DownloadedColumn(),
+                new RemainingTimeColumn(), new SpinnerColumn())
             .StartAsync(async context =>
             {
-                var task = context.AddTask("Backing up sessions");
-                var progress = new Progress<SessionSyncProgress>(p =>
+                var task = context.AddTask("Looking for sessions to back up");
+                result = await sync(new Reporter(p =>
                 {
-                    task.MaxValue = Math.Max(1, p.TranscriptsTotal);
-                    task.Value = p.TranscriptsDone;
-                    task.Description = $"Backing up sessions ({Bytes(p.BytesUploaded)} sent)";
-                });
-                result = await sync(progress);
+                    task.MaxValue = Math.Max(1, p.BytesTotal);
+                    task.Value = p.BytesDone;
+                    task.Description = $"Backing up sessions: {p.TranscriptsDone} of {p.TranscriptsTotal} transcripts";
+                }));
             });
         return result!;
     }
 
-    /// <summary>Renders a sync run and returns the exit code: 0 when everything is backed up, otherwise 1.</summary>
+    // Applies each report as it is made. Progress<T> would post them to the thread pool, where they can arrive out of
+    // order, or after the run has ended and its result has been printed.
+    private sealed class Reporter(Action<SessionSyncProgress> report) : IProgress<SessionSyncProgress>
+    {
+        public void Report(SessionSyncProgress value) => report(value);
+    }
+
+    // For redirected output: what the run will do, then a line each time another tenth of it is done.
+    private sealed class PlainProgress : IProgress<SessionSyncProgress>
+    {
+        private int _tenths = -1;
+
+        public void Report(SessionSyncProgress p)
+        {
+            if (p.TranscriptsTotal == 0)
+                return;
+
+            if (_tenths < 0)
+            {
+                _tenths = 0;
+                AnsiConsole.WriteLine($"Backing up {Count(p.TranscriptsTotal, "transcript")} ({Bytes(p.BytesTotal)}), newest first.");
+                return;
+            }
+
+            var tenths = p.BytesTotal > 0 ? (int)(10 * p.BytesDone / p.BytesTotal) : 10 * p.TranscriptsDone / p.TranscriptsTotal;
+            // The last bytes can land before the last transcript is finished with; 100% waits for that.
+            if (p.TranscriptsDone < p.TranscriptsTotal)
+                tenths = Math.Min(tenths, 9);
+            if (tenths <= _tenths)
+                return;
+            _tenths = tenths;
+            AnsiConsole.WriteLine(
+                $"{tenths * 10}%: {Bytes(p.BytesDone)} of {Bytes(p.BytesTotal)}, {p.TranscriptsDone} of {p.TranscriptsTotal} transcripts done.");
+        }
+    }
+
+    /// <summary>Renders a sync run and returns the exit code: 0 when everything is backed up, 130 when stopped by Ctrl+C, otherwise 1.</summary>
     public static int RenderSync(SessionSyncResult result, IHarnessCatalog catalog)
     {
         if (Failure(result.Failure, result.Detail, result.Registry, catalog) is { } exit)
@@ -48,7 +90,14 @@ internal static class SessionsPresenter
             table.AddColumn("Kind");
             table.AddColumn(new TableColumn("Sent").RightAligned());
             table.AddColumn("Result");
-            foreach (var t in notable.OrderBy(t => t.Status).Take(MaxRows))
+            // Failed, then partly sent, then skipped: after a large or stopped run they are the rows worth reading.
+            foreach (var t in notable.OrderBy(t => t.Status switch
+            {
+                TranscriptSyncStatus.Failed => 0,
+                TranscriptSyncStatus.Partial => 1,
+                TranscriptSyncStatus.Skipped => 2,
+                _ => 3,
+            }).Take(MaxRows))
             {
                 table.AddRow(
                     Markup.Escape(Short(t.Transcript.Key)),
@@ -79,7 +128,17 @@ internal static class SessionsPresenter
                 (unfinished > 0 ? $", [yellow]{unfinished} not finished[/]" : "") +
                 (failed > 0 ? $", [red]{failed} failed[/]" : "") + $". Registry: [grey]{authority}[/].");
 
-        return result.Complete ? 0 : 1;
+        if (result.Complete)
+        {
+            if (uploaded > 0)
+                AnsiConsole.MarkupLine("[green]Everything backed up.[/]");
+            return 0;
+        }
+
+        if (!result.Stopped)
+            return 1;
+        AnsiConsole.MarkupLine("[yellow]Stopped part way.[/] Nothing is lost: run `protostar sessions push` again to carry on.");
+        return 130;
     }
 
     /// <summary>Renders backup status and returns the exit code: 0 when fully backed up, 1 when anything is pending.</summary>
