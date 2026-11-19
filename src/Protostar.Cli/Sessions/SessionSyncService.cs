@@ -16,6 +16,13 @@ internal interface ISessionSyncService
     /// <summary>Compares the transcripts on disk with the ledger, without contacting the registry.</summary>
     SessionStatusResult Status(string? registry, string? harnessId, string? harnessHome);
 
+    /// <summary>Compares the transcripts on disk with the ledger and with what the registry actually holds. Changes nothing.</summary>
+    /// <remarks>
+    /// The registry is asked about every transcript the ledger records, in batches; each one's status then carries
+    /// <see cref="TranscriptStatus.Verified"/>, and its pending bytes count from what the registry holds.
+    /// </remarks>
+    Task<SessionStatusResult> VerifyAsync(string? registry, string? harnessId, string? harnessHome, CancellationToken cancellationToken);
+
     /// <summary>Lists the sessions the registry holds, from every machine, plus this machine's sessions not fully backed up yet.</summary>
     /// <remarks>
     /// <paramref name="query"/> filters both kinds of row. When the registry cannot be asked (not logged in, unreachable),
@@ -52,8 +59,12 @@ internal sealed record PendingBackup(long Bytes, bool InRegistry, bool FromFile,
 /// <param name="SessionPath">Sync only this session (and its subagents), as a hook names it; <c>null</c> for every transcript.</param>
 /// <param name="Budget">Stop starting new chunks after this long; <c>null</c> for no limit. Unfinished transcripts carry on next time.</param>
 /// <param name="Throttle">Skip a transcript whose last attempt was within this long; <c>null</c> to never skip.</param>
+/// <param name="Verify">
+/// Ask the registry what it holds of every transcript the ledger records, and back up again what it lost. Costs a few
+/// requests even when nothing changed, so only <c>sessions push --verify</c> sets it, never a hook.
+/// </param>
 internal sealed record SessionSyncRequest(
-    string? Registry, string? HarnessId, string? HarnessHome, string? SessionPath, TimeSpan? Budget, TimeSpan? Throttle);
+    string? Registry, string? HarnessId, string? HarnessHome, string? SessionPath, TimeSpan? Budget, TimeSpan? Throttle, bool Verify = false);
 
 /// <summary>Why a sync stopped before looking at any transcript.</summary>
 internal enum SessionSyncFailure
@@ -93,8 +104,10 @@ internal enum TranscriptSyncStatus
 /// <param name="BytesPending">Bytes on disk the registry still does not have.</param>
 /// <param name="Rewritten">Whether the file had been rewritten, so a new revision was started.</param>
 /// <param name="Message">Why it was skipped or failed.</param>
+/// <param name="Verified">What a verify found in the registry before uploading; <c>null</c> without <c>--verify</c>, or when the ledger recorded nothing to check.</param>
 internal sealed record TranscriptSyncOutcome(
-    LocalTranscript Transcript, TranscriptSyncStatus Status, long BytesUploaded, long BytesPending, bool Rewritten, string? Message);
+    LocalTranscript Transcript, TranscriptSyncStatus Status, long BytesUploaded, long BytesPending, bool Rewritten, string? Message,
+    VerifiedBackup? Verified = null);
 
 /// <summary>The result of a sync run.</summary>
 /// <param name="Stopped">Whether the run was cancelled (Ctrl+C) before it finished; what it had not sent goes next time.</param>
@@ -130,15 +143,40 @@ internal sealed record SessionSyncProgress(int TranscriptsDone, int TranscriptsT
 /// <param name="Rewritten">Whether the file no longer matches what was uploaded, so it would be uploaded again in full.</param>
 /// <param name="LastSyncedAt">When the registry last confirmed it.</param>
 /// <param name="LastModifiedAt">When the file last changed.</param>
+/// <param name="Verified">What the registry holds compared with the ledger, from <c>sessions status --verify</c>; <c>null</c> otherwise.</param>
 internal sealed record TranscriptStatus(
     LocalTranscript Transcript, long SizeOnDisk, long BytesBackedUp, long BytesPending, bool Rewritten,
-    DateTimeOffset? LastSyncedAt, DateTimeOffset LastModifiedAt);
+    DateTimeOffset? LastSyncedAt, DateTimeOffset LastModifiedAt, VerifiedBackup? Verified = null);
 
 /// <summary>Every transcript's backup state on this machine.</summary>
 internal sealed record SessionStatusResult(SessionSyncFailure Failure, string? Detail, Uri? Registry, IReadOnlyList<TranscriptStatus> Transcripts)
 {
-    public bool FullySynced => Failure == SessionSyncFailure.None && Transcripts.All(t => t.BytesPending == 0);
+    /// <summary>True when nothing is pending and no verified transcript differs from what the registry holds.</summary>
+    public bool FullySynced => Failure == SessionSyncFailure.None &&
+        Transcripts.All(t => t.BytesPending == 0 && t.Verified?.Check != BackupCheck.Diverged);
 }
+
+/// <summary>How a transcript the ledger records as backed up compares with what the registry holds of it.</summary>
+internal enum BackupCheck
+{
+    /// <summary>The registry holds the revision and length the ledger records.</summary>
+    Confirmed,
+
+    /// <summary>The registry holds none of it, typically after its rows were lost or its database reset.</summary>
+    Missing,
+
+    /// <summary>The registry holds the same revision but fewer bytes than the ledger records, as after restoring an older backup.</summary>
+    Short,
+
+    /// <summary>The registry holds more than the ledger records, or a different revision. Left alone; see <see cref="SessionSyncService"/>.</summary>
+    Diverged,
+}
+
+/// <summary>What a verify found in the registry for one transcript.</summary>
+/// <param name="Check">How it compares with the ledger.</param>
+/// <param name="Revision">The registry's revision; <c>null</c> when <see cref="BackupCheck.Missing"/>.</param>
+/// <param name="Length">The bytes the registry holds of that revision; <c>null</c> when <see cref="BackupCheck.Missing"/>.</param>
+internal sealed record VerifiedBackup(BackupCheck Check, int? Revision, long? Length);
 
 /// <summary>Production <see cref="ISessionSyncService"/>.</summary>
 /// <remarks>
@@ -218,11 +256,32 @@ internal sealed partial class SessionSyncService : ISessionSyncService
         if (!TryResolve(request.Registry, request.HarnessId, out var registry, out var harnesses, out var failure, out var detail))
             return SessionSyncResult.Fail(failure, detail, registry);
 
-        var planned = Locate(harnesses, request.HarnessHome, request.SessionPath)
+        var located = Locate(harnesses, request.HarnessHome, request.SessionPath)
             .Select(transcript => (Transcript: transcript, Plan: Plan(registry, transcript)))
             .ToList();
-        var outcomes = new List<TranscriptSyncOutcome>(planned.Count);
-        outcomes.AddRange(planned.Where(p => p.Plan.UpToDate).Select(p => UpToDate(p.Transcript)));
+        Session? session = null;
+        var outcomes = new List<TranscriptSyncOutcome>(located.Count);
+
+        // Without --verify every transcript is unchecked and planned from the ledger alone, as before.
+        var planned = located.Select(p => (p.Transcript, p.Plan, Verified: (VerifiedBackup?)null)).ToList();
+        if (request.Verify)
+        {
+            var verifying = await ConnectAndCheckAsync(registry, located, registerMachine: true, cancellationToken);
+            if (verifying.Stopped)
+                return new SessionSyncResult(SessionSyncFailure.None, null, registry, [], Stopped: true);
+            if (verifying.Failure != SessionSyncFailure.None)
+                return SessionSyncResult.Fail(verifying.Failure, verifying.Detail, registry);
+            session = verifying.Session;
+            planned = located.Select(p =>
+            {
+                var verified = verifying.Checks!.GetValueOrDefault((p.Transcript.Harness, p.Transcript.Key));
+                return (p.Transcript, Plan: AfterCheck(p.Plan, verified), Verified: verified);
+            }).ToList();
+            outcomes.AddRange(planned.Where(p => p.Verified?.Check == BackupCheck.Diverged).Select(p => LeftAlone(p.Transcript, p.Plan, p.Verified!)));
+            planned.RemoveAll(p => p.Verified?.Check == BackupCheck.Diverged);
+        }
+
+        outcomes.AddRange(planned.Where(p => p.Plan.UpToDate).Select(p => UpToDate(p.Transcript) with { Verified = p.Verified }));
 
         var work = planned
             .Where(p => !p.Plan.UpToDate)
@@ -235,10 +294,9 @@ internal sealed partial class SessionSyncService : ISessionSyncService
         progress?.Report(new SessionSyncProgress(0, work.Count, 0, bytesTotal, null));
 
         var clock = Stopwatch.StartNew();
-        Session? session = null;
         var stopped = false;
 
-        foreach (var (transcript, plan) in work)
+        foreach (var (transcript, plan, verified) in work)
         {
             if (stopped || cancellationToken.IsCancellationRequested)
             {
@@ -283,10 +341,12 @@ internal sealed partial class SessionSyncService : ISessionSyncService
 
                 var pending = plan.Pending;
                 outcome = await UploadUnderLockAsync(
-                    registry, session, transcript, request, clock,
+                    registry, session, transcript, request, verified, clock,
                     sent => progress?.Report(new SessionSyncProgress(done, work.Count, bytesDone + Math.Min(sent, pending), bytesTotal, transcript.Key)),
                     cancellationToken);
             }
+
+            outcome = outcome with { Verified = verified };
 
             outcomes.Add(outcome);
             stopped = cancellationToken.IsCancellationRequested;
@@ -301,9 +361,10 @@ internal sealed partial class SessionSyncService : ISessionSyncService
     }
 
     // Takes the transcript's lock and uploads from a fresh plan, or says why it did not.
+    // verified: what a verify found before the run started, applied again to the fresh plan.
     private async Task<TranscriptSyncOutcome> UploadUnderLockAsync(
-        Uri registry, Session session, LocalTranscript transcript, SessionSyncRequest request, Stopwatch clock, Action<long> sent,
-        CancellationToken cancellationToken)
+        Uri registry, Session session, LocalTranscript transcript, SessionSyncRequest request, VerifiedBackup? verified, Stopwatch clock,
+        Action<long> sent, CancellationToken cancellationToken)
     {
         using var held = _ledger.TryLock(registry, transcript.Harness, transcript.Key);
         if (held is null)
@@ -311,7 +372,7 @@ internal sealed partial class SessionSyncService : ISessionSyncService
 
         // Plan again under the lock: another process (a push from an earlier hook) may have uploaded since,
         // and uploading from the stale plan would write its old position back over the ledger.
-        var plan = Plan(registry, transcript);
+        var plan = AfterCheck(Plan(registry, transcript), verified);
         if (plan.UpToDate)
             return UpToDate(transcript);
 
@@ -539,7 +600,9 @@ internal sealed partial class SessionSyncService : ISessionSyncService
     private static TranscriptSyncOutcome Failed(LocalTranscript transcript, UploadPlan plan, long sent, string message) =>
         new(transcript, TranscriptSyncStatus.Failed, sent, Math.Max(0, plan.Size - (plan.Rewritten ? 0 : plan.Entry?.Length ?? 0) - sent), plan.Rewritten, message);
 
-    private async Task<(SessionSyncFailure Failure, string? Detail, Session? Session)> ConnectAsync(Uri registry, CancellationToken cancellationToken)
+    // registerMachine: false for a caller that only reads (status --verify), which then never changes the registry.
+    private async Task<(SessionSyncFailure Failure, string? Detail, Session? Session)> ConnectAsync(
+        Uri registry, CancellationToken cancellationToken, bool registerMachine = true)
     {
         var stored = await _tokens.GetSessionAsync(registry, cancellationToken);
         if (stored is null)
@@ -554,7 +617,7 @@ internal sealed partial class SessionSyncService : ISessionSyncService
             return (SessionSyncFailure.Incompatible, incompatible, null);
 
         var machine = _machine.Get();
-        if (!_machine.IsRegisteredWith(registry))
+        if (registerMachine && !_machine.IsRegisteredWith(registry))
         {
             var registered = await _api.RegisterMachineAsync(registry, stored.AccessToken, machine.Id, machine.Name, machine.OperatingSystem, cancellationToken);
             if (!registered.Ok)

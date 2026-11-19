@@ -29,6 +29,17 @@ internal interface ITranscriptApi
         Uri registry, string accessToken, string harness, string key, int revision, long offset, Guid machineId,
         ReadOnlyMemory<byte> chunk, CancellationToken cancellationToken);
 
+    /// <summary><c>POST /v1/transcripts/lookup</c>: where each transcript ends in the registry, or that it holds none of it.</summary>
+    /// <remarks>
+    /// One request per call; the caller batches, at most <see cref="MaxLookup"/> per call. The answers come back in
+    /// request order. A registry from before the endpoint existed fails with a message saying to update it.
+    /// </remarks>
+    Task<ApiResult<IReadOnlyList<TranscriptLookup>>> LookupAsync(
+        Uri registry, string accessToken, IReadOnlyList<LocalTranscript> transcripts, CancellationToken cancellationToken);
+
+    /// <summary>The most transcripts the registry answers in one lookup (its <c>TranscriptService.MaxLookup</c>).</summary>
+    const int MaxLookup = 500;
+
     /// <summary><c>GET /v1/transcripts</c>.</summary>
     Task<ApiResult<IReadOnlyList<RemoteTranscript>>> ListAsync(Uri registry, string accessToken, TranscriptListQuery query, CancellationToken cancellationToken);
 }
@@ -48,6 +59,10 @@ internal sealed record ApiResult<T>(T? Value, string? Error, bool MachineUnknown
 
 /// <summary>Where a transcript's stored content ends in the registry.</summary>
 internal sealed record TranscriptPosition(int Revision, long Length);
+
+/// <summary>What the registry holds of one transcript, as a lookup answers it.</summary>
+/// <param name="Known">Whether the registry holds it at all; when false, <paramref name="Revision"/> and <paramref name="Length"/> are <c>null</c>.</param>
+internal sealed record TranscriptLookup(string Harness, string Key, bool Known, int? Revision, long? Length);
 
 /// <summary>What happened to an appended chunk.</summary>
 internal enum AppendStatus

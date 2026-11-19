@@ -111,6 +111,9 @@ internal static class SessionsPresenter
                 AnsiConsole.MarkupLine($"[grey]... and {notable.Count - MaxRows} more.[/]");
         }
 
+        if (VerifySummary(result.Transcripts.Select(t => t.Verified)) is { } verifiedLine)
+            AnsiConsole.MarkupLine(verifiedLine);
+
         var count = result.Transcripts.Count;
         var uploaded = result.Transcripts.Count(t => t.Status == TranscriptSyncStatus.Uploaded);
         var upToDate = result.Transcripts.Count(t => t.Status == TranscriptSyncStatus.UpToDate);
@@ -149,7 +152,10 @@ internal static class SessionsPresenter
         if (Failure(result.Failure, result.Detail, result.Registry, catalog) is { } exit)
             return exit;
 
-        var pending = result.Transcripts.Where(t => t.BytesPending > 0).OrderByDescending(t => t.LastModifiedAt).ToList();
+        var pending = result.Transcripts
+            .Where(t => t.BytesPending > 0 || t.Verified?.Check == BackupCheck.Diverged)
+            .OrderByDescending(t => t.LastModifiedAt)
+            .ToList();
         var rows = all ? [.. result.Transcripts.OrderByDescending(t => t.LastModifiedAt)] : pending;
         if (rows.Count > 0)
         {
@@ -161,8 +167,11 @@ internal static class SessionsPresenter
             table.AddColumn("State");
             foreach (var t in rows.Take(MaxRows))
             {
-                var state = t.BytesPending == 0 ? "[green]backed up[/]"
+                var state = t.Verified?.Check == BackupCheck.Diverged ? "[yellow]registry differs, push leaves it alone[/]"
+                    : t.BytesPending == 0 ? (t.Verified?.Check == BackupCheck.Confirmed ? "[green]backed up, verified[/]" : "[green]backed up[/]")
                     : t.Rewritten ? "[yellow]rewritten, re-upload[/]"
+                    : t.Verified?.Check == BackupCheck.Missing ? "[red]missing from the registry[/]"
+                    : t.Verified?.Check == BackupCheck.Short ? $"[yellow]registry holds only {Bytes(t.BytesBackedUp)}[/]"
                     : t.BytesBackedUp == 0 ? "never backed up"
                     : "new content";
                 table.AddRow(
@@ -186,6 +195,8 @@ internal static class SessionsPresenter
                 : $"[yellow]{pending.Count} pending, {Bytes(pending.Sum(t => t.BytesPending))} not uploaded yet.[/]") +
             (lastSync is { } last ? $" Last backup: {Markup.Escape(Ago(last))}." : " Never backed up.");
         AnsiConsole.MarkupLine(summary);
+        if (VerifySummary(result.Transcripts.Select(t => t.Verified)) is { } verifiedLine)
+            AnsiConsole.MarkupLine(verifiedLine);
 
         return result.FullySynced ? 0 : 1;
     }
@@ -300,8 +311,26 @@ internal static class SessionsPresenter
         };
     }
 
+    // One line on what a verify found, or null when nothing was verified.
+    private static string? VerifySummary(IEnumerable<VerifiedBackup?> checks)
+    {
+        var found = checks.OfType<VerifiedBackup>().ToList();
+        if (found.Count == 0)
+            return null;
+
+        int Of(BackupCheck check) => found.Count(c => c.Check == check);
+        var (missing, shorter, diverged) = (Of(BackupCheck.Missing), Of(BackupCheck.Short), Of(BackupCheck.Diverged));
+        return $"Verified {Count(found.Count, "transcript")} against the registry: {Of(BackupCheck.Confirmed)} confirmed" +
+            (missing > 0 ? $", [red]{missing} missing[/]" : ", 0 missing") +
+            (shorter > 0 ? $", [yellow]{shorter} short[/]" : ", 0 short") +
+            (diverged > 0 ? $", [yellow]{diverged} differ (left alone)[/]" : "") + ".";
+    }
+
     internal static string Describe(TranscriptSyncOutcome t) => t.Status switch
     {
+        TranscriptSyncStatus.Uploaded when t.Verified?.Check == BackupCheck.Missing => "[green]restored[/] [grey](the registry had lost it)[/]",
+        TranscriptSyncStatus.Uploaded when t.Verified?.Check == BackupCheck.Short =>
+            $"[green]restored[/] [grey](resumed from the registry's {Bytes(t.Verified.Length ?? 0)})[/]",
         TranscriptSyncStatus.Uploaded => t.Rewritten ? "[green]backed up[/] [grey](file was rewritten; new revision)[/]" : "[green]backed up[/]",
         TranscriptSyncStatus.Partial => $"[yellow]partly backed up[/], {Bytes(t.BytesPending)} to go",
         TranscriptSyncStatus.Skipped => $"[grey]skipped:[/] {Markup.Escape(t.Message ?? "")}",
