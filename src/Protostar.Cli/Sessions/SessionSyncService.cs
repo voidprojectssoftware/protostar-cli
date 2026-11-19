@@ -142,6 +142,13 @@ internal sealed record SessionStatusResult(SessionSyncFailure Failure, string? D
 /// nothing: the next run resumes each transcript from its last accepted chunk, and a chunk the registry took but
 /// the ledger missed comes back as a <c>409</c> with the registry's position.
 /// </para>
+/// <para>
+/// A registry whose database was rebuilt or restored no longer knows this machine, though <c>machine.json</c> says
+/// it registered. When registering a transcript or appending a chunk is refused for that reason, the machine is
+/// registered again under the same id and the request retried once. The registration is an idempotent
+/// <c>PUT</c>, and the retry happens even when it fails, because a concurrent push (a burst of Stop hooks) may have
+/// registered the machine first; if the retry is refused too, the transcript fails as any other refusal does.
+/// </para>
 /// </remarks>
 internal sealed class SessionSyncService : ISessionSyncService
 {
@@ -384,6 +391,11 @@ internal sealed class SessionSyncService : ISessionSyncService
             try
             {
                 registered = await _api.RegisterTranscriptAsync(registry, session.AccessToken, transcript, session.MachineId, project, cancellationToken);
+                if (registered.MachineUnknown)
+                {
+                    await RegisterMachineAgainAsync(registry, session, cancellationToken);
+                    registered = await _api.RegisterTranscriptAsync(registry, session.AccessToken, transcript, session.MachineId, project, cancellationToken);
+                }
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
@@ -437,6 +449,11 @@ internal sealed class SessionSyncService : ISessionSyncService
             try
             {
                 result = await _api.AppendAsync(registry, session.AccessToken, transcript.Harness, transcript.Key, revision, offset, session.MachineId, chunk, cancellationToken);
+                if (result.Status == AppendStatus.UnknownMachine)
+                {
+                    await RegisterMachineAgainAsync(registry, session, cancellationToken);
+                    result = await _api.AppendAsync(registry, session.AccessToken, transcript.Harness, transcript.Key, revision, offset, session.MachineId, chunk, cancellationToken);
+                }
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
@@ -508,6 +525,17 @@ internal sealed class SessionSyncService : ISessionSyncService
         }
 
         return (SessionSyncFailure.None, null, new Session(stored.AccessToken, machine.Id));
+    }
+
+    // The registry forgot this machine. Registers it again under the same id: a new id would split its history in
+    // two. A failure is not reported here; the caller's retry either succeeds (another process registered it) or
+    // fails with the registry's own answer.
+    private async Task RegisterMachineAgainAsync(Uri registry, Session session, CancellationToken cancellationToken)
+    {
+        var machine = _machine.Get();
+        var registered = await _api.RegisterMachineAsync(registry, session.AccessToken, session.MachineId, machine.Name, machine.OperatingSystem, cancellationToken);
+        if (registered.Ok)
+            _machine.MarkRegistered(registry);
     }
 
     // ── file reading ──────────────────────────────────────────────────────────────
