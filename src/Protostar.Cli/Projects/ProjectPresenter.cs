@@ -59,6 +59,12 @@ internal static class ProjectPresenter
         var grid = Grid();
         grid.AddRow("[grey]Folder[/]", Markup.Escape(result.Facts.WorkingDirectory));
         AddProject(grid, change.Project, result.Facts);
+        if (change.Outcome != "nothingToUnlink")
+        {
+            grid.AddRow("[grey]Skills moved[/]", change.MovedSkills.Count == 0
+                ? "[grey]none[/]"
+                : Markup.Escape(string.Join(", ", change.MovedSkills)));
+        }
         AnsiConsole.Write(grid);
         return 0;
     }

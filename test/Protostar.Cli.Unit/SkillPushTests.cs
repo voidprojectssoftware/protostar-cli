@@ -413,6 +413,12 @@ public sealed class SkillPushServiceTests : IDisposable
         public SkillLedgerEntry? Get(Uri registry, string skillPath) => _entries.GetValueOrDefault(registry + "|" + skillPath);
 
         public void Record(Uri registry, string skillPath, SkillLedgerEntry entry) => _entries[registry + "|" + skillPath] = entry;
+
+        public IReadOnlyDictionary<string, SkillLedgerEntry> Entries(Uri registry) =>
+            _entries.Where(e => e.Key.StartsWith(registry + "|", StringComparison.Ordinal))
+                .ToDictionary(e => e.Key[(registry + "|").Length..], e => e.Value);
+
+        public void Forget(Uri registry, string skillPath) => _entries.Remove(registry + "|" + skillPath);
     }
 
     private sealed class FakeSkillService(IReadOnlyList<DiscoveredSkill> skills) : ISkillService
@@ -469,6 +475,39 @@ public sealed class SkillPushServiceTests : IDisposable
             return Task.FromResult(Contents.TryGetValue(Key(name, projectId), out var content)
                 ? new RegistrySkillDownload(content, null)
                 : new RegistrySkillDownload(null, "not found"));
+        }
+
+        /// <summary>Each rename asked for: (old key, new name).</summary>
+        public List<(string Key, string NewName)> Renamed { get; } = [];
+
+        /// <summary>When set, every rename is refused with this message.</summary>
+        public string? RenameError { get; set; }
+
+        /// <summary>Each delete asked for, by key.</summary>
+        public List<string> Deleted { get; } = [];
+
+        public Task<ApiResult<string>> RenameSkillAsync(
+            Uri registry, string accessToken, string name, Guid? projectId, string newName, CancellationToken cancellationToken)
+        {
+            Renamed.Add((Key(name, projectId), newName));
+            if (RenameError is { } error)
+                return Task.FromResult(ApiResult<string>.Fail(error));
+
+            // Like the registry: the same skill, versions and content, under the new name.
+            var index = Skills.FindIndex(s => s.Name == name && s.ProjectId == projectId);
+            if (index >= 0)
+                Skills[index] = Skills[index] with { Name = newName };
+            if (Contents.Remove(Key(name, projectId), out var content))
+                Contents[Key(newName, projectId)] = content with { Name = newName };
+            return Task.FromResult(ApiResult<string>.Success(newName));
+        }
+
+        public Task<ApiResult<bool>> DeleteSkillAsync(Uri registry, string accessToken, string name, Guid? projectId, CancellationToken cancellationToken)
+        {
+            Deleted.Add(Key(name, projectId));
+            Skills.RemoveAll(s => s.Name == name && s.ProjectId == projectId);
+            Contents.Remove(Key(name, projectId));
+            return Task.FromResult(ApiResult<bool>.Success(true));
         }
     }
 }
@@ -706,6 +745,55 @@ public sealed class RegistryApiTests
 
         Assert.Equal(SkillPushStatus.Failed, outcome.Status);
         Assert.Contains("connection refused", outcome.Message);
+    }
+
+    [Fact]
+    public async Task Rename_posts_the_new_name_scoped_to_the_project_and_reads_back_the_name()
+    {
+        var project = Guid.NewGuid();
+        var handler = new StubHandler(_ => Json(HttpStatusCode.OK, """{"oldName":"my notes","name":"journal","projectId":null}"""));
+        using var api = new RegistryApi(handler);
+
+        var result = await api.RenameSkillAsync(Registry, "tok", "my notes", project, "journal", CancellationToken.None);
+
+        Assert.Equal("journal", result.Value);
+        Assert.Equal(HttpMethod.Post, handler.Method);
+        Assert.Equal($"https://registry.test/v1/skills/my%20notes/rename?projectId={project}", handler.Uri!.AbsoluteUri);
+        Assert.Contains("\"newName\":\"journal\"", handler.Body);
+    }
+
+    [Fact]
+    public async Task A_refused_rename_carries_the_registrys_reason()
+    {
+        using var api = new RegistryApi(new StubHandler(_ => Json(HttpStatusCode.Conflict, """{"title":"There is already a skill named 'journal' here."}""", "application/problem+json")));
+
+        var result = await api.RenameSkillAsync(Registry, "tok", "notes", null, "journal", CancellationToken.None);
+
+        Assert.False(result.Ok);
+        Assert.Contains("already a skill named 'journal'", result.Error);
+    }
+
+    [Fact]
+    public async Task Delete_sends_a_delete_for_the_global_skill_when_there_is_no_project()
+    {
+        var handler = new StubHandler(_ => new HttpResponseMessage(HttpStatusCode.NoContent));
+        using var api = new RegistryApi(handler);
+
+        var result = await api.DeleteSkillAsync(Registry, "tok", "journal", null, CancellationToken.None);
+
+        Assert.True(result.Ok);
+        Assert.Equal(HttpMethod.Delete, handler.Method);
+        Assert.Equal("https://registry.test/v1/skills/journal", handler.Uri!.AbsoluteUri);
+    }
+
+    [Fact]
+    public async Task A_link_reads_the_skills_that_moved()
+    {
+        using var api = new RegistryApi(new StubHandler(_ => Json(HttpStatusCode.OK, """{"outcome":"linked","project":{"name":"repo"},"movedSkills":["deploy","notes"]}""")));
+
+        var result = await api.LinkFolderAsync(Registry, "tok", Guid.NewGuid(), ProjectFacts.NotGit("/x", "/x"), "repo", CancellationToken.None);
+
+        Assert.Equal(["deploy", "notes"], result.Value!.MovedSkills);
     }
 
     [Fact]

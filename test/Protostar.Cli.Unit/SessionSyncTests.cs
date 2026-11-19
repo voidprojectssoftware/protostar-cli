@@ -881,6 +881,12 @@ public sealed class SessionSyncServiceTests : IDisposable
         public Task<RegistrySkillDownload> GetSkillFilesAsync(Uri registry, string accessToken, string name, Guid? projectId, int? version, CancellationToken cancellationToken) =>
             throw new NotSupportedException();
 
+        public Task<ApiResult<string>> RenameSkillAsync(Uri registry, string accessToken, string name, Guid? projectId, string newName, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
+        public Task<ApiResult<bool>> DeleteSkillAsync(Uri registry, string accessToken, string name, Guid? projectId, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
         public Task<ApiResult<bool>> RegisterMachineAsync(Uri registry, string accessToken, Guid id, string name, string operatingSystem, CancellationToken cancellationToken)
         {
             Calls++;

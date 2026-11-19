@@ -114,6 +114,28 @@ internal sealed partial class RegistryApi : IRegistryApi, IDisposable
         return new RegistrySkillDownload(new RegistrySkillContent(body.Name, body.Version, body.ContentHash, files), null);
     }
 
+    /// <inheritdoc />
+    public async Task<ApiResult<string>> RenameSkillAsync(
+        Uri registry, string accessToken, string name, Guid? projectId, string newName, CancellationToken cancellationToken)
+    {
+        using var request = Request(HttpMethod.Post, registry, SkillPath(name, "/rename", projectId), accessToken);
+        request.Content = JsonContent.Create(new { newName }, options: TranscriptJson.Options);
+        return await SendAsync(
+            request,
+            async response => (await response.Content.ReadFromJsonAsync<RenameResponse>(TranscriptJson.Options))?.Name ?? newName,
+            cancellationToken);
+    }
+
+    /// <inheritdoc />
+    public async Task<ApiResult<bool>> DeleteSkillAsync(Uri registry, string accessToken, string name, Guid? projectId, CancellationToken cancellationToken)
+    {
+        using var request = Request(HttpMethod.Delete, registry, SkillPath(name, "", projectId), accessToken);
+        return await SendAsync(request, _ => Task.FromResult(true), cancellationToken);
+    }
+
+    private static string SkillPath(string name, string suffix, Guid? projectId) =>
+        $"/v1/skills/{Uri.EscapeDataString(name)}{suffix}" + (projectId is { } id ? $"?projectId={id}" : "");
+
     // An authenticated GET that reads a JSON body, turning every failure into a message instead of throwing.
     private async Task<(T? Body, string? Error)> GetJsonAsync<T>(Uri url, string accessToken, CancellationToken cancellationToken)
         where T : class
@@ -186,6 +208,11 @@ internal sealed partial class RegistryApi : IRegistryApi, IDisposable
         [JsonPropertyName("version")] public int? Version { get; init; }
         [JsonPropertyName("projectId")] public Guid? ProjectId { get; init; }
         [JsonPropertyName("projectName")] public string? ProjectName { get; init; }
+    }
+
+    private sealed record RenameResponse
+    {
+        [JsonPropertyName("name")] public string? Name { get; init; }
     }
 
     private sealed record ListResponse

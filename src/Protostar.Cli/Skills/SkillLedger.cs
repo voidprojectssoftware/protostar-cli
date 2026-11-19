@@ -24,7 +24,20 @@ internal sealed class SkillLedger : ISkillLedger
             : null;
 
     /// <inheritdoc />
-    public void Record(Uri registry, string skillPath, SkillLedgerEntry entry)
+    public void Record(Uri registry, string skillPath, SkillLedgerEntry entry) =>
+        Change(registry, skills => skills[Normalize(skillPath)] = entry);
+
+    /// <inheritdoc />
+    public IReadOnlyDictionary<string, SkillLedgerEntry> Entries(Uri registry) =>
+        Load().TryGetValue(RegistryEndpoint.CredentialKey(registry), out var skills)
+            ? skills
+            : new Dictionary<string, SkillLedgerEntry>();
+
+    /// <inheritdoc />
+    public void Forget(Uri registry, string skillPath) =>
+        Change(registry, skills => skills.Remove(Normalize(skillPath)));
+
+    private static void Change(Uri registry, Action<Dictionary<string, SkillLedgerEntry>> change)
     {
         try
         {
@@ -32,7 +45,7 @@ internal sealed class SkillLedger : ISkillLedger
             var key = RegistryEndpoint.CredentialKey(registry);
             if (!ledger.TryGetValue(key, out var skills))
                 ledger[key] = skills = new Dictionary<string, SkillLedgerEntry>(StringComparer.Ordinal);
-            skills[Normalize(skillPath)] = entry;
+            change(skills);
 
             Directory.CreateDirectory(ProtostarPaths.ConfigDir());
             var temp = FilePath + ".tmp-" + Guid.NewGuid().ToString("N");
