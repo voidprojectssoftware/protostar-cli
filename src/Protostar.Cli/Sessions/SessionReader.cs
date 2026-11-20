@@ -151,14 +151,15 @@ internal sealed class SessionReader : ISessionReader
             return SessionOpenResult.Fail(SessionSyncService.CheckFailure(check), check.Detail, registry);
 
         // One request when the registry can look a prefix up itself; a whole subagent key is no session's prefix, so
-        // nothing found that way still tries the id as a whole key.
+        // nothing found that way still tries the id as a whole key. So does a prefix the registry refuses (400): no
+        // session key starts with something the registry will not even look up.
         if (check.Supports(RegistryCapability.TranscriptPrefixLookup) == CapabilitySupport.Listed && IsLookupPrefix(id))
         {
             var found = await _api.ListAsync(
                 registry, token, new TranscriptListQuery(null, null, harnessId, null, MaxCandidates + 1, KeyPrefix: id), cancellationToken);
-            if (!found.Ok)
+            if (!found.Ok && !found.Refused)
                 return SessionOpenResult.Fail(SessionSyncFailure.RegistryUnreachable, found.Error, registry);
-            var matches = found.Value!.Where(t => harnesses.Any(h => h.Id == t.Harness)).ToList();
+            var matches = found.Ok ? found.Value!.Where(t => harnesses.Any(h => h.Id == t.Harness)).ToList() : [];
             if (matches.Count > 0)
                 return await OpenMatchAsync(registry, token, harnesses, id, matches, cancellationToken);
             return await OpenExactAsync(registry, token, harnesses, id, cancellationToken)

@@ -271,6 +271,31 @@ public sealed class SessionReaderTests
     }
 
     [Fact]
+    public async Task A_prefix_the_registry_refuses_falls_back_to_the_whole_key()
+    {
+        _api.RefusePrefixes = true;
+        _api.Add(Session(SessionId), Conversation);
+
+        var opened = await Open(SessionId);
+
+        Assert.Equal(SessionOpenOutcome.Found, opened.Outcome);
+        Assert.Equal([SessionId], _api.Prefixes);
+        Assert.Equal(SessionId, opened.Session!.Detail.Transcript.Key);
+    }
+
+    [Fact]
+    public async Task A_prefix_the_registry_refuses_that_is_no_whole_key_is_not_found_not_unreachable()
+    {
+        _api.RefusePrefixes = true;
+        _api.Add(Session(SessionId), Conversation);
+
+        var opened = await Open("7d3c9a52");
+
+        Assert.Equal((SessionOpenOutcome.NotFound, SessionSyncFailure.None), (opened.Outcome, opened.Failure));
+        Assert.Equal(1, _api.Gets);
+    }
+
+    [Fact]
     public async Task Without_a_sign_in_nothing_is_asked_of_the_registry()
     {
         _token = null;
@@ -477,6 +502,9 @@ public sealed class SessionReaderTests
         public List<string> Prefixes { get; } = [];
         public List<int> Limits { get; } = [];
         public string? GetError { get; set; }
+
+        /// <summary>Refuse every <c>keyPrefix</c> with 400, as a registry with stricter rules for a prefix would.</summary>
+        public bool RefusePrefixes { get; set; }
         public int? CutOffAfterBytes { get; set; }
 
         /// <summary>The key of every content download, in order; each one asked for redacted content (the only kind there is).</summary>
@@ -509,6 +537,8 @@ public sealed class SessionReaderTests
             {
                 Prefixes.Add(prefix);
                 Limits.Add(query.Limit);
+                if (RefusePrefixes)
+                    return Task.FromResult(ApiResult<IReadOnlyList<RemoteTranscript>>.RefusedRequest("keyPrefix is not valid."));
             }
 
             // Sessions only, as the registry lists them by default.

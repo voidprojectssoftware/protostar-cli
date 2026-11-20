@@ -100,7 +100,8 @@ internal sealed record SessionSkill
 /// <param name="MachineUnknown">The registry refused because it has no record of the machine the request named.</param>
 /// <param name="TranscriptUnknown">The registry answered that it holds no transcript with that harness and key.</param>
 /// <param name="MemoryUnknown">The registry answered that the caller has no such project, or no memory file at that path.</param>
-internal sealed record ApiResult<T>(T? Value, string? Error, bool MachineUnknown = false, bool TranscriptUnknown = false, bool MemoryUnknown = false)
+/// <param name="Refused">The registry refused the request as invalid (400), so asking again unchanged would get the same answer.</param>
+internal sealed record ApiResult<T>(T? Value, string? Error, bool MachineUnknown = false, bool TranscriptUnknown = false, bool MemoryUnknown = false, bool Refused = false)
 {
     public bool Ok => Error is null;
 
@@ -113,6 +114,8 @@ internal sealed record ApiResult<T>(T? Value, string? Error, bool MachineUnknown
     public static ApiResult<T> UnknownTranscript(string error) => new(default, error, TranscriptUnknown: true);
 
     public static ApiResult<T> UnknownMemory(string error) => new(default, error, MemoryUnknown: true);
+
+    public static ApiResult<T> RefusedRequest(string error) => new(default, error, Refused: true);
 }
 
 /// <summary>Where a transcript's stored content ends in the registry.</summary>
