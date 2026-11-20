@@ -43,7 +43,7 @@ internal sealed class ConversationWriter
         _console = console;
         _output = output;
         _plain = plain;
-        _width = console.Profile.Width;
+        _width = Math.Max(1, console.Profile.Width);
     }
 
     /// <summary>The writer for standard output, plain when it is redirected.</summary>
@@ -56,7 +56,7 @@ internal sealed class ConversationWriter
         {
             foreach (var span in spans)
                 _buffer.Append(span.Text);
-            _buffer.Append('\n');
+            _buffer.Append(Environment.NewLine);
         }
         else if (AllSimple(spans))
         {
@@ -67,7 +67,7 @@ internal sealed class ConversationWriter
             var markup = new StringBuilder();
             foreach (var span in spans)
                 markup.Append(span.Style is null ? Markup.Escape(span.Text) : $"[{span.Style}]{Markup.Escape(span.Text)}[/]");
-            _buffer.Append(_console.ToAnsi(new Markup(markup.ToString()))).Append('\n');
+            _buffer.Append(_console.ToAnsi(new Markup(markup.ToString()))).Append(Environment.NewLine);
         }
 
         if (_buffer.Length >= FlushAt)
@@ -116,7 +116,7 @@ internal sealed class ConversationWriter
                 _line.Add(span);
             Write(_line);
             _line.Clear();
-            _buffer.Append('\n');
+            _buffer.Append(Environment.NewLine);
             return;
         }
 
@@ -154,7 +154,7 @@ internal sealed class ConversationWriter
             if (line.Count == 0)
                 continue;
             Write(line);
-            _buffer.Append('\n');
+            _buffer.Append(Environment.NewLine);
         }
     }
 
