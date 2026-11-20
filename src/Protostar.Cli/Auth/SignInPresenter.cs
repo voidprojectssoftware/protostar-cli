@@ -45,7 +45,7 @@ internal static class SignInPresenter
         return 0;
     }
 
-    private static string Describe(RegistrySource source) => source switch
+    internal static string Describe(RegistrySource source) => source switch
     {
         RegistrySource.Flag => "--registry",
         RegistrySource.Environment => AuthConstants.RegistryEnvVar,

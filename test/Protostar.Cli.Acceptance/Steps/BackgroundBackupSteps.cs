@@ -139,6 +139,30 @@ public sealed class BackgroundBackupSteps : IDisposable
         Assert.Fail($"capture.log never said \"{text}\". It holds: {(File.Exists(CaptureLog) ? ReadShared(CaptureLog) : "(no log)")}");
     }
 
+    // --offline so the step does not wait on the silent registry; the records alone carry the failure.
+    [Then("protostar status --offline exits {int} and says {string}")]
+    public async Task ThenStatusSays(int exitCode, string text)
+    {
+        var status = await RunStatusAsync();
+        Assert.True(exitCode == status.ExitCode, $"status exited {status.ExitCode}:\n{status.StandardOutput}{status.StandardError}");
+        Assert.Contains(text, status.StandardOutput.ReplaceLineEndings(" "), StringComparison.Ordinal);
+    }
+
+    [Then("protostar status --offline --json reports the problem {string}")]
+    public async Task ThenStatusJsonReports(string problem)
+    {
+        var status = await RunStatusAsync("--json");
+        using var json = JsonDocument.Parse(status.StandardOutput);
+        Assert.Contains(problem, json.RootElement.GetProperty("problems").EnumerateArray().Select(p => p.GetString()));
+    }
+
+    private Task<BufferedCommandResult> RunStatusAsync(params string[] extra) =>
+        CliWrap.Cli.Wrap(CliRunner.BinaryPath)
+            .WithArguments(["status", "--offline", "--registry", RegistryUrl, "--harness-home", Path.Combine(_root, ".claude"), .. extra])
+            .WithEnvironmentVariables(env => env.Set("PROTOSTAR_CONFIG_DIR", ConfigDir).Build())
+            .WithValidation(CommandResultValidation.None)
+            .ExecuteBufferedAsync();
+
     private static string ReadShared(string path)
     {
         using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);

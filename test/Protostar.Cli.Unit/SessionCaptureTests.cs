@@ -63,7 +63,7 @@ public sealed class SessionCaptureTests : IDisposable
         var logged = new List<string>();
 
         var result = await sut.HandleAsync("SessionEnd", Payload("SessionEnd"), CancellationToken.None);
-        var exit = CapturePresenter.Render("SessionEnd", result, TextWriter.Null, logged.Add);
+        var exit = CapturePresenter.Render("SessionEnd", result, TextWriter.Null, logged.Add, _ => { });
 
         Assert.Equal(CaptureAction.Failed, result.Action);
         Assert.Equal(0, exit);
@@ -77,7 +77,7 @@ public sealed class SessionCaptureTests : IDisposable
         var output = new StringWriter();
         var logged = new List<string>();
 
-        CapturePresenter.RenderBackgroundPush(sync, output, logged.Add);
+        CapturePresenter.RenderBackgroundPush(sync, output, logged.Add, _ => { });
 
         Assert.DoesNotContain("already backed up", output.ToString());
         Assert.Contains("252 B of the session not backed up yet", output.ToString());
@@ -90,7 +90,7 @@ public sealed class SessionCaptureTests : IDisposable
         var logged = new List<string>();
 
         var exit = CapturePresenter.RenderBackgroundPush(
-            SessionSyncResult.Fail(SessionSyncFailure.RegistryUnreachable, null), TextWriter.Null, logged.Add);
+            SessionSyncResult.Fail(SessionSyncFailure.RegistryUnreachable, null), TextWriter.Null, logged.Add, _ => { });
 
         Assert.Equal(0, exit);
         Assert.Contains("protostar sessions push (background): session not backed up: the registry could not be reached", Assert.Single(logged));
@@ -122,7 +122,7 @@ public sealed class SessionCaptureTests : IDisposable
         var output = new StringWriter();
         var logged = new List<string>();
 
-        CapturePresenter.RenderBackgroundPush(sync, output, logged.Add);
+        CapturePresenter.RenderBackgroundPush(sync, output, logged.Add, _ => { });
 
         Assert.Contains("Retried 2 earlier sessions whose backup had failed: 1 backed up, 1 failed again (retried later).", output.ToString());
         Assert.Single(logged);

@@ -16,17 +16,51 @@ namespace Protostar.Cli.Capture;
 /// </remarks>
 internal static class CapturePresenter
 {
-    /// <summary>Writes the line for <paramref name="result"/> and returns 0.</summary>
-    public static int Render(string hookEvent, CaptureResult result, TextWriter output, Action<string> log)
+    /// <summary>Writes the line for <paramref name="result"/>, logs and records it, and returns 0.</summary>
+    /// <param name="record">Receives the structured outcome (<see cref="CaptureRecords"/>) when there is one to keep.</param>
+    public static int Render(string hookEvent, CaptureResult result, TextWriter output, Action<string> log, Action<CaptureRecord> record)
     {
         var line = Describe(hookEvent, result);
         output.WriteLine(line);
 
         if (NeedsAttention(result))
             log($"{DateTimeOffset.UtcNow:O} {line}");
+        if (Record(result, line) is { } kept)
+            record(kept);
 
         return 0;
     }
+
+    // A skill backup's outcome, or a failure to start the session backup. Nothing for an ignored event, a session
+    // handed off (its push keeps its own record), or a skill that is not local, since none of them backed anything up.
+    internal static CaptureRecord? Record(CaptureResult result, string line)
+    {
+        var now = DateTimeOffset.UtcNow;
+        if (result.Action == CaptureAction.Failed)
+            return new CaptureRecord(now, result.SkillName is null ? CaptureKind.Sessions : CaptureKind.Skills, false, null, 0,
+                Reason: CaptureFailure.Other, Error: result.Message);
+        if (result.Action != CaptureAction.SkillBackedUp || result.Push is not { } push || push.Failure == SkillPushRunFailure.SkillNotFound)
+            return null;
+
+        var registry = push.Registry?.GetLeftPart(UriPartial.Authority);
+        var reason = push.Failure switch
+        {
+            SkillPushRunFailure.None => push.Entries.Any(e => e.Outcome.Status is SkillPushStatus.Failed) ? CaptureFailure.Other
+                : push.Entries.Any(e => e.Outcome.Status is SkillPushStatus.Refused or SkillPushStatus.Conflict or SkillPushStatus.Stale or SkillPushStatus.Removed)
+                    ? CaptureFailure.Refused
+                    : (CaptureFailure?)null,
+            SkillPushRunFailure.NotLoggedIn => CaptureFailure.NotSignedIn,
+            SkillPushRunFailure.SessionExpired => CaptureFailure.SessionExpired,
+            SkillPushRunFailure.RegistryUnreachable => CaptureFailure.RegistryUnreachable,
+            _ => CaptureFailure.Other,
+        };
+        return reason is null
+            ? new CaptureRecord(now, CaptureKind.Skills, true, registry, push.Entries.Count)
+            : new CaptureRecord(now, CaptureKind.Skills, false, registry, push.Entries.Count, Reason: reason, Error: ErrorText(line));
+    }
+
+    // The human line without its "protostar capture (Event): " prefix, so status can quote it as the error.
+    private static string ErrorText(string line) => line[(line.IndexOf(": ", StringComparison.Ordinal) + 2)..];
 
     internal static string Describe(string hookEvent, CaptureResult result)
     {
@@ -82,7 +116,7 @@ internal static class CapturePresenter
     /// The push was started by a hook and nobody sees its output, so the line goes to the log when something is
     /// wrong. Exit code 0 whatever happened: the hook that started it has long since returned.
     /// </remarks>
-    public static int RenderBackgroundPush(SessionSyncResult result, TextWriter output, Action<string> log)
+    public static int RenderBackgroundPush(SessionSyncResult result, TextWriter output, Action<string> log, Action<CaptureRecord> record)
     {
         var line = $"protostar sessions push (background): {DescribeSessions(result)}{DescribeRetries(result.Retried)}";
         output.WriteLine(line);
@@ -90,21 +124,72 @@ internal static class CapturePresenter
         if (result.Failure != SessionSyncFailure.None ||
             result.Transcripts.Concat(result.Retried ?? []).Any(t => t.Status == TranscriptSyncStatus.Failed))
             log($"{DateTimeOffset.UtcNow:O} {line}");
+        if (Record(result, line) is { } kept)
+            record(kept);
 
         return 0;
     }
 
+    // Nothing when every transcript was skipped (throttled, or another push has it) and no earlier session was
+    // retried: such a run tried nothing, so it says nothing about whether backups work.
+    internal static CaptureRecord? Record(SessionSyncResult result, string line)
+    {
+        var now = DateTimeOffset.UtcNow;
+        var registry = result.Registry?.GetLeftPart(UriPartial.Authority);
+        var handled = result.Transcripts.Concat(result.Retried ?? []).ToList();
+        var bytes = handled.Sum(t => t.BytesUploaded);
+        var error = ErrorText(line);
+        if (result.Failure != SessionSyncFailure.None)
+            return new CaptureRecord(now, CaptureKind.Sessions, false, registry, 0, 0, Reason(result.Failure), error);
+        if (handled.Any(t => t.Status == TranscriptSyncStatus.Failed))
+            return new CaptureRecord(now, CaptureKind.Sessions, false, registry, handled.Count, bytes, CaptureFailure.Other, error);
+        return handled.All(t => t.Status == TranscriptSyncStatus.Skipped)
+            ? null
+            : new CaptureRecord(now, CaptureKind.Sessions, true, registry, handled.Count, bytes);
+    }
+
+    private static CaptureFailure Reason(SessionSyncFailure failure) => failure switch
+    {
+        SessionSyncFailure.NotLoggedIn => CaptureFailure.NotSignedIn,
+        SessionSyncFailure.SessionExpired => CaptureFailure.SessionExpired,
+        SessionSyncFailure.RegistryUnreachable => CaptureFailure.RegistryUnreachable,
+        _ => CaptureFailure.Other,
+    };
+
     /// <summary>Reports what a hook's background push did with its session's project memory; logs only failures, and never contents.</summary>
-    public static void RenderBackgroundMemoryPush(MemoryPushResult result, TextWriter output, Action<string> log)
+    public static void RenderBackgroundMemoryPush(MemoryPushResult result, TextWriter output, Action<string> log, Action<CaptureRecord> record)
     {
         var line = "protostar memory push (background): " + (result.Failure != SessionSyncFailure.None
-            ? $"memory not backed up: {result.Detail ?? result.Failure.ToString()}"
+            ? $"memory not backed up: {result.Detail ?? MemoryFailure(result.Failure)}"
             : result.Folders.FirstOrDefault(f => f.Error is not null) is { } failed
                 ? $"memory of {failed.Directory} not backed up: {failed.Error}"
                 : $"{result.Folders.Sum(f => f.Uploaded)} memory files backed up, {result.Folders.Sum(f => f.Deleted)} deletions recorded.");
         output.WriteLine(line);
         if (!result.Complete)
             log($"{DateTimeOffset.UtcNow:O} {line}");
+        if (Record(result, line) is { } kept)
+            record(kept);
+    }
+
+    private static string MemoryFailure(SessionSyncFailure failure) => failure switch
+    {
+        SessionSyncFailure.NotLoggedIn => "not signed in. Run `protostar auth login`.",
+        SessionSyncFailure.SessionExpired => "the session expired. Run `protostar auth login`.",
+        SessionSyncFailure.RegistryUnreachable => "the registry could not be reached. The next hook backup that reaches it tries again.",
+        _ => failure.ToString(),
+    };
+
+    // Nothing when the session's project keeps no memory: there was nothing to back up.
+    internal static CaptureRecord? Record(MemoryPushResult result, string line)
+    {
+        var now = DateTimeOffset.UtcNow;
+        var registry = result.Registry?.GetLeftPart(UriPartial.Authority);
+        var uploaded = result.Folders.Sum(f => f.Uploaded);
+        if (result.Failure != SessionSyncFailure.None)
+            return new CaptureRecord(now, CaptureKind.Memory, false, registry, 0, Reason: Reason(result.Failure), Error: ErrorText(line));
+        if (!result.Complete)
+            return new CaptureRecord(now, CaptureKind.Memory, false, registry, uploaded, Reason: CaptureFailure.Other, Error: ErrorText(line));
+        return result.Folders.Count == 0 ? null : new CaptureRecord(now, CaptureKind.Memory, true, registry, uploaded);
     }
 
     internal static string DescribeSessions(SessionSyncResult sync)

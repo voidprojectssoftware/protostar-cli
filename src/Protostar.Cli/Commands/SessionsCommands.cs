@@ -81,9 +81,9 @@ internal sealed class SessionsPushCommand : AsyncCommand<SessionsPushCommand.Set
             BackgroundPush.DetachFromTerminal();
             var throttle = settings.Throttle is { } seconds ? TimeSpan.FromSeconds(seconds) : (TimeSpan?)null;
             var one = new SessionSyncRequest(settings.Registry, settings.Harness, settings.HarnessHome, session, null, throttle);
-            var exit = CapturePresenter.RenderBackgroundPush(await _sessions.SyncAsync(one, null, cancellation), Console.Out, CaptureLog.Append);
+            var exit = CapturePresenter.RenderBackgroundPush(await _sessions.SyncAsync(one, null, cancellation), Console.Out, CaptureLog.Append, CaptureRecords.Append);
             var memory = await _memory.PushAsync(new MemoryPushRequest(settings.Registry, settings.HarnessHome, session), cancellation);
-            CapturePresenter.RenderBackgroundMemoryPush(memory, Console.Out, CaptureLog.Append);
+            CapturePresenter.RenderBackgroundMemoryPush(memory, Console.Out, CaptureLog.Append, CaptureRecords.Append);
             return exit;
         }
 

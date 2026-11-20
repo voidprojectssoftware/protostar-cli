@@ -14,6 +14,7 @@ using Protostar.Cli.Registry;
 using Protostar.Cli.Sessions;
 using Protostar.Cli.Setup;
 using Protostar.Cli.Skills;
+using Protostar.Cli.Status;
 using Spectre.Console;
 using Spectre.Console.Cli;
 
@@ -47,6 +48,7 @@ services.AddSingleton<IBackgroundPush, BackgroundPush>();
 services.AddSingleton<ICaptureService, CaptureService>();
 services.AddSingleton<ISignInService, SignInService>();
 services.AddSingleton<ISetupService, SetupService>();
+services.AddSingleton<ISyncStatusService, SyncStatusService>();
 
 // Harnesses and their collaborators live in the container too: register one IHarness per harness
 // (the extension point) plus the catalog that exposes them and the ClaudeCode skill parser/mapper.
@@ -80,6 +82,8 @@ app.Configure(config =>
 
     config.AddCommand<SetupCommand>(Named("setup"))
         .WithDescription("Set up this machine in one step: sign in, install hooks, push and pull skills, and back up sessions. Safe to run again.");
+    config.AddCommand<SyncStatusCommand>(Named("status"))
+        .WithDescription("Show whether this machine is syncing: sign-in, hooks, and how background backups have gone. Exits 1 when something needs attention.");
     config.AddCommand<InstallCommand>(Named("install"))
         .WithDescription("Install protostar to a per-user directory and add it to PATH.");
     config.AddCommand<UninstallCommand>(Named("uninstall"))
