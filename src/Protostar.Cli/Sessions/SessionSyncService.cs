@@ -130,15 +130,18 @@ internal sealed record SessionSyncResult(
 /// <remarks>
 /// Counts only the transcripts that had something to upload when the run was planned, so a second push after an
 /// interrupted one shows just what remains. A transcript counts as done once it is finished with, whether it was
-/// uploaded, skipped or failed, and its planned bytes then count as done too, so the totals always add up.
+/// uploaded, skipped or failed, but only the bytes the registry now holds count as done: a skipped or failed
+/// transcript's planned bytes never do, so a run that did not back everything up never reaches 100%.
 /// Within a transcript the bytes move chunk by chunk.
 /// </remarks>
-/// <param name="TranscriptsDone">Transcripts finished with so far.</param>
+/// <param name="TranscriptsDone">Transcripts finished with so far, whatever the outcome.</param>
 /// <param name="TranscriptsTotal">Transcripts that had something to upload.</param>
-/// <param name="BytesDone">Bytes accounted for so far, of <paramref name="BytesTotal"/>.</param>
+/// <param name="BytesDone">Bytes backed up so far, of <paramref name="BytesTotal"/>.</param>
 /// <param name="BytesTotal">Bytes the registry did not have when the run was planned.</param>
 /// <param name="Current">The transcript being uploaded, or <c>null</c> before the first and after the last.</param>
-internal sealed record SessionSyncProgress(int TranscriptsDone, int TranscriptsTotal, long BytesDone, long BytesTotal, string? Current);
+/// <param name="TranscriptsUnfinished">Of <paramref name="TranscriptsDone"/>, those skipped, failed or only partly sent.</param>
+internal sealed record SessionSyncProgress(
+    int TranscriptsDone, int TranscriptsTotal, long BytesDone, long BytesTotal, string? Current, int TranscriptsUnfinished = 0);
 
 /// <summary>A transcript's backup state on this machine.</summary>
 /// <param name="Transcript">The transcript.</param>
@@ -322,6 +325,7 @@ internal sealed partial class SessionSyncService : ISessionSyncService
             .ToList();
         var bytesTotal = work.Sum(p => p.Plan.Pending);
         var done = 0;
+        var unfinished = 0;
         long bytesDone = 0;
         progress?.Report(new SessionSyncProgress(0, work.Count, 0, bytesTotal, null));
 
@@ -338,7 +342,7 @@ internal sealed partial class SessionSyncService : ISessionSyncService
                 continue;
             }
 
-            progress?.Report(new SessionSyncProgress(done, work.Count, bytesDone, bytesTotal, transcript.Key));
+            progress?.Report(new SessionSyncProgress(done, work.Count, bytesDone, bytesTotal, transcript.Key, unfinished));
             TranscriptSyncOutcome outcome;
 
             if (Throttled(request, plan))
@@ -377,7 +381,7 @@ internal sealed partial class SessionSyncService : ISessionSyncService
                 var pending = plan.Pending;
                 outcome = await UploadUnderLockAsync(
                     registry, session, transcript, request, verified, clock,
-                    sent => progress?.Report(new SessionSyncProgress(done, work.Count, bytesDone + Math.Min(sent, pending), bytesTotal, transcript.Key)),
+                    sent => progress?.Report(new SessionSyncProgress(done, work.Count, bytesDone + Math.Min(sent, pending), bytesTotal, transcript.Key, unfinished)),
                     cancellationToken);
             }
 
@@ -388,8 +392,16 @@ internal sealed partial class SessionSyncService : ISessionSyncService
             if (stopped)
                 continue;
             done++;
-            bytesDone += plan.Pending;
-            progress?.Report(new SessionSyncProgress(done, work.Count, bytesDone, bytesTotal, null));
+            if (outcome.Status is TranscriptSyncStatus.Uploaded or TranscriptSyncStatus.UpToDate)
+            {
+                bytesDone += plan.Pending;
+            }
+            else
+            {
+                unfinished++;
+                bytesDone += Math.Min(outcome.BytesUploaded, plan.Pending);
+            }
+            progress?.Report(new SessionSyncProgress(done, work.Count, bytesDone, bytesTotal, null, unfinished));
         }
 
         if (outcomes.Any(o => o.Status == TranscriptSyncStatus.Failed))

@@ -106,7 +106,8 @@ internal sealed partial class RegistryApi : ITranscriptApi
         if (!string.IsNullOrWhiteSpace(query.Project)) parts.Add("project=" + Uri.EscapeDataString(query.Project));
         if (!string.IsNullOrWhiteSpace(query.Harness)) parts.Add("harness=" + Uri.EscapeDataString(query.Harness));
         if (query.Machine is { } machine) parts.Add("machine=" + machine);
-        if (query.Since is { } since) parts.Add("since=" + Uri.EscapeDataString(since.ToString("O")));
+        // In UTC: `--since 2026-11-01` parses with the local offset, and the registry answered 500 to any offset but zero.
+        if (query.Since is { } since) parts.Add("since=" + Uri.EscapeDataString(since.ToUniversalTime().ToString("O")));
 
         using var request = Request(HttpMethod.Get, registry, "/v1/transcripts?" + string.Join('&', parts), accessToken);
         return await SendAsync<IReadOnlyList<RemoteTranscript>>(

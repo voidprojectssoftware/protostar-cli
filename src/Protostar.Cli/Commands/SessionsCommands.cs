@@ -158,6 +158,6 @@ internal sealed class SessionsListCommand : AsyncCommand<SessionsListCommand.Set
     {
         var query = new TranscriptListQuery(settings.Project, settings.Machine, settings.Harness, settings.Since, settings.Limit);
         var result = await _sessions.ListAsync(settings.Registry, settings.HarnessHome, query, cancellation);
-        return SessionsPresenter.RenderList(result, _catalog, settings.Json);
+        return SessionsPresenter.RenderList(result, _catalog, query, settings.Json);
     }
 }

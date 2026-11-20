@@ -395,6 +395,34 @@ public sealed class SessionSyncServiceTests : IDisposable
         Assert.Equal(reports.Select(r => r.BytesDone).Order(), reports.Select(r => r.BytesDone));
     }
 
+    [Fact]
+    public async Task A_failed_transcript_counts_as_finished_with_but_its_bytes_never_count_as_done()
+    {
+        var size = new FileInfo(WriteSessionIn("-a", SessionId, DateTime.UtcNow, 4096)).Length;
+        _registry.AppendAnswer = new AppendResult(AppendStatus.Failed, null, "The registry returned 500.");
+        var reports = new List<SessionSyncProgress>();
+
+        var result = await Sut().SyncAsync(Request(), new Recorder(reports.Add), CancellationToken.None);
+
+        Assert.Equal(TranscriptSyncStatus.Failed, Assert.Single(result.Transcripts).Status);
+        Assert.Equal(new SessionSyncProgress(1, 1, 0, size, null, TranscriptsUnfinished: 1), reports[^1]);
+    }
+
+    [Fact]
+    public async Task Stopping_part_way_never_reports_the_run_as_done()
+    {
+        var size = new FileInfo(WriteSessionIn("-big", SessionId, DateTime.UtcNow, 20 * 1024 * 1024)).Length;
+        WriteSessionIn("-small", Older, DateTime.UtcNow.AddDays(-1));
+        using var stop = new CancellationTokenSource();
+        _registry.AfterAppend = _ => stop.Cancel();
+        var reports = new List<SessionSyncProgress>();
+
+        await Sut().SyncAsync(Request(), new Recorder(reports.Add), stop.Token);
+
+        Assert.All(reports, r => Assert.True(r.TranscriptsDone < r.TranscriptsTotal && r.BytesDone < r.BytesTotal));
+        Assert.True(reports[^1].BytesDone < size);
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
