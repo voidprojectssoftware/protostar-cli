@@ -17,7 +17,7 @@ There is no separate "update" command — you re-run the installer for your
 <summary><strong>Windows (PowerShell)</strong></summary>
 
 ```powershell
-irm https://raw.githubusercontent.com/voidprojectssoftware/protostar/main/scripts/install.ps1 | iex
+irm https://raw.githubusercontent.com/voidprojectssoftware/protostar-cli/main/scripts/install.ps1 | iex
 ```
 
 </details>
@@ -26,7 +26,7 @@ irm https://raw.githubusercontent.com/voidprojectssoftware/protostar/main/script
 <summary><strong>Linux / macOS</strong></summary>
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/voidprojectssoftware/protostar/main/scripts/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/voidprojectssoftware/protostar-cli/main/scripts/install.sh | sh
 ```
 
 </details>

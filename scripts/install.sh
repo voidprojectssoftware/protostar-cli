@@ -2,7 +2,7 @@
 # protostar installer (Linux/macOS).
 # Downloads the latest release binary and self-installs it via `protostar install`.
 #
-#   curl -fsSL https://raw.githubusercontent.com/voidprojectssoftware/protostar/main/scripts/install.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/voidprojectssoftware/protostar-cli/main/scripts/install.sh | sh
 #
 # Pass --channel stable|edge (default stable) as the first argument to pick the release track:
 #   stable = the latest tagged release; edge = the rolling prerelease built from the tip of main.
@@ -10,7 +10,7 @@
 # script is run directly (not via the piped one-liner).
 set -e
 
-repo="voidprojectssoftware/protostar"
+repo="voidprojectssoftware/protostar-cli"
 
 # Channel selector (first arg). Everything else is forwarded to `protostar install`.
 channel="stable"
@@ -21,6 +21,12 @@ esac
 
 os=$(uname -s)
 arch=$(uname -m)
+
+# A shell running under Rosetta on Apple silicon reports x86_64. Ask the kernel for the real CPU so
+# the native arm64 binary is chosen.
+if [ "$os" = "Darwin" ] && [ "$(sysctl -n sysctl.proc_translated 2>/dev/null)" = "1" ]; then
+  arch="arm64"
+fi
 
 case "$os" in
   Linux)  rid_os="linux" ;;
@@ -45,6 +51,10 @@ tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 
 echo "Downloading ${asset} ..."
-curl -fsSL "$url" -o "$tmp/protostar"
+if ! curl -fsSL "$url" -o "$tmp/protostar"; then
+  echo "Could not download ${asset} from the ${channel} release: ${url}" >&2
+  echo "Release binaries exist for linux-x64, osx-arm64, win-x64 and win-arm64." >&2
+  exit 1
+fi
 chmod +x "$tmp/protostar"
 "$tmp/protostar" install "$@"

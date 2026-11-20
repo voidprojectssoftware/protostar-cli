@@ -18,7 +18,7 @@ install directory to your `PATH` yourself.
 ### The install script can't download a binary
 
 The one-liner pulls from the latest
-[GitHub release](https://github.com/voidprojectssoftware/protostar/releases).
+[GitHub release](https://github.com/voidprojectssoftware/protostar-cli/releases).
 Check that you are online and not behind a proxy that blocks
 `raw.githubusercontent.com` or `github.com`. As a fallback, download the binary
 for your platform from the releases page and run `protostar install` directly —
