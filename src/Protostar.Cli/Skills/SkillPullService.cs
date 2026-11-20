@@ -117,7 +117,8 @@ internal sealed class SkillPullService : ISkillPullService
                     comparisons.Add(RemovedCopyOf(context, target, leftover) is { } removed
                         ? new SkillComparison(target.Harness, leftover.Name, SkillSyncState.RemovedInRegistry, null, leftover.Path, removed.Recorded.Version,
                             RemovalNote(removed, pulling: false), target.ProjectName)
-                        : new SkillComparison(target.Harness, leftover.Name, SkillSyncState.LocalOnly, null, leftover.Path, null, Project: target.ProjectName));
+                        : new SkillComparison(target.Harness, leftover.Name, SkillSyncState.LocalOnly, null, leftover.Path, null,
+                            NoLongerLinkedNote(context, target, leftover), target.ProjectName));
                 }
             }
 
@@ -230,7 +231,7 @@ internal sealed class SkillPullService : ISkillPullService
         if (version is not { } wanted)
             return new Pinned(pinned, null);
 
-        foreach (var remote in selected.Where(s => s.ProjectId is null || context.Targets.Any(t => t.ProjectId == s.ProjectId)))
+        foreach (var remote in selected.Where(s => s.ProjectId is null || context.Targets.Any(t => t.Scope == SkillScope.Project && Covers(t, s))))
         {
             var download = await _registry.GetSkillFilesAsync(context.Registry!, context.AccessToken!, remote.Name, remote.ProjectId, wanted, cancellationToken);
             if (download.Content is not { } content || content.Version != wanted)
@@ -253,7 +254,7 @@ internal sealed class SkillPullService : ISkillPullService
     {
         var remote = comparison.Remote!;
         var harness = target.Harness;
-        var project = target.ProjectName;
+        var project = comparison.Project;
 
         if (comparison.State == SkillSyncState.Conflict)
         {
@@ -409,14 +410,44 @@ internal sealed class SkillPullService : ISkillPullService
             $". Move them into '{newName}', or run `protostar skills push {quoted} --force` to keep this as a separate skill named '{local.Name}'.";
     }
 
-    // The registry skills a target compares with: global skills for a global target, this folder's project's
-    // skills for a project target.
+    // Why a local copy no registry skill here claims, recorded under another project, is this folder's project's now
+    // (LinkedSkillCopy); null for any other copy that is only here.
+    private string? NoLongerLinkedNote(Context context, Target target, DiscoveredSkill local)
+    {
+        if (target.Scope != SkillScope.Project || _ledger.Get(context.Registry!, local.Path) is not { } recorded ||
+            !LinkedSkillCopy.NamesOtherProject(recorded, target.ProjectId))
+        {
+            return null;
+        }
+
+        return LinkedSkillCopy.WhyNotStill(recorded, HashOrNull(local.Path), context.Skills) + ". `protostar skills push` backs it up there.";
+    }
+
+    private static string? HashOrNull(string path)
+    {
+        try
+        {
+            return SkillFileReader.Hash(SkillFileReader.Read(path));
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return null;
+        }
+    }
+
+    // The registry skills a target compares with: global skills for a global target; for a project target, this folder's
+    // project's skills and the other projects' skills its copies still belong to (Target.Held).
     private static List<RegistrySkill> InScope(Target target, IReadOnlyList<RegistrySkill> skills) =>
-        skills.Where(s => target.Scope == SkillScope.Global ? s.ProjectId is null : target.ProjectId is { } id && s.ProjectId == id).ToList();
+        skills.Where(s => Covers(target, s)).ToList();
+
+    private static bool Covers(Target target, RegistrySkill skill) =>
+        target.Scope == SkillScope.Global
+            ? skill.ProjectId is null
+            : (target.ProjectId is { } id && skill.ProjectId == id) || target.Held.Contains(skill);
 
     // Project skills no project target here covers (another project's, as a rule): listed, never written.
     private static IEnumerable<RegistrySkill> Elsewhere(Context context, IReadOnlyList<RegistrySkill> skills) =>
-        skills.Where(s => s.ProjectId is { } id && !context.Targets.Any(t => t.Scope == SkillScope.Project && t.ProjectId == id));
+        skills.Where(s => s.ProjectId is not null && !context.Targets.Any(t => t.Scope == SkillScope.Project && Covers(t, s)));
 
     // Where a project skill of another project would be installed: its own checkout's project skills folder.
     private static string WouldGo(Target target, RegistrySkill remote) =>
@@ -439,11 +470,13 @@ internal sealed class SkillPullService : ISkillPullService
         var (current, installed, conflict, conflictPath) = match;
         var remote = pinned?.Skill ?? current;
         var harness = target.Harness;
+        var held = target.Held.Contains(current);
+        var project = held ? current.ProjectName : target.ProjectName;
         if (conflict is not null)
-            return new SkillComparison(harness, remote.Name, SkillSyncState.Conflict, remote, conflictPath, null, conflict, target.ProjectName);
+            return new SkillComparison(harness, remote.Name, SkillSyncState.Conflict, remote, conflictPath, null, conflict, project);
 
         if (installed is null)
-            return new SkillComparison(harness, remote.Name, SkillSyncState.NotInstalled, remote, null, null, Project: target.ProjectName);
+            return new SkillComparison(harness, remote.Name, SkillSyncState.NotInstalled, remote, null, null, Project: project);
 
         // A record only speaks for the registry skill it was synced as: the same name and the same project. A
         // record from before names were kept is trusted only when the local skill's name is exactly the
@@ -465,7 +498,7 @@ internal sealed class SkillPullService : ISkillPullService
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             // Unreadable means it cannot be shown to be safe to overwrite.
-            return new SkillComparison(harness, installed.Name, SkillSyncState.LocalChanges, remote, installed.Path, recorded?.Version, Project: target.ProjectName);
+            return new SkillComparison(harness, installed.Name, SkillSyncState.LocalChanges, remote, installed.Path, recorded?.Version, Project: project);
         }
 
         var state = Classify(files, current, recorded);
@@ -481,8 +514,9 @@ internal sealed class SkillPullService : ISkillPullService
             ? $"This copy is of an earlier skill named '{remote.Name}' (synced at v{recorded!.Version}), deleted from the registry since; the registry's " +
               $"'{remote.Name}' is a new skill that took the name. Run `protostar skills pull {Quote(remote.Name)} --force` to replace this copy with it, or " +
               $"`protostar skills push {Quote(remote.Name)} --as NEW-NAME` to keep this copy as a separate skill."
+            : held ? LinkedSkillCopy.StillNote(current)
             : null;
-        return new SkillComparison(harness, installed.Name, state, remote, installed.Path, recorded?.Version, note, target.ProjectName);
+        return new SkillComparison(harness, installed.Name, state, remote, installed.Path, recorded?.Version, note, project);
     }
 
     private static string Quote(string name) => name.Any(char.IsWhiteSpace) ? $"\"{name}\"" : name;
@@ -679,7 +713,7 @@ internal sealed class SkillPullService : ISkillPullService
             if (here.Root is { } root)
             {
                 foreach (var global in targets.ToList())
-                    AddProjectTarget(global, here, root, targets);
+                    AddProjectTarget(global, here, root, targets, registry, skills);
             }
         }
 
@@ -718,7 +752,7 @@ internal sealed class SkillPullService : ISkillPullService
     // The folder's project skills in one harness. Discovery walks up to the nearest project config, which may be
     // above the checkout (a fresh clone has none of its own yet), so only skills found under this root count.
     // A root whose project skills folder is the harness's global one (the home folder) is not a project.
-    private static void AddProjectTarget(Target global, Here here, string root, List<Target> targets)
+    private void AddProjectTarget(Target global, Here here, string root, List<Target> targets, Uri registry, IReadOnlyList<RegistrySkill> skills)
     {
         var directory = global.Capability.ProjectSkillsDirectory(root);
         if (SamePath(directory, global.SkillsDirectory))
@@ -727,8 +761,24 @@ internal sealed class SkillPullService : ISkillPullService
         var local = global.Capability.DiscoverSkills(global.Location, root)
             .Where(s => s.Scope == SkillScope.Project && s.ProjectRoot is { } r && SamePath(r, root))
             .ToList();
-        targets.Add(global with { SkillsDirectory = directory, Scope = SkillScope.Project, ProjectId = here.ProjectId, ProjectName = here.Name, Local = local });
+        targets.Add(global with
+        {
+            SkillsDirectory = directory, Scope = SkillScope.Project, ProjectId = here.ProjectId, ProjectName = here.Name, Local = local,
+            Held = Held(local, here.ProjectId, registry, skills),
+        });
     }
+
+    // The other projects' skills that copies among `local`, in a folder of project `folderProject`, still belong to: those
+    // pulled while the folder was linked elsewhere and left alone since (LinkedSkillCopy). Reads only copies whose record
+    // names another project.
+    private List<RegistrySkill> Held(IReadOnlyList<DiscoveredSkill> local, Guid? folderProject, Uri registry, IReadOnlyList<RegistrySkill> skills) =>
+        local
+            .Select(l => (Copy: l, Recorded: _ledger.Get(registry, l.Path)))
+            .Where(c => LinkedSkillCopy.NamesOtherProject(c.Recorded, folderProject))
+            .Select(c => LinkedSkillCopy.StillOf(c.Recorded, HashOrNull(c.Copy.Path), folderProject, skills))
+            .OfType<RegistrySkill>()
+            .Distinct()
+            .ToList();
 
     private static bool SamePath(string a, string b) =>
         string.Equals(
@@ -758,7 +808,11 @@ internal sealed class SkillPullService : ISkillPullService
         SkillScope Scope,
         Guid? ProjectId,
         string? ProjectName,
-        IReadOnlyList<DiscoveredSkill> Local);
+        IReadOnlyList<DiscoveredSkill> Local)
+    {
+        /// <summary>For a project target, the other projects' skills its copies still belong to (<see cref="LinkedSkillCopy"/>).</summary>
+        public IReadOnlyList<RegistrySkill> Held { get; init; } = [];
+    }
 
     // The project the command's folder is in. Root is null when the registry could not say; Problem says why.
     private sealed record Here(Guid? ProjectId, string? Name, string? Root, string? Problem);

@@ -1048,6 +1048,84 @@ public sealed class SkillPushServiceTests : IDisposable
         Assert.Empty(api.Pushed);
     }
 
+    // ----- a copy pulled while the folder was linked to another project, after an unlink (cli#95) -----
+
+    private static readonly Guid Lib = Guid.Parse("aaaaaaaa-0000-0000-0000-000000000001");
+    private static readonly Guid App = Guid.Parse("aaaaaaaa-0000-0000-0000-000000000002");
+
+    // A project skill copy synced at v1 as project lib's, in a folder the registry now says is in `here`.
+    private DiscoveredSkill PulledFromLib(Guid? here)
+    {
+        var copy = Skill("shared", SkillScope.Project);
+        _ledger.Record(RegistryUri, copy.Path, new SkillLedgerEntry(SkillFileReader.Hash(SkillFileReader.Read(copy.Path)), 1, "shared", Lib));
+        _inRegistry.Add(new RegistrySkill("shared", null, 1, "", DateTimeOffset.UnixEpoch, Lib, "lib"));
+        _projects.HereKnown = true;
+        _projects.Here = here;
+        return copy;
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)] // a folder with no project of its own yet
+    public async Task After_an_unlink_an_unedited_copy_is_still_the_linked_projects_skill_and_unchanged(bool folderHasProject)
+    {
+        var copy = PulledFromLib(folderHasProject ? App : null);
+        var (sut, api) = Build([copy], Session());
+
+        var result = await sut.PushAsync(Request(), CancellationToken.None);
+
+        var outcome = Assert.Single(result.Entries).Outcome;
+        Assert.Equal((SkillPushStatus.Unchanged, 1, Lib, "lib"), (outcome.Status, outcome.Version, outcome.ProjectId, outcome.ProjectName));
+        Assert.StartsWith("Still project lib's skill", outcome.Message);
+        Assert.Empty(api.Pushed);
+        Assert.Equal(1, _projects.Calls);
+    }
+
+    [Fact]
+    public async Task After_an_unlink_an_edited_copy_is_backed_up_in_the_folders_project_as_a_new_skill()
+    {
+        var copy = PulledFromLib(App);
+        Edit(copy, "changed here");
+        var (sut, api) = Build([copy], Session());
+
+        var result = await sut.PushAsync(Request(), CancellationToken.None);
+
+        var outcome = Assert.Single(result.Entries).Outcome;
+        Assert.Equal(SkillPushStatus.Created, outcome.Status);
+        Assert.Contains("it has changed here since, so it now belongs to this folder's project: backed it up there as a new skill.", outcome.Message);
+        Assert.Equal([0], api.Bases);
+        Assert.NotNull(Assert.Single(api.Pushed).Project);
+    }
+
+    [Fact]
+    public async Task After_an_unlink_an_unedited_copy_of_a_skill_the_linked_project_lost_without_a_trace_is_backed_up_here()
+    {
+        var copy = PulledFromLib(App);
+        var (sut, api) = Build([copy], Session(), new FakeRegistryApi { RemembersRemovals = false });
+        api.Skills.Clear();
+
+        var result = await sut.PushAsync(Request(), CancellationToken.None);
+
+        var outcome = Assert.Single(result.Entries).Outcome;
+        Assert.Equal(SkillPushStatus.Created, outcome.Status);
+        Assert.Contains("that project no longer has it", outcome.Message);
+        Assert.Equal([0], api.Bases);
+    }
+
+    [Fact]
+    public async Task After_an_unlink_a_copy_of_a_skill_deleted_from_the_linked_project_is_reported_as_deleted_first()
+    {
+        var copy = PulledFromLib(App);
+        var (sut, api) = Build([copy], Session());
+        api.Skills.Clear();
+        api.Removed.Add(new RegistryRemovedSkill("shared", Lib, 1, null));
+
+        var result = await sut.PushAsync(Request(), CancellationToken.None);
+
+        Assert.Equal(SkillPushStatus.Removed, Assert.Single(result.Entries).Outcome.Status);
+        Assert.Empty(api.Pushed);
+    }
+
     [Fact]
     public async Task Push_as_refuses_a_plain_folder_of_the_new_name_beside_the_skill()
     {
@@ -1111,6 +1189,7 @@ public sealed class SkillPushServiceTests : IDisposable
     public async Task Push_as_checks_a_project_skills_new_name_against_its_own_projects_registry_skills()
     {
         var hello = Skill("hello", SkillScope.Project, dir: Path.Combine("repo-skills", "hello"));
+        _projects.ByFolder = true;
         var (sut, api) = Build([hello], Session());
         var project = FakeRegistryApi.ProjectIdOf(ProjectFacts.NotGit(hello.ProjectRoot!, hello.ProjectRoot!));
         api.Skills.Add(new RegistrySkill("zeta", null, 1, "", DateTimeOffset.UnixEpoch));
@@ -1126,11 +1205,63 @@ public sealed class SkillPushServiceTests : IDisposable
         Assert.Contains("skill in this project named 'omega'", clash.Detail);
     }
 
-    /// <summary>Resolves a folder to the project <see cref="FakeRegistryApi.ProjectIdOf"/> gives it.</summary>
+    [Fact]
+    public async Task After_an_unlink_a_copy_whose_name_the_folders_project_has_too_is_the_folders_projects()
+    {
+        var copy = PulledFromLib(App);
+        var (sut, api) = Build([copy], Session(), AtVersion(3));
+        api.Skills.Add(new RegistrySkill("shared", null, 3, "", DateTimeOffset.UnixEpoch, App, "app"));
+
+        var result = await sut.PushAsync(Request(), CancellationToken.None);
+
+        Assert.Equal(SkillPushStatus.Stale, Assert.Single(result.Entries).Outcome.Status);
+        Assert.Equal([0], api.Bases);
+    }
+
+    [Fact]
+    public async Task A_record_a_link_moved_into_the_folders_project_is_followed_not_taken_for_a_copy_left_by_an_unlink()
+    {
+        var copy = PulledFromLib(App);
+        var (sut, api) = Build([copy], Session());
+        api.Skills.Clear();
+        api.Skills.Add(new RegistrySkill("shared", null, 1, "", DateTimeOffset.UnixEpoch, App, "app"));
+        api.Contents[FakeRegistryApi.Key("shared", App)] = new RegistrySkillContent(
+            "shared", 1, "", SkillFileReader.Read(copy.Path).Select(f => new RegistrySkillFile(f.RelativePath, "", f.Content)).ToList());
+
+        var result = await sut.PushAsync(Request(), CancellationToken.None);
+
+        var outcome = Assert.Single(result.Entries).Outcome;
+        Assert.Equal(SkillPushStatus.Unchanged, outcome.Status);
+        Assert.Null(outcome.Message);
+        Assert.Empty(api.Pushed);
+        Assert.Equal(App, _ledger.Get(RegistryUri, copy.Path)!.ProjectId);
+    }
+
+    /// <summary>Answers which project a folder is in: by folder, a fixed project, or not at all.</summary>
     internal sealed class FakeProjects : IProjectApi
     {
-        public Task<ApiResult<RemoteProject>> ResolveProjectAsync(Uri registry, string accessToken, Guid machineId, ProjectFacts facts, CancellationToken cancellationToken) =>
-            Task.FromResult(ApiResult<RemoteProject>.Success(new RemoteProject { ProjectId = FakeRegistryApi.ProjectIdOf(facts), Name = Path.GetFileName(facts.Directory) }));
+        public int Calls { get; private set; }
+
+        /// <summary>Resolve each folder to the project <see cref="FakeRegistryApi.ProjectIdOf"/> gives it, as the registry keys them.</summary>
+        public bool ByFolder { get; set; }
+
+        /// <summary>
+        /// With <see cref="HereKnown"/>, the project every folder is in. When neither is set the registry cannot say, so tests
+        /// that do not care see push trust the ledger's project as before cli#95.
+        /// </summary>
+        public Guid? Here { get; set; }
+
+        public bool HereKnown { get; set; }
+
+        public Task<ApiResult<RemoteProject>> ResolveProjectAsync(Uri registry, string accessToken, Guid machineId, ProjectFacts facts, CancellationToken cancellationToken)
+        {
+            Calls++;
+            if (ByFolder)
+                return Task.FromResult(ApiResult<RemoteProject>.Success(new RemoteProject { ProjectId = FakeRegistryApi.ProjectIdOf(facts), Name = Path.GetFileName(facts.Directory) }));
+            return Task.FromResult(HereKnown
+                ? ApiResult<RemoteProject>.Success(new RemoteProject { ProjectId = Here, Name = "app" })
+                : ApiResult<RemoteProject>.Fail("cannot say"));
+        }
 
         public Task<ApiResult<ProjectLinkChange>> LinkFolderAsync(Uri registry, string accessToken, Guid machineId, ProjectFacts facts, string project, CancellationToken cancellationToken) =>
             throw new NotSupportedException();

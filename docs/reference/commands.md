@@ -585,6 +585,14 @@ second clone), with no link to remove, `unlink` gives this folder a project of i
 own instead. Run `protostar project unlink` again to rejoin. A folder that is not
 linked and is already its own project is left alone (`Nothing changed.`).
 
+Project skills you pulled into the folder while it was linked stay the linked
+project's skills after an unlink while you leave them as they are: `skills remote`
+lists them under that project, `skills pull` keeps them up to date from it, and
+`skills push` reports them unchanged. Once you change one here (or the linked
+project no longer has it, or this folder's own project has a skill of that name),
+it belongs to this folder's project instead: `skills remote` shows it as only here,
+and `skills push` backs it up as a new skill of this folder's project.
+
 ## `protostar auth`
 
 Authenticate to the protostar registry.
