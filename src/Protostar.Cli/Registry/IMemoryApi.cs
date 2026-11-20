@@ -19,6 +19,16 @@ internal interface IMemoryApi
     /// <summary><c>GET /v1/memory/{projectId}/content</c>: every memory file of the project with its current version's bytes.</summary>
     /// <remarks>A registry from before memory pull answers with an error that says to update it.</remarks>
     Task<ApiResult<RemoteMemoryContent>> GetMemoryContentAsync(Uri registry, string accessToken, Guid projectId, CancellationToken cancellationToken);
+
+    /// <summary><c>GET /v1/memory/{projectId}/content?redacted=true</c>: the project's memory files, or the one at <paramref name="path"/>, with secrets redacted.</summary>
+    /// <remarks>
+    /// For reading memory as an agent should (registry#13); a pull needs the stored bytes and uses
+    /// <see cref="GetMemoryContentAsync"/>. Callers check the <c>memory-redacted-read</c> capability first, because a
+    /// registry without it ignores the parameter and sends the stored bytes. An unknown project or path comes back
+    /// with <see cref="ApiResult{T}.MemoryUnknown"/> set.
+    /// </remarks>
+    Task<ApiResult<RemoteMemoryContent>> GetRedactedMemoryContentAsync(
+        Uri registry, string accessToken, Guid projectId, string? path, CancellationToken cancellationToken);
 }
 
 /// <summary>A project that has memory in the registry.</summary>

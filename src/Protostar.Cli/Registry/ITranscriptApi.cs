@@ -66,7 +66,8 @@ internal interface ITranscriptApi
 /// <summary>A value, or why the registry did not return one.</summary>
 /// <param name="MachineUnknown">The registry refused because it has no record of the machine the request named.</param>
 /// <param name="TranscriptUnknown">The registry answered that it holds no transcript with that harness and key.</param>
-internal sealed record ApiResult<T>(T? Value, string? Error, bool MachineUnknown = false, bool TranscriptUnknown = false)
+/// <param name="MemoryUnknown">The registry answered that the caller has no such project, or no memory file at that path.</param>
+internal sealed record ApiResult<T>(T? Value, string? Error, bool MachineUnknown = false, bool TranscriptUnknown = false, bool MemoryUnknown = false)
 {
     public bool Ok => Error is null;
 
@@ -77,6 +78,8 @@ internal sealed record ApiResult<T>(T? Value, string? Error, bool MachineUnknown
     public static ApiResult<T> UnknownMachine(string error) => new(default, error, MachineUnknown: true);
 
     public static ApiResult<T> UnknownTranscript(string error) => new(default, error, TranscriptUnknown: true);
+
+    public static ApiResult<T> UnknownMemory(string error) => new(default, error, MemoryUnknown: true);
 }
 
 /// <summary>Where a transcript's stored content ends in the registry.</summary>

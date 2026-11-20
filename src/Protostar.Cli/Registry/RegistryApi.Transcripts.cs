@@ -209,6 +209,8 @@ internal sealed partial class RegistryApi : ITranscriptApi
                 return ApiResult<T>.UnknownMachine(problem!.Title!);
             if (IsUnknownTranscript(response, problem))
                 return ApiResult<T>.UnknownTranscript(problem!.Title ?? "No such transcript.");
+            if (response.StatusCode == HttpStatusCode.NotFound && problem?.Type is UnknownProjectType or UnknownMemoryFileType)
+                return ApiResult<T>.UnknownMemory(problem.Title ?? "No such project or memory file.");
             return ApiResult<T>.Fail(problem?.Title ?? Describe(response.StatusCode));
         }
         catch (Exception ex) when (ex is HttpRequestException or JsonException or TaskCanceledException && !cancellationToken.IsCancellationRequested)
@@ -252,6 +254,8 @@ internal sealed partial class RegistryApi : ITranscriptApi
 
     private const string UnknownMachineType = "https://protostar.dev/problems/unknown-machine";
     private const string UnknownTranscriptType = "https://protostar.dev/problems/unknown-transcript";
+    private const string UnknownProjectType = "https://protostar.dev/problems/unknown-project";
+    private const string UnknownMemoryFileType = "https://protostar.dev/problems/unknown-memory-file";
 
     private static string Describe(HttpStatusCode status) => status == HttpStatusCode.Unauthorized
         ? "The registry rejected the session. Run `protostar auth login`."
