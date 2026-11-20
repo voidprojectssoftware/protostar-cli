@@ -38,12 +38,14 @@ internal static class SkillPushPresenter
         var created = result.Entries.Count(e => e.Outcome.Status == SkillPushStatus.Created);
         var unchanged = result.Entries.Count(e => e.Outcome.Status == SkillPushStatus.Unchanged);
         var problems = result.Entries.Count(e => e.Outcome.Status is SkillPushStatus.Refused or SkillPushStatus.Failed or SkillPushStatus.Conflict or SkillPushStatus.Stale);
+        var removed = result.Entries.Count(e => e.Outcome.Status == SkillPushStatus.Removed);
 
-        if (created == 0 && problems == 0)
+        if (created == 0 && problems == 0 && removed == 0)
             AnsiConsole.MarkupLine($"Everything was already up to date in [grey]{Markup.Escape(authority)}[/].");
         else
             AnsiConsole.MarkupLine(
                 $"Backed up to [grey]{Markup.Escape(authority)}[/]: {created} new, {unchanged} unchanged" +
+                (removed > 0 ? $", [yellow]{removed} not uploaded because {(removed == 1 ? "it was" : "they were")} deleted or renamed in the registry[/]" : "") +
                 (problems > 0 ? $", [red]{problems} not backed up[/]." : "."));
 
         foreach (var entry in result.Entries.Where(e => e.Outcome.Status == SkillPushStatus.Stale))
@@ -90,6 +92,8 @@ internal static class SkillPushPresenter
         SkillPushStatus.Created when outcome.Message is { } note => $"[green]new version v{outcome.Version}[/] {Markup.Escape(note)}",
         SkillPushStatus.Created => $"[green]new version v{outcome.Version}[/]",
         SkillPushStatus.Stale => $"[red]changed here and in the registry:[/] {Markup.Escape(outcome.Message ?? string.Empty)}",
+        SkillPushStatus.Removed when outcome.RenamedTo is { } renamedTo => $"[yellow]renamed to {Markup.Escape(renamedTo)} in the registry:[/] {Markup.Escape(outcome.Message ?? string.Empty)}",
+        SkillPushStatus.Removed => $"[yellow]deleted in the registry:[/] {Markup.Escape(outcome.Message ?? string.Empty)}",
         SkillPushStatus.Unchanged => $"[grey]unchanged (v{outcome.Version})[/]",
         SkillPushStatus.Skipped => $"[yellow]skipped:[/] {Markup.Escape(outcome.Message ?? string.Empty)}",
         SkillPushStatus.Refused => $"[red]refused:[/] {Markup.Escape(outcome.Message ?? string.Empty)}",

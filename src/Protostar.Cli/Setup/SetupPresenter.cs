@@ -147,7 +147,9 @@ internal static class SetupPresenter
             (Of(SkillPullStatus.ChangedBoth) is > 0 and var both ? $", [yellow]{both} kept because they changed here and in the registry[/]" : "") +
             (Of(SkillPullStatus.Conflict) is > 0 and var conflicts ? $", [red]{conflicts} skipped as conflicts[/]" : "") +
             (Of(SkillPullStatus.Failed) is > 0 and var failed ? $", [red]{failed} failed[/]" : "") +
-            (Of(SkillPullStatus.OtherProject) is > 0 and var elsewhere ? $", [grey]{elsewhere} left for other projects' checkouts[/]" : "") + ".";
+            (Of(SkillPullStatus.OtherProject) is > 0 and var elsewhere ? $", [grey]{elsewhere} left for other projects' checkouts[/]" : "") +
+            (Of(SkillPullStatus.FollowedRename) is > 0 and var followed ? $", {followed} renamed here to follow the registry" : "") +
+            (Of(SkillPullStatus.RemovedInRegistry) is > 0 and var gone ? $", [yellow]{gone} kept although deleted or renamed in the registry[/]" : "") + ".";
 
         // Condensed: one line per skill that changed or needs attention. Up-to-date and other projects' skills are only counted.
         var showHarness = result.Entries.Select(e => e.Harness.Id).Distinct().Count() > 1;
@@ -167,7 +169,8 @@ internal static class SetupPresenter
     }
 
     // The push's summary sentence, and one line per skill it pushed or could not back up. A skill refused as changed here
-    // and in the registry is only counted: the pull that follows lists it as kept for that reason.
+    // and in the registry, or left out as deleted or renamed in the registry, is only counted: the pull that follows lists
+    // it, as kept or as renamed to follow.
     private static (string Summary, List<string> Lines) Pushed(SkillPushRunResult push, IHarnessCatalog catalog)
     {
         if (SkillPushPresenter.FailureMessage(push, catalog) is { } failure)
@@ -179,10 +182,11 @@ internal static class SetupPresenter
         var problems = push.Entries.Count(e => e.Outcome.Status is SkillPushStatus.Refused or SkillPushStatus.Conflict or SkillPushStatus.Failed);
         var summary = $"Pushed: {Of(SkillPushStatus.Created)} backed up, {Of(SkillPushStatus.Unchanged)} already backed up" +
             (Of(SkillPushStatus.Stale) is > 0 and var stale ? $", [yellow]{stale} not pushed because they changed here and in the registry[/]" : "") +
+            (Of(SkillPushStatus.Removed) is > 0 and var removed ? $", [yellow]{removed} not pushed because they were deleted or renamed in the registry[/]" : "") +
             (problems > 0 ? $", [red]{problems} not backed up[/]" : "") + ".";
 
         var notable = push.Entries
-            .Where(e => e.Outcome.Status is not (SkillPushStatus.Unchanged or SkillPushStatus.Skipped or SkillPushStatus.Stale))
+            .Where(e => e.Outcome.Status is not (SkillPushStatus.Unchanged or SkillPushStatus.Skipped or SkillPushStatus.Stale or SkillPushStatus.Removed))
             .ToList();
         var lines = notable.Take(MaxSkillLines).Select(e =>
             Markup.Escape(e.Outcome.ProjectName is { } project ? $"{e.Skill.Name} ({project})" : e.Skill.Name) + ": " +

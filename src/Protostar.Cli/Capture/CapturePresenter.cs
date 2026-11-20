@@ -145,12 +145,13 @@ internal static class CapturePresenter
         _ => $"{push.Detail ?? push.Failure.ToString()}",
     };
 
-    // Worth a log line: anything other than success, ignore, or "not a local skill". A stale refusal is logged once:
+    // Worth a log line: anything other than success, ignore, or "not a local skill". A stale refusal, or one as a copy of a
+    // skill removed from the registry, is logged once:
     // later uses of the same content are answered from the ledger (Remembered) and not logged again.
     private static bool NeedsAttention(CaptureResult result) =>
         result.Action == CaptureAction.Failed ||
         (result.Push is { } push &&
          (push.Failure is not (SkillPushRunFailure.None or SkillPushRunFailure.SkillNotFound) ||
           push.Entries.Any(e => e.Outcome.Status is SkillPushStatus.Refused or SkillPushStatus.Failed or SkillPushStatus.Conflict ||
-                                e.Outcome is { Status: SkillPushStatus.Stale, Remembered: false })));
+                                e.Outcome is { Status: SkillPushStatus.Stale or SkillPushStatus.Removed, Remembered: false })));
 }

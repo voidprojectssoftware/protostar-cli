@@ -93,9 +93,12 @@ internal sealed partial class RegistryApi : IRegistryApi, IDisposable
 
         return new RegistrySkillList(
             skills.Where(s => s.Name is not null && s.ContentHash is not null)
-                .Select(s => new RegistrySkill(s.Name!, s.Description, s.Version, s.ContentHash!, s.UpdatedAt, s.ProjectId, s.ProjectName))
+                .Select(s => new RegistrySkill(s.Name!, s.Description, s.Version, s.ContentHash!, s.UpdatedAt, s.ProjectId, s.ProjectName, s.FirstVersion ?? 1))
                 .ToList(),
-            null);
+            null,
+            (body.Removed ?? []).Where(r => r.Name is not null)
+                .Select(r => new RegistryRemovedSkill(r.Name!, r.ProjectId, r.LastVersion, r.RenamedTo))
+                .ToList());
     }
 
     /// <inheritdoc />
@@ -166,7 +169,8 @@ internal sealed partial class RegistryApi : IRegistryApi, IDisposable
     }
 
     // 201 is a new version and 200 an unchanged push, both carrying the push body. A 409 of the stale problem type
-    // is a push based on an older version than the registry's. Any other 4xx is the registry refusing this skill
+    // is a push based on an older version than the registry's; one of the deleted or renamed types is a push from a
+    // copy of a skill removed from the registry since. Any other 4xx is the registry refusing this skill
     // (its problem title says why); anything else is a failure to retry.
     private static async Task<SkillPushOutcome> ToOutcomeAsync(HttpResponseMessage response, CancellationToken cancellationToken)
     {
@@ -186,6 +190,9 @@ internal sealed partial class RegistryApi : IRegistryApi, IDisposable
 
         if (status == HttpStatusCode.Conflict && problem?.Type == StaleSkillVersionType && problem.CurrentVersion is { } current)
             return new SkillPushOutcome(SkillPushStatus.Stale, current, reason, problem.ProjectId);
+
+        if (status == HttpStatusCode.Conflict && problem?.Type is SkillDeletedType or SkillRenamedType && problem.LastVersion is { } last)
+            return new SkillPushOutcome(SkillPushStatus.Removed, last, reason, problem.ProjectId, RenamedTo: problem.RenamedTo);
 
         if ((int)status is >= 400 and < 500)
             return new SkillPushOutcome(SkillPushStatus.Refused, null, reason ?? $"Refused by the registry ({(int)status}).");
@@ -211,6 +218,10 @@ internal sealed partial class RegistryApi : IRegistryApi, IDisposable
     // The registry's problem type for a push based on an older version than its current one.
     private const string StaleSkillVersionType = "https://protostar.dev/problems/stale-skill-version";
 
+    // The registry's problem types for a push from a copy of a skill deleted or renamed in the registry since (registry#58).
+    private const string SkillDeletedType = "https://protostar.dev/problems/skill-deleted";
+    private const string SkillRenamedType = "https://protostar.dev/problems/skill-renamed";
+
     public void Dispose() => _http.Dispose();
 
     private sealed record PushResponse
@@ -229,6 +240,15 @@ internal sealed partial class RegistryApi : IRegistryApi, IDisposable
     private sealed record ListResponse
     {
         [JsonPropertyName("skills")] public List<ListItem>? Skills { get; init; }
+        [JsonPropertyName("removed")] public List<RemovedItem>? Removed { get; init; }
+    }
+
+    private sealed record RemovedItem
+    {
+        [JsonPropertyName("name")] public string? Name { get; init; }
+        [JsonPropertyName("projectId")] public Guid? ProjectId { get; init; }
+        [JsonPropertyName("lastVersion")] public int LastVersion { get; init; }
+        [JsonPropertyName("renamedTo")] public string? RenamedTo { get; init; }
     }
 
     private sealed record ListItem
@@ -240,6 +260,7 @@ internal sealed partial class RegistryApi : IRegistryApi, IDisposable
         [JsonPropertyName("updatedAt")] public DateTimeOffset UpdatedAt { get; init; }
         [JsonPropertyName("projectId")] public Guid? ProjectId { get; init; }
         [JsonPropertyName("projectName")] public string? ProjectName { get; init; }
+        [JsonPropertyName("firstVersion")] public int? FirstVersion { get; init; }
     }
 
     private sealed record FilesResponse
@@ -264,5 +285,7 @@ internal sealed partial class RegistryApi : IRegistryApi, IDisposable
         [JsonPropertyName("detail")] public string? Detail { get; init; }
         [JsonPropertyName("currentVersion")] public int? CurrentVersion { get; init; }
         [JsonPropertyName("projectId")] public Guid? ProjectId { get; init; }
+        [JsonPropertyName("lastVersion")] public int? LastVersion { get; init; }
+        [JsonPropertyName("renamedTo")] public string? RenamedTo { get; init; }
     }
 }

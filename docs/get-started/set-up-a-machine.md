@@ -34,6 +34,11 @@ last synced it, nothing is overwritten on either side. The step reports the
 skill as changed here and in the registry, keeps your copy, and setup still
 finishes; `protostar skills remote` shows how to keep yours, theirs, or both.
 
+Running setup again never undoes a rename or delete made on another machine. A
+skill deleted in the registry is not pushed back, and a copy of a renamed skill
+is renamed here to match when you have not edited it. A copy you edited, or a
+deleted skill's copy, is kept and reported, never deleted.
+
 ```console
 $ protostar setup --yes
 Opening your browser to sign in. If it doesn't open, use the URL below, then return here.

@@ -48,9 +48,19 @@ internal interface ISkillLedger
 /// </param>
 /// <param name="RefusedHash">
 /// The content of this copy the registry last refused as stale (<see cref="Registry.SkillPushStatus.Stale"/>): it was
-/// changed here and in the registry since <paramref name="Version"/>. <c>null</c> when no push was refused since the
+/// changed here and in the registry since <paramref name="Version"/>. Or, with <paramref name="RefusedAsRemoved"/>, the
+/// content refused because the registry skill was deleted or renamed after this copy synced. <c>null</c> when no push was refused since the
 /// last sync. The capture hook does not send that same content again.
 /// </param>
-/// <param name="RefusedVersion">The registry's current version when it refused <paramref name="RefusedHash"/>.</param>
+/// <param name="RefusedVersion">
+/// The registry's current version when it refused <paramref name="RefusedHash"/>, or the removed skill's last version
+/// when <paramref name="RefusedAsRemoved"/>.
+/// </param>
+/// <param name="RefusedAsRemoved">
+/// True when <paramref name="RefusedHash"/> was refused because the registry skill was deleted or renamed since this copy
+/// synced (<see cref="Registry.SkillPushStatus.Removed"/>), rather than as stale.
+/// </param>
+/// <param name="RefusedRenamedTo">For a refusal because of a rename, the skill's name in the registry then.</param>
 internal sealed record SkillLedgerEntry(
-    string ContentHash, int? Version, string? Name = null, Guid? ProjectId = null, string? RefusedHash = null, int? RefusedVersion = null);
+    string ContentHash, int? Version, string? Name = null, Guid? ProjectId = null, string? RefusedHash = null, int? RefusedVersion = null,
+    bool RefusedAsRemoved = false, string? RefusedRenamedTo = null);

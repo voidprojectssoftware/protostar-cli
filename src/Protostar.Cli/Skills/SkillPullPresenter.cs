@@ -124,6 +124,8 @@ internal static class SkillPullPresenter
         var failed = result.Entries.Count(e => e.Status == SkillPullStatus.Failed);
         var conflicted = result.Entries.Count(e => e.Status == SkillPullStatus.Conflict);
         var elsewhere = result.Entries.Count(e => e.Status == SkillPullStatus.OtherProject);
+        var followed = result.Entries.Count(e => e.Status == SkillPullStatus.FollowedRename);
+        var gone = result.Entries.Count(e => e.Status == SkillPullStatus.RemovedInRegistry);
 
         AnsiConsole.MarkupLine(
             $"From [grey]{Markup.Escape(authority)}[/]: {installed} installed, {updated} updated, {current} already up to date" +
@@ -131,7 +133,9 @@ internal static class SkillPullPresenter
             (both > 0 ? $", [yellow]{both} kept because they changed here and in the registry[/]" : string.Empty) +
             (conflicted > 0 ? $", [red]{conflicted} skipped as conflicts[/]" : string.Empty) +
             (failed > 0 ? $", [red]{failed} failed[/]" : string.Empty) +
-            (elsewhere > 0 ? $", [grey]{elsewhere} left for other projects' checkouts[/]" : string.Empty) + ".");
+            (elsewhere > 0 ? $", [grey]{elsewhere} left for other projects' checkouts[/]" : string.Empty) +
+            (followed > 0 ? $", {followed} renamed here to follow the registry" : string.Empty) +
+            (gone > 0 ? $", [yellow]{gone} kept although deleted or renamed in the registry[/]" : string.Empty) + ".");
         if (held > 0)
             AnsiConsole.MarkupLine("[grey]Back up local changes with `protostar skills push`, or overwrite them with `protostar skills pull --force`.[/]");
         foreach (var entry in result.Entries.Where(e => e.Status == SkillPullStatus.ChangedBoth))
@@ -155,6 +159,8 @@ internal static class SkillPullPresenter
             : "[red]changed here and in the registry[/]",
         SkillSyncState.Conflict => $"[red]conflict:[/] {Markup.Escape(skill.Note ?? string.Empty)}",
         SkillSyncState.OtherProject => $"[grey]other project:[/] {Markup.Escape(skill.Note ?? string.Empty)}",
+        SkillSyncState.RemovedInRegistry when skill.Remote is not null => $"[yellow]a new skill took this name:[/] {Markup.Escape(skill.Note ?? string.Empty)}",
+        SkillSyncState.RemovedInRegistry => $"[yellow]gone from the registry:[/] {Markup.Escape(skill.Note ?? string.Empty)}",
         _ => "[grey]only here (not backed up)[/]",
     };
 
@@ -171,6 +177,8 @@ internal static class SkillPullPresenter
             SkillPullStatus.LocalChanges => "[yellow]kept: has local changes[/]",
             SkillPullStatus.Conflict => "[red]conflict:[/]",
             SkillPullStatus.OtherProject => "[grey]not here:[/]",
+            SkillPullStatus.FollowedRename => "[green]followed the rename:[/]",
+            SkillPullStatus.RemovedInRegistry => "[yellow]kept, removed from the registry:[/]",
             _ => "[red]failed[/]",
         };
         return entry.Message is { } message ? $"{text} {Markup.Escape(message)}" : text;
