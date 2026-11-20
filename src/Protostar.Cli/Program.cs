@@ -13,6 +13,7 @@ using Protostar.Cli.Registry;
 using Protostar.Cli.Sessions;
 using Protostar.Cli.Setup;
 using Protostar.Cli.Skills;
+using Spectre.Console;
 using Spectre.Console.Cli;
 
 // Business-logic services are registered in the DI container and constructor-injected into commands.
@@ -54,6 +55,15 @@ services.AddSingleton<IHarnessCatalog, HarnessCatalog>();
 // are provided by the framework. The registrar resolves commands (and their dependencies) from the
 // container above.
 var app = new CommandApp<DefaultCommand>(new TypeRegistrar(services));
+
+// The top-level command and branch names, collected as they are registered below, for OptionPlacementGuard.CheckRoot.
+var commandNames = new List<string>();
+string Named(string name)
+{
+    commandNames.Add(name);
+    return name;
+}
+
 app.Configure(config =>
 {
     config.SetApplicationName("protostar");
@@ -63,18 +73,18 @@ app.Configure(config =>
     // command line that puts it after, instead of being silently dropped. See OptionPlacementGuard.
     config.SetInterceptor(new OptionPlacementGuard());
 
-    config.AddCommand<SetupCommand>("setup")
+    config.AddCommand<SetupCommand>(Named("setup"))
         .WithDescription("Set up this machine in one step: sign in, install hooks, push and pull skills, and back up sessions. Safe to run again.");
-    config.AddCommand<InstallCommand>("install")
+    config.AddCommand<InstallCommand>(Named("install"))
         .WithDescription("Install protostar to a per-user directory and add it to PATH.");
-    config.AddCommand<UninstallCommand>("uninstall")
+    config.AddCommand<UninstallCommand>(Named("uninstall"))
         .WithDescription("Remove an installed protostar binary.");
-    config.AddCommand<InstallHooksCommand>("install-hooks")
+    config.AddCommand<InstallHooksCommand>(Named("install-hooks"))
         .WithDescription("Detect supported harnesses and install protostar capture hooks idempotently.");
-    config.AddCommand<CaptureCommand>("capture")
+    config.AddCommand<CaptureCommand>(Named("capture"))
         .WithDescription("Capture a harness hook event (invoked by installed hooks).")
         .IsHidden();
-    config.AddBranch("skills", skills =>
+    config.AddBranch(Named("skills"), skills =>
     {
         skills.SetDescription("List skills on this machine, back them up to the registry, pull them from it, or rename or delete them there.");
         skills.SetDefaultCommand<SkillsCommand>();
@@ -90,7 +100,7 @@ app.Configure(config =>
             .WithDescription("Delete a skill and all its versions from the registry. Local copies are never deleted.");
     });
 
-    config.AddBranch("sessions", sessions =>
+    config.AddBranch(Named("sessions"), sessions =>
     {
         sessions.SetDescription("Back up session transcripts, and see what is backed up.");
         sessions.AddCommand<SessionsPushCommand>("push")
@@ -103,7 +113,7 @@ app.Configure(config =>
 
     // Not AddBranch<ProjectSettings>: branch settings bind only before the subcommand, so `project link x --dir y`
     // silently acted on the current folder. Like the other branches, each command's settings carry the options.
-    config.AddBranch("project", project =>
+    config.AddBranch(Named("project"), project =>
     {
         project.SetDescription("See which project this folder belongs to, the same on every machine, and link or unlink it.");
         project.SetDefaultCommand<ProjectShowCommand>();
@@ -115,7 +125,7 @@ app.Configure(config =>
             .WithDescription("Unlink this folder; a fork's folder with no link gets a project of its own.");
     });
 
-    config.AddBranch("auth", auth =>
+    config.AddBranch(Named("auth"), auth =>
     {
         auth.SetDescription("Authenticate to the protostar registry.");
         auth.AddCommand<LoginCommand>("login")
@@ -126,5 +136,12 @@ app.Configure(config =>
             .WithDescription("Show whether you are signed in to the registry.");
     });
 });
+
+// Spectre fails on an option before the first command while parsing, before the interceptor could run.
+if (OptionPlacementGuard.CheckRoot(args, commandNames) is { } misplaced)
+{
+    AnsiConsole.MarkupLine($"[red]Error:[/] {Markup.Escape(misplaced)}");
+    return -1;
+}
 
 return app.Run(args);
