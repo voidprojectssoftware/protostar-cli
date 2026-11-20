@@ -123,7 +123,9 @@ internal sealed class SetupService : ISetupService
     // Push before pull, so a skill changed here is backed up before the pull compares it: otherwise the pull would
     // keep it as "local changes" and leave it un-backed-up. A push the registry refused as stale is recorded by the push
     // service, so the pull that follows shows the copy as changed here and in the registry and keeps it. That, a
-    // same-name conflict and a refusal are reported, not failures: running setup again would not change them.
+    // same-name conflict and a refusal are reported, not failures: running setup again would not change them. So is a
+    // copy of a skill deleted or renamed in the registry: the push leaves it out and the pull renames it to follow a
+    // rename when it is unedited, or keeps and reports it.
     private async Task<SetupStepResult> SyncSkillsAsync(SetupRequest request, CancellationToken cancellationToken)
     {
         var push = await _push.PushAsync(
@@ -137,7 +139,7 @@ internal sealed class SetupService : ISetupService
             { Succeeded: false } => SetupOutcome.Failed,
             _ when push.Failure != SkillPushRunFailure.None || push.Entries.Any(e => e.Outcome.Status == SkillPushStatus.Failed) => SetupOutcome.Failed,
             _ when push.Entries.Any(e => e.Outcome.Status == SkillPushStatus.Created) ||
-                pull.Entries.Any(e => e.Status is SkillPullStatus.Installed or SkillPullStatus.Updated) => SetupOutcome.Done,
+                pull.Entries.Any(e => e.Status is SkillPullStatus.Installed or SkillPullStatus.Updated or SkillPullStatus.FollowedRename) => SetupOutcome.Done,
             _ => SetupOutcome.AlreadyDone,
         };
         return new SetupStepResult(SetupStep.Skills, outcome, outcome == SetupOutcome.Skipped ? SetupSkip.NoHarness : SetupSkip.None)

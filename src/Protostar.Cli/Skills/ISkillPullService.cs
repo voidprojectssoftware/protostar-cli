@@ -137,6 +137,13 @@ internal enum SkillSyncState
     LocalOnly,
 
     /// <summary>
+    /// Installed here, synced as a registry skill that was deleted or renamed in the registry since. A push does not
+    /// upload it (that would undo the delete or rename); see <see cref="SkillComparison.Note"/> for what happened and the
+    /// ways out.
+    /// </summary>
+    RemovedInRegistry,
+
+    /// <summary>
     /// Cannot be pulled safely: a folder with the skill's name exists here but is not this skill, or the
     /// registry holds two skills whose names differ only by case. See <see cref="SkillComparison.Note"/>.
     /// </summary>
@@ -156,7 +163,10 @@ internal enum SkillSyncState
 /// <param name="Remote">The registry's skill; <c>null</c> for <see cref="SkillSyncState.LocalOnly"/>.</param>
 /// <param name="LocalPath">The installed skill directory; <c>null</c> when not installed.</param>
 /// <param name="LocalVersion">The registry version this machine last synced, from the ledger; <c>null</c> when unknown.</param>
-/// <param name="Note">Why it is a <see cref="SkillSyncState.Conflict"/> or whose it is for <see cref="SkillSyncState.OtherProject"/>; <c>null</c> otherwise.</param>
+/// <param name="Note">
+/// Why it is a <see cref="SkillSyncState.Conflict"/>, whose it is for <see cref="SkillSyncState.OtherProject"/>, or what
+/// happened to it for <see cref="SkillSyncState.RemovedInRegistry"/>; <c>null</c> otherwise.
+/// </param>
 /// <param name="Project">The project's display name for a project skill; <c>null</c> for a global skill.</param>
 internal sealed record SkillComparison(
     IHarness Harness,
@@ -207,6 +217,18 @@ internal enum SkillPullStatus
 
     /// <summary>Not written: it belongs to a project other than this folder's. The message says which, and where it would go.</summary>
     OtherProject,
+
+    /// <summary>
+    /// A local copy of a skill renamed in the registry, unedited since it synced, renamed here to follow (its SKILL.md
+    /// name and folder). <see cref="SkillPullEntry.Path"/> is where it is now; the registry's skill then pulls into it.
+    /// </summary>
+    FollowedRename,
+
+    /// <summary>
+    /// A local copy of a skill deleted or renamed in the registry, kept as it is: deleted, edited here, or its new name
+    /// is taken here. The message says which and the ways out. Local files are never deleted.
+    /// </summary>
+    RemovedInRegistry,
 }
 
 /// <summary>One skill a pull handled.</summary>

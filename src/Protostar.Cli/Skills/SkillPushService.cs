@@ -20,8 +20,9 @@ namespace Protostar.Cli.Skills;
 /// project skill of the same name are separate registry skills and are both pushed. A skill whose content
 /// matches the <see cref="ISkillLedger"/> record for the same scope is unchanged: the capture hook takes the
 /// ledger's word for it and makes no network call, while the command confirms it against the registry's skill list,
-/// one request per run however many skills there are, so a skill deleted or renamed from another machine is backed
-/// up again instead of reported as safe.
+/// one request per run however many skills there are, so a skill deleted or renamed from another machine is never
+/// reported as safe. A copy of a skill the registry remembers removing (the list's removed names) is reported and not
+/// uploaded, so a push or setup never undoes a delete or rename; one the registry has no memory of is backed up again.
 /// <para>
 /// The base version each push names is the version the ledger says this copy last synced (pushed or pulled), not
 /// the registry's current one: that is what makes a stale edit detectable. A copy the ledger has no record of, for
@@ -143,13 +144,19 @@ internal sealed class SkillPushService : ISkillPushService
                 continue;
             }
 
-            // The registry already refused exactly this content as stale. Asking again would only be refused again,
-            // so the hook, which runs on every use of the skill, answers from the ledger until the copy changes.
+            // The registry already refused exactly this content, as stale or as a copy of a removed skill. Asking again
+            // would only be refused again, so the hook, which runs on every use of the skill, answers from the ledger until
+            // the copy changes.
             if (request.FromHook && recorded is not null && recorded.RefusedHash == hash)
             {
-                entries[i] = new SkillPushEntry(skill, new SkillPushOutcome(SkillPushStatus.Stale, recorded.RefusedVersion,
-                    StaleMessage(recorded.Version ?? 0, recorded.RefusedVersion) + " Refused earlier; not sent again until it changes.",
-                    recorded.ProjectId, Remembered: true));
+                const string remembered = " Refused earlier; not sent again until it changes.";
+                entries[i] = new SkillPushEntry(skill, recorded.RefusedAsRemoved
+                    ? new SkillPushOutcome(SkillPushStatus.Removed, recorded.RefusedVersion,
+                        RemovedMessage(skill.Name, recorded.RefusedVersion ?? 0, recorded.RefusedRenamedTo, edited: true) + remembered,
+                        recorded.ProjectId, Remembered: true, RenamedTo: recorded.RefusedRenamedTo)
+                    : new SkillPushOutcome(SkillPushStatus.Stale, recorded.RefusedVersion,
+                        StaleMessage(recorded.Version ?? 0, recorded.RefusedVersion) + remembered,
+                        recorded.ProjectId, Remembered: true));
                 continue;
             }
 
@@ -184,19 +191,35 @@ internal sealed class SkillPushService : ISkillPushService
                 return SkillPushRunResult.Fail(SkillPushRunFailure.ListFailed, list.Error, registry);
             }
 
-            foreach (var (index, _, _) in pending)
+            // A copy whose registry skill is gone is either a copy of a skill deleted or renamed since it synced, which is
+            // reported and never uploaded (that would undo the delete or rename), or of one the registry has no memory of,
+            // which is backed up again. With --force a removed skill is restored on purpose, as a new skill.
+            foreach (var (index, _, hash) in pending.ToList())
             {
-                if (!await StillInRegistryAsync(registry, session.AccessToken, selected[index], skills, cancellationToken))
-                    gone.Add(index);
+                var skill = selected[index];
+                if (await StillInRegistryAsync(registry, session.AccessToken, skill, skills, cancellationToken))
+                    continue;
+                gone.Add(index);
+                if (Removal(registry, skill, list) is { } removal && !request.Force)
+                {
+                    pending.RemoveAll(p => p.Index == index);
+                    entries[index] = new SkillPushEntry(skill, RefuseRemoved(registry, skill, hash, removal));
+                }
             }
 
             foreach (var (index, files, hash) in unconfirmed)
             {
                 var skill = selected[index];
+                var recorded = _ledger.Get(registry, skill.Path)!;
                 if (await StillInRegistryAsync(registry, session.AccessToken, skill, skills, cancellationToken))
                 {
-                    var recorded = _ledger.Get(registry, skill.Path)!;
                     entries[index] = new SkillPushEntry(skill, new SkillPushOutcome(SkillPushStatus.Unchanged, recorded.Version, null, recorded.ProjectId));
+                }
+                else if (Removal(registry, skill, list) is { } removal)
+                {
+                    // Unedited since it synced, so there is nothing of this machine's to protect: only report it.
+                    entries[index] = new SkillPushEntry(skill, new SkillPushOutcome(SkillPushStatus.Removed, removal.LastVersion,
+                        RemovedMessage(skill.Name, removal.LastVersion, removal.RenamedTo, edited: false), recorded.ProjectId, RenamedTo: removal.RenamedTo));
                 }
                 else
                 {
@@ -238,6 +261,23 @@ internal sealed class SkillPushService : ISkillPushService
     private SkillLedgerEntry? Synced(Uri registry, DiscoveredSkill skill) =>
         _ledger.Get(registry, skill.Path) is { } recorded && Vouches(recorded, skill) ? recorded : null;
 
+    // The registry's removal of the skill this copy last synced as, when the copy came from it (RegistrySkillList.RemovalOf).
+    private RegistryRemovedSkill? Removal(Uri registry, DiscoveredSkill skill, RegistrySkillList list) =>
+        Synced(registry, skill) is { } recorded ? list.RemovalOf(recorded.Name ?? skill.Name, recorded.ProjectId, recorded.Version) : null;
+
+    // An edited copy of a removed skill: nothing is uploaded, and the refusal is recorded like a stale one, so the hook does
+    // not send the same content again and a new skill that later takes the name shows as changed here and in the registry.
+    private SkillPushOutcome RefuseRemoved(Uri registry, DiscoveredSkill skill, string hash, RegistryRemovedSkill removal)
+    {
+        var recorded = Synced(registry, skill)!;
+        _ledger.Record(registry, skill.Path, recorded with
+        {
+            RefusedHash = hash, RefusedVersion = removal.LastVersion, RefusedAsRemoved = true, RefusedRenamedTo = removal.RenamedTo,
+        });
+        return new SkillPushOutcome(SkillPushStatus.Removed, removal.LastVersion,
+            RemovedMessage(skill.Name, removal.LastVersion, removal.RenamedTo, edited: true), recorded.ProjectId, RenamedTo: removal.RenamedTo);
+    }
+
     // Whether the registry skill this copy last synced as (its name and project, from the ledger) is in the registry's
     // list. A copy that never synced has nothing to lose, so it counts as present. The list holds every project's
     // skills, so a skill of another project is never mistaken for this one, and a skill that a link moved to another
@@ -265,7 +305,9 @@ internal sealed class SkillPushService : ISkillPushService
     // Pushes one skill based on the version its copy last synced, and records the result. A stale refusal is recorded,
     // never retried; with force it is answered by pushing again based on the registry's current version, which the
     // registry has just named, so the replace is deliberate and a third push in between is still refused. A copy whose
-    // registry skill is gone (deleted or renamed elsewhere) is pushed as a new skill, base 0, and says why.
+    // registry skill is gone is pushed as a new skill, base 0, and says why: one the registry has no memory of, or, with
+    // force, a removed one being restored. A refusal as a copy of a removed skill (the hook, which does not list, or a
+    // removal between the list and the push) is recorded like a stale one; with force it is answered with base 0.
     private async Task<SkillPushOutcome> PushOneAsync(
         Uri registry, string accessToken, DiscoveredSkill skill, IReadOnlyList<SkillUploadFile> files, string hash, bool force, bool gone,
         CancellationToken cancellationToken)
@@ -275,7 +317,12 @@ internal sealed class SkillPushService : ISkillPushService
         var project = ProjectOf(skill);
 
         var outcome = await _registry.PushSkillAsync(registry, accessToken, skill.Name, files, project, based, cancellationToken);
-        if (outcome is { Status: SkillPushStatus.Stale, Version: { } current } && force)
+        if (outcome.Status == SkillPushStatus.Removed && force)
+        {
+            gone = true;
+            outcome = await _registry.PushSkillAsync(registry, accessToken, skill.Name, files, project, 0, cancellationToken);
+        }
+        else if (outcome is { Status: SkillPushStatus.Stale, Version: { } current } && force)
         {
             outcome = await _registry.PushSkillAsync(registry, accessToken, skill.Name, files, project, current, cancellationToken);
             if (outcome.Status == SkillPushStatus.Created)
@@ -289,7 +336,14 @@ internal sealed class SkillPushService : ISkillPushService
         }
 
         if (gone && outcome.Succeeded)
-            outcome = outcome with { Message = $"'{skill.Name}' was renamed or deleted in the registry; backed it up again as '{skill.Name}'." };
+        {
+            outcome = outcome with
+            {
+                Message = force
+                    ? $"Restored: '{skill.Name}' had been deleted or renamed in the registry; pushed this copy as a new skill named '{skill.Name}'."
+                    : $"'{skill.Name}' was renamed or deleted in the registry; backed it up again as '{skill.Name}'.",
+            };
+        }
 
         if (outcome.Succeeded)
         {
@@ -298,8 +352,17 @@ internal sealed class SkillPushService : ISkillPushService
         else if (outcome.Status == SkillPushStatus.Stale)
         {
             var entry = basis ?? new SkillLedgerEntry(string.Empty, 0, skill.Name, outcome.ProjectId);
-            _ledger.Record(registry, skill.Path, entry with { RefusedHash = hash, RefusedVersion = outcome.Version });
+            _ledger.Record(registry, skill.Path, entry with { RefusedHash = hash, RefusedVersion = outcome.Version, RefusedAsRemoved = false, RefusedRenamedTo = null });
             outcome = outcome with { Message = StaleMessage(based ?? 0, outcome.Version) };
+        }
+        else if (outcome.Status == SkillPushStatus.Removed && basis is not null)
+        {
+            // Only a push that named a base from 1 up is refused this way, so the copy has a record.
+            _ledger.Record(registry, skill.Path, basis with
+            {
+                RefusedHash = hash, RefusedVersion = outcome.Version, RefusedAsRemoved = true, RefusedRenamedTo = outcome.RenamedTo,
+            });
+            outcome = outcome with { Message = RemovedMessage(skill.Name, outcome.Version ?? 0, outcome.RenamedTo, edited: true) };
         }
 
         return outcome;
@@ -362,6 +425,26 @@ internal sealed class SkillPushService : ISkillPushService
     private static string StaleMessage(int based, int? current) =>
         $"Changed here and in the registry: the registry has v{current}, but this copy is based on " +
         (based == 0 ? "no registry version (it was never pulled or pushed here)." : $"v{based}.") + " Nothing was overwritten.";
+
+    // Why a copy of a removed skill was not backed up, and the ways out. Pull follows a rename for an unedited copy; an
+    // edited one, or a deleted skill, is the user's call: remove the copy, or restore it on purpose with --force.
+    internal static string RemovedMessage(string name, int lastVersion, string? renamedTo, bool edited)
+    {
+        var quoted = name.Any(char.IsWhiteSpace) ? $"\"{name}\"" : name;
+        var what = renamedTo is null
+            ? $"'{name}' was deleted from the registry (at v{lastVersion}) after this copy last synced"
+            : $"'{name}' was renamed to '{renamedTo}' in the registry (at v{lastVersion}) after this copy last synced";
+        if (!edited)
+        {
+            return renamedTo is null
+                ? $"{what}, so it was not uploaded again. Remove this copy if you no longer want it, or run `protostar skills push {quoted} --force` to restore it."
+                : $"{what}, so it was not uploaded again under the old name. `protostar skills pull` renames this copy to '{renamedTo}'.";
+        }
+
+        return renamedTo is null
+            ? $"Changed here, but {what}. Nothing was uploaded and your changes are kept here. Run `protostar skills push {quoted} --force` to restore it with your changes, or remove this copy."
+            : $"Changed here, but {what}. Nothing was uploaded and your changes are kept here. Move them into '{renamedTo}' (`protostar skills pull` installs it), or run `protostar skills push {quoted} --force` to keep this as a separate skill named '{name}'.";
+    }
 
     // The project folder a project skill is pushed as part of: the folder its project config was found in,
     // resolved the same way session backups resolve a working directory. Null for a global skill.

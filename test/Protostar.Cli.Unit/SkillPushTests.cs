@@ -100,10 +100,10 @@ public sealed class SkillPushServiceTests : IDisposable
     }
 
     [Fact]
-    public async Task A_skill_deleted_from_the_registry_elsewhere_is_backed_up_again_as_new_and_says_why()
+    public async Task A_registry_that_forgot_a_deleted_skill_gets_it_backed_up_again_as_new_and_says_why()
     {
         var skill = Skill("tidy");
-        var (seed, api) = Build([skill], Session());
+        var (seed, api) = Build([skill], Session(), new FakeRegistryApi { RemembersRemovals = false });
         await seed.PushAsync(Request(), CancellationToken.None);
         await api.DeleteSkillAsync(RegistryUri, "t", "tidy", null, CancellationToken.None);
         api.Bases.Clear();
@@ -118,11 +118,11 @@ public sealed class SkillPushServiceTests : IDisposable
     }
 
     [Fact]
-    public async Task A_skill_renamed_in_the_registry_elsewhere_is_pushed_back_under_its_name_here()
+    public async Task A_registry_that_forgot_a_rename_gets_the_copy_pushed_back_under_its_name_here()
     {
         var skill = Skill("tidy");
         Synced(skill, 2);
-        var (sut, api) = Build([skill], Session());
+        var (sut, api) = Build([skill], Session(), new FakeRegistryApi { RemembersRemovals = false });
         await api.RenameSkillAsync(RegistryUri, "t", "tidy", null, "neat", CancellationToken.None);
 
         var result = await sut.PushAsync(Request(), CancellationToken.None);
@@ -135,7 +135,7 @@ public sealed class SkillPushServiceTests : IDisposable
     }
 
     [Fact]
-    public async Task An_edited_copy_of_a_deleted_skill_is_pushed_as_new_rather_than_on_its_old_base()
+    public async Task An_edited_copy_of_a_skill_a_registry_forgot_is_pushed_as_new_rather_than_on_its_old_base()
     {
         var skill = Skill("tidy");
         Synced(skill, 3);
@@ -147,6 +147,148 @@ public sealed class SkillPushServiceTests : IDisposable
 
         Assert.Contains("renamed or deleted", Assert.Single(result.Entries).Outcome.Message);
         Assert.Equal([0], api.Bases);
+    }
+
+    [Fact]
+    public async Task A_copy_of_a_skill_deleted_in_the_registry_is_not_uploaded_and_says_how_to_restore_or_remove_it()
+    {
+        var skill = Skill("tidy");
+        var (seed, api) = Build([skill], Session());
+        await seed.PushAsync(Request(), CancellationToken.None);
+        await api.DeleteSkillAsync(RegistryUri, "t", "tidy", null, CancellationToken.None);
+        api.Pushed.Clear();
+
+        var result = await seed.PushAsync(Request(), CancellationToken.None);
+
+        var outcome = Assert.Single(result.Entries).Outcome;
+        Assert.Equal(SkillPushStatus.Removed, outcome.Status);
+        Assert.Equal(1, outcome.Version);
+        Assert.Null(outcome.RenamedTo);
+        Assert.Contains("was deleted from the registry (at v1)", outcome.Message);
+        Assert.Contains("protostar skills push tidy --force", outcome.Message);
+        Assert.Empty(api.Pushed);
+        Assert.Equal(1, api.ListCalls);
+        Assert.False(result.Succeeded);
+    }
+
+    [Fact]
+    public async Task A_copy_of_a_skill_renamed_in_the_registry_is_not_uploaded_under_its_old_name_and_points_at_pull()
+    {
+        var skill = Skill("greet-user");
+        Synced(skill, 1);
+        var (sut, api) = Build([skill], Session());
+        await api.RenameSkillAsync(RegistryUri, "t", "greet-user", null, "hello", CancellationToken.None);
+
+        var result = await sut.PushAsync(Request(), CancellationToken.None);
+
+        var outcome = Assert.Single(result.Entries).Outcome;
+        Assert.Equal((SkillPushStatus.Removed, "hello"), (outcome.Status, outcome.RenamedTo));
+        Assert.Contains("renamed to 'hello'", outcome.Message);
+        Assert.Contains("`protostar skills pull` renames this copy", outcome.Message);
+        Assert.Empty(api.Pushed);
+    }
+
+    [Fact]
+    public async Task An_edited_copy_of_a_deleted_skill_is_refused_naming_the_delete_and_the_refusal_is_remembered()
+    {
+        var skill = Skill("tidy");
+        Synced(skill, 3);
+        Edit(skill, "edited");
+        var (sut, api) = Build([skill], Session());
+        await api.DeleteSkillAsync(RegistryUri, "t", "tidy", null, CancellationToken.None);
+
+        var result = await sut.PushAsync(Request(), CancellationToken.None);
+
+        var outcome = Assert.Single(result.Entries).Outcome;
+        Assert.Equal(SkillPushStatus.Removed, outcome.Status);
+        Assert.StartsWith("Changed here, but 'tidy' was deleted from the registry (at v3)", outcome.Message);
+        Assert.Contains("your changes are kept here", outcome.Message);
+        Assert.Empty(api.Pushed);
+        var recorded = _ledger.Get(RegistryUri, skill.Path)!;
+        Assert.Equal((3, true, 3), (recorded.Version, recorded.RefusedAsRemoved, recorded.RefusedVersion));
+        Assert.Equal(SkillFileReader.Hash(SkillFileReader.Read(skill.Path)), recorded.RefusedHash);
+    }
+
+    [Fact]
+    public async Task The_hook_sends_an_edited_copy_of_a_deleted_skill_once_and_then_answers_from_the_ledger()
+    {
+        var skill = Skill("tidy");
+        Synced(skill, 2);
+        Edit(skill, "edited");
+        var (sut, api) = Build([skill], Session());
+        await api.DeleteSkillAsync(RegistryUri, "t", "tidy", null, CancellationToken.None);
+
+        var first = await sut.PushAsync(Request() with { FromHook = true }, CancellationToken.None);
+        var second = await sut.PushAsync(Request() with { FromHook = true }, CancellationToken.None);
+
+        Assert.Equal([2], api.Bases);
+        Assert.Equal(0, api.ListCalls);
+        var refused = Assert.Single(first.Entries).Outcome;
+        Assert.Equal((SkillPushStatus.Removed, false), (refused.Status, refused.Remembered));
+        Assert.Contains("was deleted from the registry (at v2)", refused.Message);
+        var remembered = Assert.Single(second.Entries).Outcome;
+        Assert.Equal((SkillPushStatus.Removed, true), (remembered.Status, remembered.Remembered));
+        Assert.EndsWith("Refused earlier; not sent again until it changes.", remembered.Message);
+    }
+
+    [Fact]
+    public async Task Force_restores_a_deleted_skill_on_purpose_as_a_new_skill()
+    {
+        var skill = Skill("tidy");
+        Synced(skill, 1);
+        Edit(skill, "edited");
+        var (sut, api) = Build([skill], Session());
+        await api.DeleteSkillAsync(RegistryUri, "t", "tidy", null, CancellationToken.None);
+
+        var result = await sut.PushAsync(Request("tidy") with { Force = true }, CancellationToken.None);
+
+        var outcome = Assert.Single(result.Entries).Outcome;
+        Assert.Equal(SkillPushStatus.Created, outcome.Status);
+        Assert.StartsWith("Restored:", outcome.Message);
+        Assert.Equal([0], api.Bases);
+        Assert.Empty(api.Removed);
+        Assert.False(_ledger.Get(RegistryUri, skill.Path)!.RefusedAsRemoved);
+    }
+
+    [Fact]
+    public async Task A_new_skill_that_reuses_a_deleted_name_and_never_synced_is_backed_up()
+    {
+        var api = new FakeRegistryApi();
+        api.Removed.Add(new RegistryRemovedSkill("tidy", null, 4, null));
+        var (sut, _) = Build([Skill("tidy")], Session(), api);
+
+        var result = await sut.PushAsync(Request(), CancellationToken.None);
+
+        Assert.Equal(SkillPushStatus.Created, Assert.Single(result.Entries).Outcome.Status);
+        Assert.Equal([0], api.Bases);
+    }
+
+    [Fact]
+    public async Task A_copy_synced_after_the_removed_skill_s_last_version_is_not_taken_for_a_copy_of_it()
+    {
+        var skill = Skill("tidy");
+        Synced(skill, 5);
+        var (sut, api) = Build([skill], Session());
+        api.Skills.Clear();
+        api.Removed.Add(new RegistryRemovedSkill("tidy", null, 4, null));
+
+        var result = await sut.PushAsync(Request(), CancellationToken.None);
+
+        Assert.Equal(SkillPushStatus.Created, Assert.Single(result.Entries).Outcome.Status);
+    }
+
+    [Fact]
+    public async Task A_removal_in_another_project_does_not_count_for_this_copy()
+    {
+        var skill = Skill("tidy");
+        Synced(skill, 1);
+        var (sut, api) = Build([skill], Session());
+        api.Skills.Clear();
+        api.Removed.Add(new RegistryRemovedSkill("tidy", Guid.NewGuid(), 3, null));
+
+        var result = await sut.PushAsync(Request(), CancellationToken.None);
+
+        Assert.Contains("renamed or deleted", Assert.Single(result.Entries).Outcome.Message);
     }
 
     [Fact]
@@ -913,13 +1055,24 @@ public sealed class SkillPushServiceTests : IDisposable
             Pushed.Add((name, accessToken, files, project));
             Bases.Add(baseVersion);
             var projectId = project is null ? (Guid?)null : ProjectIdOf(project.Facts);
+
+            // Like the registry: a push from a copy of a removed skill is refused; any other push of the name drops its tombstone.
+            if (!Skills.Any(s => s.Name == name && s.ProjectId == projectId) &&
+                new RegistrySkillList([], null, Removed).RemovalOf(name, projectId, baseVersion) is { } removal)
+            {
+                return Task.FromResult(new SkillPushOutcome(SkillPushStatus.Removed, removal.LastVersion, "refused: removed", projectId, RenamedTo: removal.RenamedTo));
+            }
+
             var outcome = Answer is { } answer
                 ? answer(name, baseVersion)
                 : Outcomes.GetValueOrDefault(name) ?? new SkillPushOutcome(SkillPushStatus.Created, 1, null, projectId);
 
             // Like the registry: a skill it stored is in its list from then on.
             if (outcome.Succeeded && !Skills.Any(s => s.Name == name && s.ProjectId == outcome.ProjectId))
+            {
                 Skills.Add(new RegistrySkill(name, null, outcome.Version ?? 1, "", DateTimeOffset.UnixEpoch, outcome.ProjectId));
+                Removed.RemoveAll(r => r.Name == name && r.ProjectId == outcome.ProjectId);
+            }
             return Task.FromResult(outcome);
         }
 
@@ -931,6 +1084,12 @@ public sealed class SkillPushServiceTests : IDisposable
         public static string Key(string name, Guid? projectId) => projectId is { } id ? $"{id}/{name}" : name;
 
         public List<RegistrySkill> Skills { get; } = [];
+
+        /// <summary>The names deleted or renamed away, as the list reports them.</summary>
+        public List<RegistryRemovedSkill> Removed { get; } = [];
+
+        /// <summary>False for a registry from before registry#58, which forgets a deleted or renamed skill entirely.</summary>
+        public bool RemembersRemovals { get; init; } = true;
         public string? ListError { get; init; }
         public Dictionary<string, RegistrySkillContent> Contents { get; } = new(StringComparer.Ordinal);
         public List<string> Downloaded { get; } = [];
@@ -940,7 +1099,7 @@ public sealed class SkillPushServiceTests : IDisposable
         public Task<RegistrySkillList> ListSkillsAsync(Uri registry, string accessToken, CancellationToken cancellationToken)
         {
             ListCalls++;
-            return Task.FromResult(ListError is null ? new RegistrySkillList(Skills.ToList(), null) : new RegistrySkillList(null, ListError));
+            return Task.FromResult(ListError is null ? new RegistrySkillList(Skills.ToList(), null, Removed.ToList()) : new RegistrySkillList(null, ListError));
         }
 
         /// <summary>Earlier versions, served when a download names a version: keyed <c>&lt;key&gt;@&lt;version&gt;</c>.</summary>
@@ -976,7 +1135,11 @@ public sealed class SkillPushServiceTests : IDisposable
             // Like the registry: the same skill, versions and content, under the new name.
             var index = Skills.FindIndex(s => s.Name == name && s.ProjectId == projectId);
             if (index >= 0)
+            {
+                if (RemembersRemovals)
+                    Removed.Add(new RegistryRemovedSkill(name, projectId, Skills[index].Version, newName));
                 Skills[index] = Skills[index] with { Name = newName };
+            }
             if (Contents.Remove(Key(name, projectId), out var content))
                 Contents[Key(newName, projectId)] = content with { Name = newName };
             return Task.FromResult(ApiResult<string>.Success(newName));
@@ -985,6 +1148,8 @@ public sealed class SkillPushServiceTests : IDisposable
         public Task<ApiResult<bool>> DeleteSkillAsync(Uri registry, string accessToken, string name, Guid? projectId, CancellationToken cancellationToken)
         {
             Deleted.Add(Key(name, projectId));
+            if (RemembersRemovals && Skills.FirstOrDefault(s => s.Name == name && s.ProjectId == projectId) is { } deleted)
+                Removed.Add(new RegistryRemovedSkill(name, projectId, deleted.Version, null));
             Skills.RemoveAll(s => s.Name == name && s.ProjectId == projectId);
             Contents.Remove(Key(name, projectId));
             return Task.FromResult(ApiResult<bool>.Success(true));
@@ -1206,6 +1371,56 @@ public sealed class RegistryApiTests
         var outcome = await api.PushSkillAsync(Registry, "tok", "alpha", Files, null, 1, CancellationToken.None);
 
         Assert.Equal(new SkillPushOutcome(SkillPushStatus.Stale, 3, "changed here and in the registry", projectId), outcome);
+    }
+
+    [Fact]
+    public async Task A_renamed_problem_maps_to_removed_with_the_last_version_and_the_new_name()
+    {
+        var body = """{"type":"https://protostar.dev/problems/skill-renamed","title":"renamed","status":409,"lastVersion":2,"renamedTo":"hello","projectId":null}""";
+        using var api = new RegistryApi(new StubHandler(_ => Json(HttpStatusCode.Conflict, body, "application/problem+json")));
+
+        var outcome = await api.PushSkillAsync(Registry, "tok", "greet-user", Files, null, 1, CancellationToken.None);
+
+        Assert.Equal(new SkillPushOutcome(SkillPushStatus.Removed, 2, "renamed", RenamedTo: "hello"), outcome);
+    }
+
+    [Fact]
+    public async Task A_deleted_problem_maps_to_removed_with_no_new_name()
+    {
+        var body = """{"type":"https://protostar.dev/problems/skill-deleted","title":"deleted","status":409,"lastVersion":4}""";
+        using var api = new RegistryApi(new StubHandler(_ => Json(HttpStatusCode.Conflict, body, "application/problem+json")));
+
+        var outcome = await api.PushSkillAsync(Registry, "tok", "tidy", Files, null, 3, CancellationToken.None);
+
+        Assert.Equal(new SkillPushOutcome(SkillPushStatus.Removed, 4, "deleted"), outcome);
+    }
+
+    [Fact]
+    public async Task The_list_carries_the_registrys_removed_names_and_none_from_an_older_registry()
+    {
+        var body = """{"skills":[],"removed":[{"name":"greet-user","projectId":null,"lastVersion":1,"renamedTo":"hello","removedAt":"2026-11-19T00:00:00Z"}]}""";
+        using var api = new RegistryApi(new StubHandler(_ => Json(HttpStatusCode.OK, body)));
+        using var older = new RegistryApi(new StubHandler(_ => Json(HttpStatusCode.OK, """{"skills":[]}""")));
+
+        var list = await api.ListSkillsAsync(Registry, "tok", CancellationToken.None);
+        var olderList = await older.ListSkillsAsync(Registry, "tok", CancellationToken.None);
+
+        Assert.Equal(new RegistryRemovedSkill("greet-user", null, 1, "hello"), Assert.Single(list.Removed!));
+        Assert.Empty(olderList.Removed!);
+        Assert.Null(olderList.RemovalOf("greet-user", null, 1));
+    }
+
+    [Theory]
+    [InlineData(1, true)]
+    [InlineData(3, true)]
+    [InlineData(4, false)]
+    [InlineData(0, false)]
+    [InlineData(null, false)]
+    public void A_copy_is_of_a_removed_skill_when_it_synced_a_version_up_to_the_last_one(int? synced, bool removed)
+    {
+        var list = new RegistrySkillList([], null, [new RegistryRemovedSkill("tidy", null, 3, null)]);
+
+        Assert.Equal(removed, list.RemovalOf("tidy", null, synced) is not null);
     }
 
     [Fact]

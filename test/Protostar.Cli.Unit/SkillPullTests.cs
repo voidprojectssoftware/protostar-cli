@@ -90,6 +90,136 @@ public sealed class SkillPullServiceTests : IDisposable
     private void RecordSynced(string path, int version) =>
         _ledger.Record(RegistryUri, path, new SkillLedgerEntry(SkillFileReader.Hash(SkillFileReader.Read(path)), version));
 
+    private void RecordSyncedAs(string path, string name, int version) =>
+        _ledger.Record(RegistryUri, path, new SkillLedgerEntry(SkillFileReader.Hash(SkillFileReader.Read(path)), version, name));
+
+    // A's side of a rename: the registry's skill is now `hello`, with the renamed SKILL.md pushed as v2.
+    private void RenamedInRegistry(string from, string to, int lastVersion, string body = "body")
+    {
+        Publish(to, lastVersion + 1, ("SKILL.md", Manifest(to, body)));
+        _api.Removed.Add(new RegistryRemovedSkill(from, null, lastVersion, to));
+    }
+
+    [Fact]
+    public async Task Pull_renames_an_unedited_copy_of_a_renamed_skill_and_the_registry_skill_then_matches_it()
+    {
+        var path = Local("greet-user", ("SKILL.md", Manifest("greet-user")));
+        RecordSyncedAs(path, "greet-user", 1);
+        RenamedInRegistry("greet-user", "hello", 1);
+
+        var result = await Build().PullAsync(Pull(), CancellationToken.None);
+
+        var followed = result.Entries.Single(e => e.Name == "greet-user");
+        Assert.Equal(SkillPullStatus.FollowedRename, followed.Status);
+        Assert.Contains("Renamed here to 'hello'", followed.Message);
+        Assert.Equal(SkillPullStatus.UpToDate, result.Entries.Single(e => e.Name == "hello").Status);
+        Assert.False(Directory.Exists(path));
+        Assert.Equal(Manifest("hello"), File.ReadAllText(Path.Combine(SkillsDir, "hello", "SKILL.md")));
+        Assert.Null(_ledger.Get(RegistryUri, path));
+        Assert.Equal(("hello", 2), (_ledger.Get(RegistryUri, Path.Combine(SkillsDir, "hello"))!.Name, _ledger.Get(RegistryUri, Path.Combine(SkillsDir, "hello"))!.Version));
+        Assert.Empty(_api.Downloaded);
+        Assert.True(result.Succeeded);
+    }
+
+    [Fact]
+    public async Task Pull_updates_a_renamed_copy_when_the_registry_moved_on_after_the_rename()
+    {
+        var path = Local("greet-user", ("SKILL.md", Manifest("greet-user")));
+        RecordSyncedAs(path, "greet-user", 1);
+        RenamedInRegistry("greet-user", "hello", 1, body: "changed after the rename");
+
+        var result = await Build().PullAsync(Pull(), CancellationToken.None);
+
+        Assert.Equal(SkillPullStatus.FollowedRename, result.Entries.Single(e => e.Name == "greet-user").Status);
+        Assert.Equal(SkillPullStatus.Updated, result.Entries.Single(e => e.Name == "hello").Status);
+        Assert.Equal(Manifest("hello", "changed after the rename"), File.ReadAllText(Path.Combine(SkillsDir, "hello", "SKILL.md")));
+    }
+
+    [Fact]
+    public async Task Pull_keeps_an_edited_copy_of_a_renamed_skill_under_its_old_name()
+    {
+        var path = Local("greet-user", ("SKILL.md", Manifest("greet-user")));
+        RecordSyncedAs(path, "greet-user", 1);
+        File.AppendAllText(Path.Combine(path, "SKILL.md"), "\nmy edit");
+        RenamedInRegistry("greet-user", "hello", 1);
+
+        var result = await Build().PullAsync(Pull(), CancellationToken.None);
+
+        var kept = result.Entries.Single(e => e.Name == "greet-user");
+        Assert.Equal(SkillPullStatus.RemovedInRegistry, kept.Status);
+        Assert.Contains("was not renamed", kept.Message);
+        Assert.EndsWith("my edit", File.ReadAllText(Path.Combine(path, "SKILL.md")));
+        Assert.Equal(SkillPullStatus.Installed, result.Entries.Single(e => e.Name == "hello").Status);
+        Assert.True(result.Succeeded);
+    }
+
+    [Fact]
+    public async Task Pull_leaves_a_renamed_copy_alone_when_the_new_name_is_already_here()
+    {
+        var path = Local("greet-user", ("SKILL.md", Manifest("greet-user")));
+        RecordSyncedAs(path, "greet-user", 1);
+        RenamedInRegistry("greet-user", "hello", 1);
+        Local("hello", ("SKILL.md", Manifest("hello")));
+
+        var result = await Build().PullAsync(Pull(), CancellationToken.None);
+
+        var kept = result.Entries.Single(e => e.Name == "greet-user");
+        Assert.Equal(SkillPullStatus.RemovedInRegistry, kept.Status);
+        Assert.Contains("'hello' is already here", kept.Message);
+        Assert.Equal(Manifest("greet-user"), File.ReadAllText(Path.Combine(path, "SKILL.md")));
+    }
+
+    [Fact]
+    public async Task Pull_keeps_a_copy_of_a_deleted_skill_and_never_deletes_it()
+    {
+        var path = Local("tidy", ("SKILL.md", Manifest("tidy")));
+        RecordSyncedAs(path, "tidy", 1);
+        _api.Removed.Add(new RegistryRemovedSkill("tidy", null, 1, null));
+
+        var result = await Build().PullAsync(Pull(), CancellationToken.None);
+
+        var kept = Assert.Single(result.Entries);
+        Assert.Equal(SkillPullStatus.RemovedInRegistry, kept.Status);
+        Assert.Contains("Deleted from the registry (at v1)", kept.Message);
+        Assert.Contains("protostar skills push tidy --force", kept.Message);
+        Assert.True(File.Exists(Path.Combine(path, "SKILL.md")));
+        Assert.True(result.Succeeded);
+    }
+
+    [Fact]
+    public async Task A_named_pull_does_not_touch_copies_of_removed_skills()
+    {
+        var path = Local("greet-user", ("SKILL.md", Manifest("greet-user")));
+        RecordSyncedAs(path, "greet-user", 1);
+        RenamedInRegistry("greet-user", "hello", 1);
+
+        var result = await Build().PullAsync(Pull("hello"), CancellationToken.None);
+
+        Assert.Equal(SkillPullStatus.Installed, Assert.Single(result.Entries).Status);
+        Assert.True(Directory.Exists(path));
+    }
+
+    [Fact]
+    public async Task Remote_shows_a_copy_of_a_removed_skill_as_gone_from_the_registry_not_as_never_backed_up()
+    {
+        var tidy = Local("tidy", ("SKILL.md", Manifest("tidy")));
+        RecordSyncedAs(tidy, "tidy", 1);
+        _api.Removed.Add(new RegistryRemovedSkill("tidy", null, 1, null));
+        var greet = Local("greet-user", ("SKILL.md", Manifest("greet-user")));
+        RecordSyncedAs(greet, "greet-user", 1);
+        RenamedInRegistry("greet-user", "hello", 1);
+        Local("never", ("SKILL.md", Manifest("never")));
+
+        var result = await Build().CompareAsync(Remote(), CancellationToken.None);
+
+        var states = result.Skills.ToDictionary(s => s.Name, s => s);
+        Assert.Equal(SkillSyncState.RemovedInRegistry, states["tidy"].State);
+        Assert.Equal(SkillSyncState.RemovedInRegistry, states["greet-user"].State);
+        Assert.Contains("`protostar skills pull` renames this copy", states["greet-user"].Note);
+        Assert.Equal(SkillSyncState.LocalOnly, states["never"].State);
+        Assert.True(Directory.Exists(greet));
+    }
+
     [Fact]
     public async Task Pull_installs_a_registry_skill_that_is_not_here()
     {

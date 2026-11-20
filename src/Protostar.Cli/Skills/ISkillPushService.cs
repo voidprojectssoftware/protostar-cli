@@ -30,9 +30,12 @@ internal interface ISkillPushService
     /// it, and the capture hook does not send the same content again.
     /// </para>
     /// <para>
-    /// Except from the hook, a run that has skills the ledger says are synced asks the registry for its skill list once,
-    /// and a skill whose registry skill (the name and project it last synced as) is no longer listed, because another
-    /// machine deleted or renamed it, is pushed again as a new skill with a message saying so.
+    /// Except from the hook, a run that has skills the ledger says are synced asks the registry for its skill list once.
+    /// A skill whose registry skill (the name and project it last synced as) is no longer listed because it was deleted or
+    /// renamed since this copy synced, which the list's removed names say, is not uploaded: it comes back as
+    /// <see cref="SkillPushStatus.Removed"/>, and an edited copy's refusal is recorded like a stale one. With
+    /// <see cref="SkillPushRequest.Force"/> it is restored on purpose, as a new skill. A registry skill that is gone without
+    /// the registry remembering why (an older registry) is pushed again as a new skill with a message saying so.
     /// </para>
     /// </remarks>
     Task<SkillPushRunResult> PushAsync(SkillPushRequest request, CancellationToken cancellationToken);

@@ -60,7 +60,8 @@ internal static class SkillChangePresenter
         AnsiConsole.MarkupLine(result.Target.Copies.Count == 0
             ? "[grey]No local copy was touched.[/]"
             : $"Local {(result.Target.Copies.Count == 1 ? "copy is" : "copies are")} untouched: {Markup.Escape(string.Join(", ", result.Target.Copies.Select(c => c.Path)))}. " +
-              "`protostar skills remote` lists it as only on this machine. The next `protostar skills push` backs it up again as a new skill, and so does the capture hook once it changes; remove the local copy to keep it out of the registry.");
+              "The registry remembers the delete, so a push or setup here or on another machine does not upload it again: `protostar skills remote` lists such copies as gone from the registry. " +
+              "Remove a copy you no longer want; `protostar skills push NAME --force` restores it on purpose.");
         return 0;
     }
 
@@ -104,7 +105,7 @@ internal static class SkillChangePresenter
         }
         if (result.Copies.Count == 0)
             AnsiConsole.MarkupLine("[grey]This machine has no copy of it.[/]");
-        AnsiConsole.MarkupLine("[grey]Other machines still have it under the old name: there it shows as only on that machine, and the new name as not installed, until they pull it and remove the old folder. A `protostar skills push` there before that backs the old name up again as a new skill, and says so.[/]");
+        AnsiConsole.MarkupLine("[grey]The registry remembers the old name, so other machines do not push it back. Their next `protostar skills pull` (or setup) renames an unedited copy to match; a copy edited there is kept and reported.[/]");
         return code;
     }
 

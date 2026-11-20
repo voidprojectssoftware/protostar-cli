@@ -108,7 +108,31 @@ internal sealed record RegistrySkill(
 /// <summary>The result of listing skills: the skills, or why they could not be listed.</summary>
 /// <param name="Skills">The caller's skills; <c>null</c> when the request failed.</param>
 /// <param name="Error">Why the request failed; <c>null</c> on success.</param>
-internal sealed record RegistrySkillList(IReadOnlyList<RegistrySkill>? Skills, string? Error);
+/// <param name="Removed">
+/// The skill names the caller deleted or renamed away (registry#58); empty from a registry that does not remember them.
+/// </param>
+internal sealed record RegistrySkillList(IReadOnlyList<RegistrySkill>? Skills, string? Error, IReadOnlyList<RegistryRemovedSkill>? Removed = null)
+{
+    /// <summary>
+    /// The removal of the registry skill <paramref name="name"/> in <paramref name="projectId"/> that a copy last synced at
+    /// <paramref name="syncedVersion"/> came from; <c>null</c> when that copy is not of a removed skill.
+    /// </summary>
+    /// <remarks>
+    /// The registry's own rule (it refuses such a push): a copy that synced a version from 1 up to the removed skill's last
+    /// version is a copy of it. A copy that never synced a version (0), or whose record predates versions (<c>null</c>), is not.
+    /// </remarks>
+    public RegistryRemovedSkill? RemovalOf(string name, Guid? projectId, int? syncedVersion) =>
+        syncedVersion is { } synced && synced >= 1
+            ? Removed?.FirstOrDefault(r => r.ProjectId == projectId && string.Equals(r.Name, name, StringComparison.Ordinal) && synced <= r.LastVersion)
+            : null;
+}
+
+/// <summary>A skill name the caller deleted or renamed away in the registry.</summary>
+/// <param name="Name">The removed name.</param>
+/// <param name="ProjectId">Its project; <c>null</c> for a global skill.</param>
+/// <param name="LastVersion">The skill's last version under that name: copies synced at or below it are copies of it.</param>
+/// <param name="RenamedTo">The skill's name now, when it was renamed; <c>null</c> when it was deleted.</param>
+internal sealed record RegistryRemovedSkill(string Name, Guid? ProjectId, int LastVersion, string? RenamedTo);
 
 /// <summary>One version of a skill with every file's bytes.</summary>
 internal sealed record RegistrySkillContent(string Name, int Version, string ContentHash, IReadOnlyList<RegistrySkillFile> Files);
@@ -157,6 +181,13 @@ internal enum SkillPushStatus
     /// </summary>
     Stale,
 
+    /// <summary>
+    /// Not backed up because the registry skill this copy last synced as was deleted or renamed in the registry since
+    /// (from any machine): pushing it would bring the skill back. Nothing was stored. <see cref="SkillPushOutcome.Version"/>
+    /// is the removed skill's last version, and <see cref="SkillPushOutcome.RenamedTo"/> its name now for a rename.
+    /// </summary>
+    Removed,
+
     /// <summary>The upload could not complete (unreachable registry, unreadable files, server error).</summary>
     Failed,
 }
@@ -164,7 +195,8 @@ internal enum SkillPushStatus
 /// <summary>The outcome of sending one skill to the registry.</summary>
 /// <param name="Status">What happened.</param>
 /// <param name="Version">
-/// The registry's current version number after the push; <c>null</c> unless created, unchanged or stale.
+/// The registry's current version number after the push, or the removed skill's last version when
+/// <see cref="SkillPushStatus.Removed"/>; <c>null</c> unless created, unchanged, stale or removed.
 /// </param>
 /// <param name="Message">Why a skill was refused, skipped, stale or failed, or a note on a success (such as what it replaced); <c>null</c> otherwise.</param>
 /// <param name="ProjectId">The project the registry filed a project skill under; <c>null</c> for a global skill.</param>
@@ -173,8 +205,10 @@ internal enum SkillPushStatus
 /// True for a <see cref="SkillPushStatus.Stale"/> answered from the ledger without asking the registry, because the
 /// registry already refused this exact content; the capture hook does not log it again.
 /// </param>
+/// <param name="RenamedTo">For a <see cref="SkillPushStatus.Removed"/> rename, the skill's name in the registry now; <c>null</c> otherwise.</param>
 internal sealed record SkillPushOutcome(
-    SkillPushStatus Status, int? Version, string? Message, Guid? ProjectId = null, string? ProjectName = null, bool Remembered = false)
+    SkillPushStatus Status, int? Version, string? Message, Guid? ProjectId = null, string? ProjectName = null, bool Remembered = false,
+    string? RenamedTo = null)
 {
     /// <summary>True when the skill is now safely in the registry.</summary>
     public bool Succeeded => Status is SkillPushStatus.Created or SkillPushStatus.Unchanged;
