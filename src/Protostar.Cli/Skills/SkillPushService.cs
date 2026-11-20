@@ -152,7 +152,7 @@ internal sealed class SkillPushService : ISkillPushService
                 const string remembered = " Refused earlier; not sent again until it changes.";
                 entries[i] = new SkillPushEntry(skill, recorded.RefusedAsRemoved
                     ? new SkillPushOutcome(SkillPushStatus.Removed, recorded.RefusedVersion,
-                        RemovedMessage(skill.Name, recorded.RefusedVersion ?? 0, recorded.RefusedRenamedTo, edited: true) + remembered,
+                        RemovedMessage(skill.Name, new RegistryRemovedSkill(skill.Name, recorded.ProjectId, recorded.RefusedVersion ?? 0, recorded.RefusedRenamedTo), edited: true) + remembered,
                         recorded.ProjectId, Remembered: true, RenamedTo: recorded.RefusedRenamedTo)
                     : new SkillPushOutcome(SkillPushStatus.Stale, recorded.RefusedVersion,
                         StaleMessage(recorded.Version ?? 0, recorded.RefusedVersion) + remembered,
@@ -219,7 +219,7 @@ internal sealed class SkillPushService : ISkillPushService
                 {
                     // Unedited since it synced, so there is nothing of this machine's to protect: only report it.
                     entries[index] = new SkillPushEntry(skill, new SkillPushOutcome(SkillPushStatus.Removed, removal.LastVersion,
-                        RemovedMessage(skill.Name, removal.LastVersion, removal.RenamedTo, edited: false), recorded.ProjectId, RenamedTo: removal.RenamedTo));
+                        RemovedMessage(skill.Name, removal, edited: false), recorded.ProjectId, RenamedTo: removal.RenamedTo));
                 }
                 else
                 {
@@ -275,7 +275,7 @@ internal sealed class SkillPushService : ISkillPushService
             RefusedHash = hash, RefusedVersion = removal.LastVersion, RefusedAsRemoved = true, RefusedRenamedTo = removal.RenamedTo,
         });
         return new SkillPushOutcome(SkillPushStatus.Removed, removal.LastVersion,
-            RemovedMessage(skill.Name, removal.LastVersion, removal.RenamedTo, edited: true), recorded.ProjectId, RenamedTo: removal.RenamedTo);
+            RemovedMessage(skill.Name, removal, edited: true), recorded.ProjectId, RenamedTo: removal.RenamedTo);
     }
 
     // Whether the registry skill this copy last synced as (its name and project, from the ledger) is in the registry's
@@ -288,8 +288,10 @@ internal sealed class SkillPushService : ISkillPushService
         if (Synced(registry, skill) is not { } recorded)
             return true;
 
+        // A skill of that name whose versions start after this copy's is a new skill that reused the name, not this one.
         var name = recorded.Name ?? skill.Name;
-        if (skills.Any(s => s.ProjectId == recorded.ProjectId && string.Equals(s.Name, name, StringComparison.Ordinal)))
+        if (skills.Any(s => s.ProjectId == recorded.ProjectId && string.Equals(s.Name, name, StringComparison.Ordinal) &&
+                            !(recorded.Version is { } synced && synced >= 1 && synced < s.FirstVersion)))
             return true;
 
         foreach (var moved in skills.Where(s => s.ProjectId is not null && s.ProjectId != recorded.ProjectId && string.Equals(s.Name, name, StringComparison.Ordinal)))
@@ -317,6 +319,7 @@ internal sealed class SkillPushService : ISkillPushService
         var project = ProjectOf(skill);
 
         var outcome = await _registry.PushSkillAsync(registry, accessToken, skill.Name, files, project, based, cancellationToken);
+        var replacedCurrent = false;
         if (outcome.Status == SkillPushStatus.Removed && force)
         {
             gone = true;
@@ -325,7 +328,8 @@ internal sealed class SkillPushService : ISkillPushService
         else if (outcome is { Status: SkillPushStatus.Stale, Version: { } current } && force)
         {
             outcome = await _registry.PushSkillAsync(registry, accessToken, skill.Name, files, project, current, cancellationToken);
-            if (outcome.Status == SkillPushStatus.Created)
+            replacedCurrent = outcome.Status == SkillPushStatus.Created;
+            if (replacedCurrent)
             {
                 outcome = outcome with
                 {
@@ -335,7 +339,7 @@ internal sealed class SkillPushService : ISkillPushService
             }
         }
 
-        if (gone && outcome.Succeeded)
+        if (gone && outcome.Succeeded && !replacedCurrent)
         {
             outcome = outcome with
             {
@@ -362,7 +366,7 @@ internal sealed class SkillPushService : ISkillPushService
             {
                 RefusedHash = hash, RefusedVersion = outcome.Version, RefusedAsRemoved = true, RefusedRenamedTo = outcome.RenamedTo,
             });
-            outcome = outcome with { Message = RemovedMessage(skill.Name, outcome.Version ?? 0, outcome.RenamedTo, edited: true) };
+            outcome = outcome with { Message = RemovedMessage(skill.Name, new RegistryRemovedSkill(skill.Name, outcome.ProjectId, outcome.Version ?? 0, outcome.RenamedTo), edited: true) };
         }
 
         return outcome;
@@ -428,22 +432,28 @@ internal sealed class SkillPushService : ISkillPushService
 
     // Why a copy of a removed skill was not backed up, and the ways out. Pull follows a rename for an unedited copy; an
     // edited one, or a deleted skill, is the user's call: remove the copy, or restore it on purpose with --force.
-    internal static string RemovedMessage(string name, int lastVersion, string? renamedTo, bool edited)
+    internal static string RemovedMessage(string name, RegistryRemovedSkill removal, bool edited)
     {
         var quoted = name.Any(char.IsWhiteSpace) ? $"\"{name}\"" : name;
-        var what = renamedTo is null
-            ? $"'{name}' was deleted from the registry (at v{lastVersion}) after this copy last synced"
-            : $"'{name}' was renamed to '{renamedTo}' in the registry (at v{lastVersion}) after this copy last synced";
-        if (!edited)
+        var changed = edited ? "Changed here, but " : "";
+        var kept = edited ? "Nothing was uploaded and your changes are kept here." : "It was not uploaded again.";
+        if (removal.Replaced)
         {
-            return renamedTo is null
-                ? $"{what}, so it was not uploaded again. Remove this copy if you no longer want it, or run `protostar skills push {quoted} --force` to restore it."
-                : $"{what}, so it was not uploaded again under the old name. `protostar skills pull` renames this copy to '{renamedTo}'.";
+            return $"{changed}'{name}' was deleted from the registry (at v{removal.LastVersion}) after this copy last synced, and a new skill named '{name}' " +
+                $"has been created since. This copy is of the old one. {kept} Run `protostar skills push {quoted} --as NEW-NAME` to keep it as a " +
+                $"separate skill, or `protostar skills pull {quoted} --force` to replace it with the new one.";
         }
 
-        return renamedTo is null
-            ? $"Changed here, but {what}. Nothing was uploaded and your changes are kept here. Run `protostar skills push {quoted} --force` to restore it with your changes, or remove this copy."
-            : $"Changed here, but {what}. Nothing was uploaded and your changes are kept here. Move them into '{renamedTo}' (`protostar skills pull` installs it), or run `protostar skills push {quoted} --force` to keep this as a separate skill named '{name}'.";
+        if (removal.RenamedTo is not { } renamedTo)
+        {
+            return $"{changed}'{name}' was deleted from the registry (at v{removal.LastVersion}) after this copy last synced. {kept} " +
+                $"Run `protostar skills push {quoted} --force` to restore it{(edited ? " with your changes" : "")}, or remove this copy.";
+        }
+
+        var what = $"'{name}' was renamed to '{renamedTo}' in the registry (at v{removal.LastVersion}) after this copy last synced";
+        return edited
+            ? $"Changed here, but {what}. {kept} Move them into '{renamedTo}' (`protostar skills pull` installs it), or run `protostar skills push {quoted} --force` to keep this as a separate skill named '{name}'."
+            : $"{what}, so it was not uploaded again under the old name. `protostar skills pull` renames this copy to '{renamedTo}'.";
     }
 
     // The project folder a project skill is pushed as part of: the folder its project config was found in,

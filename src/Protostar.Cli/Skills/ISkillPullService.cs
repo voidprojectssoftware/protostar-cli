@@ -137,9 +137,10 @@ internal enum SkillSyncState
     LocalOnly,
 
     /// <summary>
-    /// Installed here, synced as a registry skill that was deleted or renamed in the registry since. A push does not
-    /// upload it (that would undo the delete or rename); see <see cref="SkillComparison.Note"/> for what happened and the
-    /// ways out.
+    /// Installed here, synced as a registry skill that was deleted or renamed in the registry since, possibly with a new,
+    /// unrelated skill of the same name there now (then <see cref="SkillComparison.Remote"/> is that skill). A push does
+    /// not upload it (that would undo the delete or rename) and a pull does not overwrite it without <c>--force</c>; see
+    /// <see cref="SkillComparison.Note"/> for what happened and the ways out.
     /// </summary>
     RemovedInRegistry,
 

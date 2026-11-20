@@ -159,6 +159,7 @@ internal static class SkillPullPresenter
             : "[red]changed here and in the registry[/]",
         SkillSyncState.Conflict => $"[red]conflict:[/] {Markup.Escape(skill.Note ?? string.Empty)}",
         SkillSyncState.OtherProject => $"[grey]other project:[/] {Markup.Escape(skill.Note ?? string.Empty)}",
+        SkillSyncState.RemovedInRegistry when skill.Remote is not null => $"[yellow]a new skill took this name:[/] {Markup.Escape(skill.Note ?? string.Empty)}",
         SkillSyncState.RemovedInRegistry => $"[yellow]gone from the registry:[/] {Markup.Escape(skill.Note ?? string.Empty)}",
         _ => "[grey]only here (not backed up)[/]",
     };
@@ -177,7 +178,7 @@ internal static class SkillPullPresenter
             SkillPullStatus.Conflict => "[red]conflict:[/]",
             SkillPullStatus.OtherProject => "[grey]not here:[/]",
             SkillPullStatus.FollowedRename => "[green]followed the rename:[/]",
-            SkillPullStatus.RemovedInRegistry => "[yellow]kept, gone from the registry:[/]",
+            SkillPullStatus.RemovedInRegistry => "[yellow]kept, removed from the registry:[/]",
             _ => "[red]failed[/]",
         };
         return entry.Message is { } message ? $"{text} {Markup.Escape(message)}" : text;

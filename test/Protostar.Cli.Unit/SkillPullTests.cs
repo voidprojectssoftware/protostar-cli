@@ -187,6 +187,37 @@ public sealed class SkillPullServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task Pull_keeps_an_unedited_copy_of_a_deleted_skill_when_a_new_skill_took_its_name()
+    {
+        var path = Local("tidy", ("SKILL.md", Manifest("tidy", "old tidy")));
+        RecordSyncedAs(path, "tidy", 1);
+        Publish("tidy", 3, ("SKILL.md", Manifest("tidy", "brand-new tidy")));
+        _api.Skills[^1] = _api.Skills[^1] with { FirstVersion = 3 };
+
+        var result = await Build().PullAsync(Pull(), CancellationToken.None);
+        var forced = await Build().PullAsync(Pull("tidy") with { Force = true }, CancellationToken.None);
+
+        var kept = Assert.Single(result.Entries);
+        Assert.Equal(SkillPullStatus.RemovedInRegistry, kept.Status);
+        Assert.Contains("earlier skill named 'tidy'", kept.Message);
+        Assert.Equal(SkillPullStatus.Updated, Assert.Single(forced.Entries).Status);
+        Assert.Equal(Manifest("tidy", "brand-new tidy"), File.ReadAllText(Path.Combine(path, "SKILL.md")));
+    }
+
+    [Theory]
+    [InlineData(1, 3, nameof(SkillSyncState.RemovedInRegistry))]
+    [InlineData(3, 3, nameof(SkillSyncState.LocalChanges))]
+    [InlineData(1, 1, nameof(SkillSyncState.UpdateAvailable))]
+    public void Classify_tells_a_copy_of_an_earlier_skill_of_the_name_from_a_copy_of_this_one(int synced, int firstVersion, string expected)
+    {
+        var files = new List<SkillUploadFile> { new("SKILL.md", Encoding.UTF8.GetBytes("old")) };
+        var remote = new RegistrySkill("tidy", null, synced == 1 && firstVersion == 1 ? 2 : 3, "other", DateTimeOffset.UnixEpoch, FirstVersion: firstVersion);
+        var recorded = new SkillLedgerEntry(SkillFileReader.Hash(files), synced, "tidy");
+
+        Assert.Equal(expected, SkillPullService.Classify(files, remote, recorded).ToString());
+    }
+
+    [Fact]
     public async Task A_named_pull_does_not_touch_copies_of_removed_skills()
     {
         var path = Local("greet-user", ("SKILL.md", Manifest("greet-user")));

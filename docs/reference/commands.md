@@ -166,7 +166,8 @@ new skill of that name), or keeps an edited copy of a renamed skill as a separat
 skill under its old name. A name that was deleted can be used again: a new skill
 that no machine has synced before (one created after the delete) is backed up as
 usual, and its versions are numbered after the deleted skill's, so no old copy is
-mistaken for it. A skill that is gone from a registry that does not remember why
+mistaken for it: a copy of the deleted skill is reported, not pushed over the new
+one, and `pull` leaves it alone unless you pass `--force`. A skill that is gone from a registry that does not remember why
 (an older registry) is backed up again as a new skill, and its row says so. A
 project skill that `protostar project link` moved to another project is followed
 there, not pushed again. The [capture hook](#protostar-capture) does not list, so an
@@ -223,6 +224,10 @@ written. Each skill shows its latest registry version and one of:
   `SKILL.md` name) so the registry's skill pulls into it; an edited copy is kept
   as it is. A deleted skill's copy is kept too. Nothing local is ever deleted: the
   note says how to remove the copy or restore it with `push --force`.
+- **a new skill took this name**: this machine's copy was synced from a skill that
+  was deleted, and a new, unrelated skill of the same name is in the registry now.
+  `push` does not upload the copy and `pull` does not overwrite it without
+  `--force`; `push NAME --as NEW-NAME` keeps it as a separate skill.
 - **conflict**: the skill cannot be pulled safely, and the reason is shown. Either
   a folder with the skill's name already exists and is not this skill (a skill with
   another name, a folder with no `SKILL.md`, or the same name in different case), or
@@ -277,7 +282,7 @@ registry since they synced. An unedited copy of a renamed skill follows the
 rename: its folder and its `SKILL.md` name change to the new name, and the
 registry's skill then pulls into it (**followed the rename**). A copy edited here,
 a copy whose new name is already taken here, and any copy of a deleted skill are
-kept as they are (**kept, gone from the registry**), with the ways out. Local files
+kept as they are (**kept, removed from the registry**), with the ways out. Local files
 are never deleted.
 
 Before anything is written, every file is checked against the checksum the registry

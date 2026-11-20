@@ -102,8 +102,13 @@ internal sealed record SkillProject(Guid MachineId, ProjectFacts Facts);
 /// <param name="UpdatedAt">When the current version was pushed.</param>
 /// <param name="ProjectId">The project the skill belongs to; <c>null</c> for a global skill.</param>
 /// <param name="ProjectName">That project's display name; <c>null</c> for a global skill.</param>
+/// <param name="FirstVersion">
+/// The skill's first version: 1, or above it for a skill that reused the name of a skill removed from the registry
+/// (registry#58), whose versions follow the removed skill's. 1 from a registry that does not say.
+/// </param>
 internal sealed record RegistrySkill(
-    string Name, string? Description, int Version, string ContentHash, DateTimeOffset UpdatedAt, Guid? ProjectId = null, string? ProjectName = null);
+    string Name, string? Description, int Version, string ContentHash, DateTimeOffset UpdatedAt, Guid? ProjectId = null, string? ProjectName = null,
+    int FirstVersion = 1);
 
 /// <summary>The result of listing skills: the skills, or why they could not be listed.</summary>
 /// <param name="Skills">The caller's skills; <c>null</c> when the request failed.</param>
@@ -120,11 +125,21 @@ internal sealed record RegistrySkillList(IReadOnlyList<RegistrySkill>? Skills, s
     /// <remarks>
     /// The registry's own rule (it refuses such a push): a copy that synced a version from 1 up to the removed skill's last
     /// version is a copy of it. A copy that never synced a version (0), or whose record predates versions (<c>null</c>), is not.
+    /// When a new skill has taken the name since, the registry no longer lists the removal, but the new skill's versions
+    /// start after the removed skill's, so a copy synced below its first version is still a copy of the removed skill
+    /// (<see cref="RegistryRemovedSkill.Replaced"/>).
     /// </remarks>
-    public RegistryRemovedSkill? RemovalOf(string name, Guid? projectId, int? syncedVersion) =>
-        syncedVersion is { } synced && synced >= 1
-            ? Removed?.FirstOrDefault(r => r.ProjectId == projectId && string.Equals(r.Name, name, StringComparison.Ordinal) && synced <= r.LastVersion)
-            : null;
+    public RegistryRemovedSkill? RemovalOf(string name, Guid? projectId, int? syncedVersion)
+    {
+        if (syncedVersion is not { } synced || synced < 1)
+            return null;
+
+        // A skill of that name now, numbered after the copy's version, reused the name of the skill the copy came from.
+        if (Skills?.FirstOrDefault(s => s.ProjectId == projectId && string.Equals(s.Name, name, StringComparison.Ordinal)) is { } live)
+            return synced < live.FirstVersion ? new RegistryRemovedSkill(live.Name, projectId, live.FirstVersion - 1, null, Replaced: true) : null;
+
+        return Removed?.FirstOrDefault(r => r.ProjectId == projectId && string.Equals(r.Name, name, StringComparison.Ordinal) && synced <= r.LastVersion);
+    }
 }
 
 /// <summary>A skill name the caller deleted or renamed away in the registry.</summary>
@@ -132,7 +147,8 @@ internal sealed record RegistrySkillList(IReadOnlyList<RegistrySkill>? Skills, s
 /// <param name="ProjectId">Its project; <c>null</c> for a global skill.</param>
 /// <param name="LastVersion">The skill's last version under that name: copies synced at or below it are copies of it.</param>
 /// <param name="RenamedTo">The skill's name now, when it was renamed; <c>null</c> when it was deleted.</param>
-internal sealed record RegistryRemovedSkill(string Name, Guid? ProjectId, int LastVersion, string? RenamedTo);
+/// <param name="Replaced">True when a new, unrelated skill has taken the name since.</param>
+internal sealed record RegistryRemovedSkill(string Name, Guid? ProjectId, int LastVersion, string? RenamedTo, bool Replaced = false);
 
 /// <summary>One version of a skill with every file's bytes.</summary>
 internal sealed record RegistrySkillContent(string Name, int Version, string ContentHash, IReadOnlyList<RegistrySkillFile> Files);

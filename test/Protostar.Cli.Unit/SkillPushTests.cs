@@ -278,6 +278,38 @@ public sealed class SkillPushServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task A_copy_of_a_deleted_skill_is_not_taken_for_the_new_skill_that_reused_its_name()
+    {
+        var skill = Skill("tidy");
+        Synced(skill, 1);
+        var (sut, api) = Build([skill], Session());
+        api.Skills.Clear();
+        api.Skills.Add(new RegistrySkill("tidy", null, 3, "", DateTimeOffset.UnixEpoch, FirstVersion: 3));
+
+        var result = await sut.PushAsync(Request(), CancellationToken.None);
+
+        var outcome = Assert.Single(result.Entries).Outcome;
+        Assert.Equal(SkillPushStatus.Removed, outcome.Status);
+        Assert.Contains("a new skill named 'tidy' has been created since", outcome.Message);
+        Assert.Contains("--as NEW-NAME", outcome.Message);
+        Assert.Empty(api.Pushed);
+    }
+
+    [Fact]
+    public async Task A_copy_synced_from_the_new_skill_is_unchanged()
+    {
+        var skill = Skill("tidy");
+        Synced(skill, 3);
+        var (sut, api) = Build([skill], Session());
+        api.Skills.Clear();
+        api.Skills.Add(new RegistrySkill("tidy", null, 3, "", DateTimeOffset.UnixEpoch, FirstVersion: 3));
+
+        var result = await sut.PushAsync(Request(), CancellationToken.None);
+
+        Assert.Equal(SkillPushStatus.Unchanged, Assert.Single(result.Entries).Outcome.Status);
+    }
+
+    [Fact]
     public async Task A_removal_in_another_project_does_not_count_for_this_copy()
     {
         var skill = Skill("tidy");

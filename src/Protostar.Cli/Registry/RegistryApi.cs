@@ -93,7 +93,7 @@ internal sealed partial class RegistryApi : IRegistryApi, IDisposable
 
         return new RegistrySkillList(
             skills.Where(s => s.Name is not null && s.ContentHash is not null)
-                .Select(s => new RegistrySkill(s.Name!, s.Description, s.Version, s.ContentHash!, s.UpdatedAt, s.ProjectId, s.ProjectName))
+                .Select(s => new RegistrySkill(s.Name!, s.Description, s.Version, s.ContentHash!, s.UpdatedAt, s.ProjectId, s.ProjectName, s.FirstVersion ?? 1))
                 .ToList(),
             null,
             (body.Removed ?? []).Where(r => r.Name is not null)
@@ -260,6 +260,7 @@ internal sealed partial class RegistryApi : IRegistryApi, IDisposable
         [JsonPropertyName("updatedAt")] public DateTimeOffset UpdatedAt { get; init; }
         [JsonPropertyName("projectId")] public Guid? ProjectId { get; init; }
         [JsonPropertyName("projectName")] public string? ProjectName { get; init; }
+        [JsonPropertyName("firstVersion")] public int? FirstVersion { get; init; }
     }
 
     private sealed record FilesResponse

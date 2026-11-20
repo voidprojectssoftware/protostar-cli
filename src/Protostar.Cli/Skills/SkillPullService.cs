@@ -274,6 +274,9 @@ internal sealed class SkillPullService : ISkillPullService
         if (comparison.State == SkillSyncState.ChangedBoth && !force)
             return new SkillPullEntry(harness, remote.Name, SkillPullStatus.ChangedBoth, remote.Version, comparison.LocalPath!, null, project);
 
+        if (comparison.State == SkillSyncState.RemovedInRegistry && !force)
+            return new SkillPullEntry(harness, remote.Name, SkillPullStatus.RemovedInRegistry, remote.Version, comparison.LocalPath!, comparison.Note, project);
+
         string path;
         if (comparison.LocalPath is { } existing)
         {
@@ -308,7 +311,12 @@ internal sealed class SkillPullService : ISkillPullService
         _ledger.Record(registry, path, new SkillLedgerEntry(SkillFileReader.Hash(written), content.Version, remote.Name, remote.ProjectId));
 
         var status = comparison.LocalPath is null ? SkillPullStatus.Installed : SkillPullStatus.Updated;
-        var note = comparison.State is SkillSyncState.LocalChanges or SkillSyncState.ChangedBoth ? "Local changes were overwritten (--force)." : null;
+        var note = comparison.State switch
+        {
+            SkillSyncState.LocalChanges or SkillSyncState.ChangedBoth => "Local changes were overwritten (--force).",
+            SkillSyncState.RemovedInRegistry => "The copy of the earlier, deleted skill of this name was overwritten (--force).",
+            _ => null,
+        };
         if (content.Version < currentVersion)
         {
             // Recorded as synced at the pinned version: honest, and it makes a later `push --force` a deliberate replace.
@@ -386,7 +394,7 @@ internal sealed class SkillPullService : ISkillPullService
     private static string RemovalNote(RemovedCopy removed, bool pulling)
     {
         var (local, _, removal, edited) = removed;
-        var quoted = local.Name.Any(char.IsWhiteSpace) ? $"\"{local.Name}\"" : local.Name;
+        var quoted = Quote(local.Name);
         if (removal.RenamedTo is not { } newName)
         {
             var why = edited ? "This copy has changes made here and is kept" : "This copy is kept";
@@ -469,11 +477,20 @@ internal sealed class SkillPullService : ISkillPullService
                 : state;
         }
 
-        return new SkillComparison(harness, installed.Name, state, remote, installed.Path, recorded?.Version, Project: target.ProjectName);
+        var note = state == SkillSyncState.RemovedInRegistry
+            ? $"This copy is of an earlier skill named '{remote.Name}' (synced at v{recorded!.Version}), deleted from the registry since; the registry's " +
+              $"'{remote.Name}' is a new skill that took the name. Run `protostar skills pull {Quote(remote.Name)} --force` to replace this copy with it, or " +
+              $"`protostar skills push {Quote(remote.Name)} --as NEW-NAME` to keep this copy as a separate skill."
+            : null;
+        return new SkillComparison(harness, installed.Name, state, remote, installed.Path, recorded?.Version, note, target.ProjectName);
     }
+
+    private static string Quote(string name) => name.Any(char.IsWhiteSpace) ? $"\"{name}\"" : name;
 
     /// <summary>Decides how local <paramref name="files"/> compare with <paramref name="remote"/>, given the last recorded sync.</summary>
     /// <remarks>
+    /// A copy synced at a version below the registry skill's first version is a copy of an earlier skill of that name,
+    /// deleted since, not of this one (<see cref="SkillSyncState.RemovedInRegistry"/>): never replaced without <c>--force</c>.
     /// Changed on both sides when the registry refused this exact content as stale, or when the copy differs from what
     /// it last synced and the registry has a newer version than that. A record from before versions were kept cannot
     /// show the registry moved, so such a copy stays <see cref="SkillSyncState.LocalChanges"/>, which is protected alike.
@@ -484,6 +501,8 @@ internal sealed class SkillPullService : ISkillPullService
             return SkillSyncState.UpToDate;
         if (recorded is null)
             return SkillSyncState.LocalChanges;
+        if (recorded.Version is { } earlier && earlier >= 1 && earlier < remote.FirstVersion)
+            return SkillSyncState.RemovedInRegistry;
 
         var hash = SkillFileReader.Hash(files);
         if (recorded.RefusedHash == hash)
