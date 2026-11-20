@@ -1,4 +1,5 @@
 using System.Net.Http.Json;
+using Protostar.Cli.Auth;
 using Protostar.Cli.Projects;
 
 namespace Protostar.Cli.Registry;
@@ -22,7 +23,7 @@ internal sealed partial class RegistryApi : IMemoryApi
             machineId);
         // A registry from before memory backup has no such route. Saying so beats a bare status code.
         return result.Error == Describe(System.Net.HttpStatusCode.NotFound)
-            ? ApiResult<MemoryPushResponse>.Fail("This registry cannot back up memory yet. Update the registry.")
+            ? ApiResult<MemoryPushResponse>.Fail(ApiCompatibility.TooOld(RegistryCapability.Memory))
             : result;
     }
 
@@ -35,7 +36,7 @@ internal sealed partial class RegistryApi : IMemoryApi
             async response => await response.Content.ReadFromJsonAsync<RemoteMemoryProject[]>(TranscriptJson.Options) ?? [],
             cancellationToken);
         return result.Error == Describe(System.Net.HttpStatusCode.NotFound)
-            ? ApiResult<IReadOnlyList<RemoteMemoryProject>>.Fail(TooOldToPull)
+            ? ApiResult<IReadOnlyList<RemoteMemoryProject>>.Fail(ApiCompatibility.TooOld(RegistryCapability.Memory))
             : result;
     }
 
@@ -49,7 +50,7 @@ internal sealed partial class RegistryApi : IMemoryApi
             cancellationToken);
         // An unknown project carries a problem title; only a registry without the route answers a bare 404.
         return result.Error == Describe(System.Net.HttpStatusCode.NotFound)
-            ? ApiResult<RemoteMemoryContent>.Fail(TooOldToPull)
+            ? ApiResult<RemoteMemoryContent>.Fail(ApiCompatibility.TooOld(RegistryCapability.MemoryContent))
             : result;
     }
 
@@ -64,6 +65,4 @@ internal sealed partial class RegistryApi : IMemoryApi
             async response => await response.Content.ReadFromJsonAsync<RemoteMemoryContent>(TranscriptJson.Options) ?? throw new System.Text.Json.JsonException("Empty response."),
             cancellationToken);
     }
-
-    private const string TooOldToPull = "This registry cannot bring memory to this machine yet. Update the registry.";
 }

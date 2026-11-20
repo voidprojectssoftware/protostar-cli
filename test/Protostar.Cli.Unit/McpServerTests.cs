@@ -31,10 +31,11 @@ public sealed class McpServerTests
         var api = new RegistryApi(_registry);
         var catalog = new Catalog(new ClaudeCodeHarness(new ClaudeCodeSkillParser(), new ClaudeCodeSkillMapper()));
         var tokens = new Tokens(() => SessionLookups.Of(_token));
-        var reader = new SessionReader(catalog, tokens, api);
+        var capabilities = new RegistryCapabilities(api);
+        var reader = new SessionReader(catalog, tokens, capabilities, api);
         return new HistoryTools(
-            new SearchService(tokens, api, api, new NotGit(), api, new FakeMachine()),
-            new AgentHistoryService(tokens, api, api, api, reader),
+            new SearchService(tokens, capabilities, api, new NotGit(), api, new FakeMachine()),
+            new AgentHistoryService(tokens, capabilities, api, api, reader),
             reader, catalog, Registry);
     }
 

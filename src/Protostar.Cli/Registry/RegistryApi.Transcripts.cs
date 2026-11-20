@@ -4,6 +4,7 @@ using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Security.Cryptography;
 using System.Text.Json;
+using Protostar.Cli.Auth;
 using Protostar.Cli.Harness;
 using Protostar.Cli.Projects;
 
@@ -94,7 +95,7 @@ internal sealed partial class RegistryApi : ITranscriptApi
             cancellationToken);
         // A registry from before the lookup existed has no such route. Saying so beats a bare status code.
         return result.Error == Describe(HttpStatusCode.NotFound)
-            ? ApiResult<IReadOnlyList<TranscriptLookup>>.Fail("This registry cannot verify backups yet (it has no transcript lookup). Update the registry.")
+            ? ApiResult<IReadOnlyList<TranscriptLookup>>.Fail(ApiCompatibility.TooOld(RegistryCapability.TranscriptLookup))
             : result;
     }
 
@@ -109,6 +110,7 @@ internal sealed partial class RegistryApi : ITranscriptApi
         // In UTC: `--since 2026-11-01` parses with the local offset, and the registry answered 500 to any offset but zero.
         if (query.Since is { } since) parts.Add("since=" + Uri.EscapeDataString(since.ToUniversalTime().ToString("O")));
         if (query.Before is { } before) parts.Add("before=" + Uri.EscapeDataString(before.ToUniversalTime().ToString("O")));
+        if (!string.IsNullOrEmpty(query.KeyPrefix)) parts.Add("keyPrefix=" + Uri.EscapeDataString(query.KeyPrefix));
 
         using var request = Request(HttpMethod.Get, registry, "/v1/transcripts?" + string.Join('&', parts), accessToken);
         return await SendAsync<IReadOnlyList<RemoteTranscript>>(

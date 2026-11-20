@@ -43,7 +43,7 @@ public sealed class SkillPullServiceTests : IDisposable
     {
         var harness = new ClaudeCodeHarness(new ClaudeCodeSkillParser(), new ClaudeCodeSkillMapper());
         var catalog = new HarnessCatalog([harness]);
-        return new SkillPullService(catalog, new Tokens(lookup ?? SessionLookups.Of(noSession ? null : session ?? Session())), api, _ledger, new ProjectFactsResolver(), _projects, new FakeMachine());
+        return new SkillPullService(catalog, new Tokens(lookup ?? SessionLookups.Of(noSession ? null : session ?? Session())), api, new RegistryCapabilities(api), _ledger, new ProjectFactsResolver(), _projects, new FakeMachine());
     }
 
     private static StoredToken Session(bool expired = false) => new()
@@ -1089,7 +1089,7 @@ public sealed class SkillPullServiceTests : IDisposable
         PublishProject(home, "deploy", 1);
 
         var harness = new ClaudeCodeHarness(new ClaudeCodeSkillParser(), new ClaudeCodeSkillMapper());
-        var sut = new SkillPullService(new HarnessCatalog([harness]), new Tokens(SessionLookups.Of(Session())), _api, _ledger, new ProjectFactsResolver(), _projects, new FakeMachine());
+        var sut = new SkillPullService(new HarnessCatalog([harness]), new Tokens(SessionLookups.Of(Session())), _api, new RegistryCapabilities(_api), _ledger, new ProjectFactsResolver(), _projects, new FakeMachine());
         var pull = await sut.PullAsync(new SkillPullRequest([], null, config, Registry, ProjectStart: home), CancellationToken.None);
 
         var entry = Assert.Single(pull.Entries);

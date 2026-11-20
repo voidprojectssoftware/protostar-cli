@@ -41,7 +41,7 @@ public sealed class SessionSyncServiceTests : IDisposable
 
     private ISessionSyncService Sut() => new SessionSyncService(
         new FakeCatalog(new ClaudeCodeHarness(new ClaudeCodeSkillParser(), new ClaudeCodeSkillMapper())),
-        new FakeTokens(() => _session ?? SessionLookups.Of(_token)), _registry, _registry, _ledger, _machine, _projects, _registry, TimeProvider.System);
+        new FakeTokens(() => _session ?? SessionLookups.Of(_token)), new RegistryCapabilities(_registry), _registry, _ledger, _machine, _projects, _registry, TimeProvider.System);
 
     private SessionSyncRequest Request(TimeSpan? budget = null, TimeSpan? throttle = null, string? sessionPath = null) =>
         new(Registry, "claude-code", _root, sessionPath, budget, throttle);

@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text;
+using Protostar.Cli.Auth;
 using Protostar.Cli.Harness;
 using Protostar.Cli.Projects;
 using Protostar.Cli.Registry;
@@ -144,7 +145,7 @@ internal sealed partial class MemorySyncService
         if (harnesses.Count == 0)
             return new MemoryPullResult(SessionSyncFailure.None, null, registry, 0, [], []) { NoHarness = true };
 
-        var connected = await ConnectAsync(registry, cancellationToken);
+        var connected = await ConnectAsync(registry, cancellationToken, RegistryCapability.MemoryContent);
         if (connected.Failure != SessionSyncFailure.None)
             return MemoryPullResult.Fail(connected.Failure, connected.Detail, registry);
         var session = connected.Session!;

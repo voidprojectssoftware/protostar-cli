@@ -37,9 +37,9 @@ internal sealed record SearchResult(
 /// ranking and the redaction; nothing is read from disk but the git facts of the folder <c>--project .</c> names.
 /// </para>
 /// <para>
-/// The capability check reads <c>/v1/meta</c>: a registry that lists capabilities without <c>search</c> is refused
-/// without asking it to search. One that lists none predates the list, so it is asked anyway, and a bare 404 from
-/// it means the same thing (<see cref="ISearchApi.RegistryTooOldForSearch"/>).
+/// The capability check (<see cref="IRegistryCapabilities.RequireAsync"/>): a registry that lists capabilities without
+/// <c>search</c> is refused without asking it to search. One that lists none predates the list, so it is asked anyway,
+/// and a bare 404 from it means the same thing (<see cref="ISearchApi.RegistryTooOldForSearch"/>).
 /// </para>
 /// <para>
 /// <c>--project .</c> is resolved with the resolver session backups use, so it names the project this folder's
@@ -50,21 +50,18 @@ internal sealed record SearchResult(
 /// </remarks>
 internal sealed class SearchService : ISearchService
 {
-    /// <summary>The <c>/v1/meta</c> capability name for search.</summary>
-    internal const string Capability = "search";
-
     private readonly IAccessTokenProvider _tokens;
-    private readonly IRegistryApi _meta;
+    private readonly IRegistryCapabilities _capabilities;
     private readonly ISearchApi _api;
     private readonly IProjectFactsResolver _facts;
     private readonly IProjectApi _projects;
     private readonly IMachineIdentity _machine;
 
     public SearchService(
-        IAccessTokenProvider tokens, IRegistryApi meta, ISearchApi api, IProjectFactsResolver facts, IProjectApi projects, IMachineIdentity machine)
+        IAccessTokenProvider tokens, IRegistryCapabilities capabilities, ISearchApi api, IProjectFactsResolver facts, IProjectApi projects, IMachineIdentity machine)
     {
         _tokens = tokens;
-        _meta = meta;
+        _capabilities = capabilities;
         _api = api;
         _facts = facts;
         _projects = projects;
@@ -96,13 +93,9 @@ internal sealed class SearchService : ISearchService
             return new SearchResult(failure, null, registry, []);
         }
 
-        var meta = await _meta.GetMetaAsync(registry, cancellationToken);
-        if (meta is null)
-            return new SearchResult(SessionSyncFailure.RegistryUnreachable, null, registry, []);
-        if (ApiCompatibility.Check(meta) is { } incompatible)
-            return new SearchResult(SessionSyncFailure.Incompatible, incompatible, registry, []);
-        if (meta.Capabilities is { } capabilities && !capabilities.Contains(Capability, StringComparer.Ordinal))
-            return new SearchResult(SessionSyncFailure.Incompatible, ISearchApi.RegistryTooOldForSearch, registry, []);
+        var check = await _capabilities.RequireAsync(registry, cancellationToken, RegistryCapability.Search);
+        if (!check.Ok)
+            return new SearchResult(SessionSyncService.CheckFailure(check), check.Detail, registry, []);
 
         var project = request.Project;
         string? folderProject = null;

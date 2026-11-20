@@ -28,7 +28,7 @@ public sealed class SkillChangeServiceTests : IDisposable
     private string SkillsDir => Path.Combine(_root, "skills");
 
     private ISkillChangeService Build() =>
-        new SkillChangeService(new Tokens(), _api, _ledger, new FakeFacts(), _projects, new FakeMachine());
+        new SkillChangeService(new Tokens(), _api, new RegistryCapabilities(_api), _ledger, new FakeFacts(), _projects, new FakeMachine());
 
     private static string Manifest(string name, string body = "body") => $"---\nname: {name}\ndescription: d\n---\n{body}";
 
@@ -54,7 +54,7 @@ public sealed class SkillChangeServiceTests : IDisposable
 
     private async Task<SkillTarget> FindAsync(string name, string? projectStart = null)
     {
-        var found = await Build().FindAsync(new SkillTargetRequest(name, Registry, projectStart), CancellationToken.None);
+        var found = await Build().FindAsync(new SkillTargetRequest(name, Registry, projectStart, RegistryCapability.SkillDelete), CancellationToken.None);
         Assert.Equal(SkillPullRunFailure.None, found.Failure);
         return found.Target!;
     }
@@ -116,7 +116,7 @@ public sealed class SkillChangeServiceTests : IDisposable
     {
         Publish("notes", 1, Manifest("notes"), Guid.NewGuid(), "elsewhere");
 
-        var found = await Build().FindAsync(new SkillTargetRequest("notes", Registry, _root), CancellationToken.None);
+        var found = await Build().FindAsync(new SkillTargetRequest("notes", Registry, _root, RegistryCapability.SkillDelete), CancellationToken.None);
 
         Assert.Equal(SkillPullRunFailure.SkillNotFound, found.Failure);
         Assert.Contains("elsewhere", found.Detail);

@@ -77,6 +77,52 @@ message means the registry only speaks a major your CLI doesn't.
 [Update protostar](../guides/manage-your-installation.md) (or point at a compatible
 registry). The model is explained in [Registry concepts](/registry/concepts).
 
+### "This registry is too old for …" {#registry-too-old}
+
+A shared registry can lag behind the CLI. Before a command uses a feature added
+within API v1, it checks the registry's **capabilities** (the `capabilities`
+list in `/v1/meta`) and, when the feature is missing, stops with this message
+instead of failing on a 404. With `--json` the error code is
+`registry_incompatible`. Update the registry; nothing on this machine needs to
+change. To see what a registry offers:
+
+```bash
+curl -k https://localhost:7443/v1/meta
+# {"service":"protostar-registry","version":"…","apiMajors":[1],"capabilities":["skills","sessions",…]}
+```
+
+What each command needs:
+
+| Commands | Capabilities |
+|---|---|
+| `skills push`, `pull`, `remote`, `setup` | `skills`; with project skills also `project-skills` and `projects` |
+| `skills push` without `--force` | `stale-skill-push` (see below) |
+| `skills rename`, `skills delete` | `skill-rename`, `skill-delete` |
+| `project` | `projects` |
+| `sessions push`, `list`, `show` | `sessions` |
+| `sessions status --verify` | `sessions`, `transcript-lookup` |
+| `memory push` | `memory` |
+| `memory pull` | `memory`, `memory-content` (`memory-base-versions` is used when listed) |
+| `search` | `search` |
+| MCP `get_session`, `get_session_skills`, `get_memory` | `redacted-read`, `session-skills`, `memory-redacted-read` |
+
+A registry from before the list sends no `capabilities` at all. That counts as
+**unknown**: commands go ahead as they always did, and a 404 gets the same
+message. The exception is the MCP tools: they refuse a registry that cannot list
+`redacted-read`, `memory-redacted-read` or `session-skills`, because a registry
+that ignores the request to redact would serve secrets to an agent, and refusing
+is the lesser harm.
+
+A registry that lists capabilities without `stale-skill-push` cannot tell when a
+push would replace a newer version pushed from another machine. `skills push`
+refuses it and says so; `skills push --force`, which keeps your copy anyway,
+pushes with a warning. The capture hook never forces, so its skill backups wait
+for the registry to be updated.
+
+Background backups (the capture hooks) never fail the harness over this. They
+record the reason, and `protostar status` shows it, for example "Memory backups
+are failing … This registry is too old for memory backups".
+
 ### The browser never returns / sign-in times out
 
 On a headless machine, the browser can't open. Use `--no-browser` to print the URL

@@ -253,7 +253,7 @@ internal sealed partial class SessionSyncService : ISessionSyncService
 
     private readonly IHarnessCatalog _catalog;
     private readonly IAccessTokenProvider _tokens;
-    private readonly IRegistryApi _meta;
+    private readonly IRegistryCapabilities _capabilities;
     private readonly ITranscriptApi _api;
     private readonly ISessionLedger _ledger;
     private readonly IMachineIdentity _machine;
@@ -262,13 +262,13 @@ internal sealed partial class SessionSyncService : ISessionSyncService
     private readonly TimeProvider _time;
 
     public SessionSyncService(
-        IHarnessCatalog catalog, IAccessTokenProvider tokens, IRegistryApi meta, ITranscriptApi api,
+        IHarnessCatalog catalog, IAccessTokenProvider tokens, IRegistryCapabilities capabilities, ITranscriptApi api,
         ISessionLedger ledger, IMachineIdentity machine, IProjectFactsResolver projects, IProjectApi projectApi, TimeProvider time)
     {
         _projectApi = projectApi;
         _catalog = catalog;
         _tokens = tokens;
-        _meta = meta;
+        _capabilities = capabilities;
         _api = api;
         _ledger = ledger;
         _machine = machine;
@@ -436,6 +436,14 @@ internal sealed partial class SessionSyncService : ISessionSyncService
                 _ledger.ClearFailed(registry, mark.Harness, mark.Key, startedAt);
         }
     }
+
+    /// <summary>The failure for a registry check that stopped a command: unreachable, or incompatible (<c>registry_incompatible</c>).</summary>
+    internal static SessionSyncFailure CheckFailure(RegistryCheck check) => check.Failure switch
+    {
+        RegistryCheckFailure.Unreachable => SessionSyncFailure.RegistryUnreachable,
+        RegistryCheckFailure.Incompatible => SessionSyncFailure.Incompatible,
+        _ => SessionSyncFailure.None,
+    };
 
     // Why a run that needs the registry stops when there is no current session.
     internal static SessionSyncFailure SessionFailure(SessionState session) => session switch
@@ -745,18 +753,17 @@ internal sealed partial class SessionSyncService : ISessionSyncService
         new(transcript, TranscriptSyncStatus.Failed, sent, Math.Max(0, plan.Size - (plan.Rewritten ? 0 : plan.Entry?.Length ?? 0) - sent), plan.Rewritten, message);
 
     // registerMachine: false for a caller that only reads (status --verify), which then never changes the registry.
+    // Every caller needs session backups; `also` names what else it uses.
     private async Task<(SessionSyncFailure Failure, string? Detail, Session? Session)> ConnectAsync(
-        Uri registry, CancellationToken cancellationToken, bool registerMachine = true)
+        Uri registry, CancellationToken cancellationToken, bool registerMachine = true, params string[] also)
     {
         var lookup = await _tokens.GetSessionAsync(registry, cancellationToken);
         if (lookup is not { State: SessionState.Current, Session: { } stored })
             return (SessionFailure(lookup.State), null, null);
 
-        var meta = await _meta.GetMetaAsync(registry, cancellationToken);
-        if (meta is null)
-            return (SessionSyncFailure.RegistryUnreachable, null, null);
-        if (ApiCompatibility.Check(meta) is { } incompatible)
-            return (SessionSyncFailure.Incompatible, incompatible, null);
+        var check = await _capabilities.RequireAsync(registry, cancellationToken, [RegistryCapability.Sessions, .. also]);
+        if (!check.Ok)
+            return (CheckFailure(check), check.Detail, null);
 
         var machine = _machine.Get();
         if (registerMachine && !_machine.IsRegisteredWith(registry))

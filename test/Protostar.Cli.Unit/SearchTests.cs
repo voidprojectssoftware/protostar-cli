@@ -22,7 +22,7 @@ public sealed class SearchTests
     private StoredToken? _token = new() { Registry = Registry, AccessToken = "tok", ExpiresAtUtc = DateTimeOffset.UtcNow.AddHours(1) };
 
     private SearchService Sut() => new(
-        new FakeTokens(SessionLookups.Of(_token)), new FakeRegistryApi { Meta = _meta }, _search, new NotGitResolver(), _projects, new FakeMachine());
+        new FakeTokens(SessionLookups.Of(_token)), new RegistryCapabilities(new FakeRegistryApi { Meta = _meta }), _search, new NotGitResolver(), _projects, new FakeMachine());
 
     private static SearchRequest Request(string? project = null, string? kind = null) =>
         new(Registry, "parentUuid ordering", kind, project, 20, "/work/demo-app");

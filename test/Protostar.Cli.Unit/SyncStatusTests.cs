@@ -126,6 +126,26 @@ public sealed class SyncStatusTests : IDisposable
         Assert.Equal(CaptureFailure.NotSignedIn, CapturePresenter.Record(signedOut, "x: y")!.Reason);
     }
 
+    [Fact]
+    public void A_background_backup_refused_by_a_registry_too_old_for_it_records_why()
+    {
+        var tooOld = "This registry is too old for memory backups. Update the registry.";
+        var memory = MemoryPushResult.Fail(SessionSyncFailure.Incompatible, tooOld, new Uri(Registry));
+        var sessions = SessionSyncResult.Fail(SessionSyncFailure.Incompatible, "This registry is too old for session backups. Update the registry.", new Uri(Registry));
+        var skills = new CaptureResult(CaptureAction.SkillBackedUp, "alpha",
+            SkillPushRunResult.Fail(SkillPushRunFailure.Incompatible, SkillPushService.NoStaleProtection, new Uri(Registry)), null);
+        var kept = new List<CaptureRecord>();
+
+        CapturePresenter.RenderBackgroundMemoryPush(memory, TextWriter.Null, _ => { }, kept.Add);
+        CapturePresenter.RenderBackgroundPush(sessions, TextWriter.Null, _ => { }, kept.Add);
+        CapturePresenter.Render("PostToolUse", skills, TextWriter.Null, _ => { }, kept.Add);
+
+        Assert.All(kept, r => Assert.Equal(CaptureFailure.Incompatible, r.Reason));
+        Assert.Contains(tooOld, kept[0].Error);
+        Assert.Contains("too old for session backups", kept[1].Error);
+        Assert.Contains("too old for detecting overwritten skills", kept[2].Error);
+    }
+
     // ── summarising ─────────────────────────────────────────────────────────────
 
     [Fact]

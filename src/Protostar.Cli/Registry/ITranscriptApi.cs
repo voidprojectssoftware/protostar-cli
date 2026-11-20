@@ -150,7 +150,12 @@ internal sealed record AppendResult(AppendStatus Status, TranscriptPosition? Pos
 
 /// <summary>Filters for listing transcripts.</summary>
 /// <param name="Before">Only transcripts last active before this time, to page: the previous page's last <c>lastActivityAt</c>.</param>
-internal sealed record TranscriptListQuery(string? Project, Guid? Machine, string? Harness, DateTimeOffset? Since, int Limit, DateTimeOffset? Before = null);
+/// <param name="KeyPrefix">
+/// Only sessions whose key starts with this, ignoring case; needs the <c>transcript-prefix-lookup</c> capability, and at
+/// least 4 characters a key may hold, or the registry answers 400.
+/// </param>
+internal sealed record TranscriptListQuery(
+    string? Project, Guid? Machine, string? Harness, DateTimeOffset? Since, int Limit, DateTimeOffset? Before = null, string? KeyPrefix = null);
 
 /// <summary>A transcript as the registry describes it on its own: its record and, for a session, its subagents'.</summary>
 /// <param name="Subagents">The session's subagents, earliest first; empty for a subagent.</param>

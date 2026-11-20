@@ -11,8 +11,8 @@ internal interface ISessionReader
     /// <summary>Finds the transcript <paramref name="id"/> names: a whole key, or the start of one session's key.</summary>
     /// <param name="harnessId">Only this harness; <c>null</c> for every harness that keeps sessions.</param>
     /// <remarks>
-    /// A whole key is looked up directly, subagent keys included. Anything else is matched, ignoring case, against the
-    /// start of every session key the registry lists; one match is opened, several are refused with the candidates.
+    /// A whole key is found directly, subagent keys included. Anything else is matched, ignoring case, against the
+    /// start of the session keys in the registry; one match is opened, several are refused with the candidates.
     /// </remarks>
     Task<SessionOpenResult> OpenAsync(string? registry, string? harnessId, string id, CancellationToken cancellationToken);
 
@@ -92,9 +92,13 @@ internal sealed class SessionReadException : Exception
 /// deleted when reading ends, however it ends.
 /// </para>
 /// <para>
-/// A prefix is matched by paging through the registry's session list, 200 at a time, until a page comes back short or
-/// enough candidates are found to refuse. That is one request per 200 sessions; a registry query by key prefix would
-/// make it one request. Sessions with the same last-activity time on a page boundary can be missed by the paging.
+/// A prefix is looked up in one request (<c>GET /v1/transcripts?keyPrefix=…&amp;limit=11</c>) when the registry lists
+/// <c>transcript-prefix-lookup</c> and the prefix is one it accepts (at least <see cref="MinLookupPrefix"/> characters a
+/// key may hold). Otherwise, on an older registry or for a shorter prefix, which the registry would refuse, it is matched
+/// by paging through the registry's session list, 200 at a time, until a page comes back short or enough candidates
+/// are found to refuse: one request per 200 sessions, and sessions with the same last-activity time on a page boundary
+/// can be missed. A short prefix is still served that way rather than refused, since it works and older registries
+/// need the paging anyway.
 /// </para>
 /// </remarks>
 internal sealed class SessionReader : ISessionReader
@@ -102,16 +106,21 @@ internal sealed class SessionReader : ISessionReader
     /// <summary>The most candidates an ambiguous prefix lists; past it, more of the id is needed anyway.</summary>
     internal const int MaxCandidates = 10;
 
+    /// <summary>The shortest prefix the registry looks up itself (<c>transcript-prefix-lookup</c>); a shorter one is matched by paging.</summary>
+    internal const int MinLookupPrefix = 4;
+
     private const int PageSize = 200;
 
     private readonly IHarnessCatalog _catalog;
     private readonly IAccessTokenProvider _tokens;
+    private readonly IRegistryCapabilities _capabilities;
     private readonly ITranscriptApi _api;
 
-    public SessionReader(IHarnessCatalog catalog, IAccessTokenProvider tokens, ITranscriptApi api)
+    public SessionReader(IHarnessCatalog catalog, IAccessTokenProvider tokens, IRegistryCapabilities capabilities, ITranscriptApi api)
     {
         _catalog = catalog;
         _tokens = tokens;
+        _capabilities = capabilities;
         _api = api;
     }
 
@@ -137,20 +146,27 @@ internal sealed class SessionReader : ISessionReader
             return SessionOpenResult.Fail(SessionSyncService.SessionFailure(lookup.State), null, registry);
         var token = stored.AccessToken;
 
-        var exact = new List<(IHarness Harness, TranscriptDetail Detail)>();
-        foreach (var harness in harnesses)
+        var check = await _capabilities.RequireAsync(registry, cancellationToken, RegistryCapability.Sessions);
+        if (!check.Ok)
+            return SessionOpenResult.Fail(SessionSyncService.CheckFailure(check), check.Detail, registry);
+
+        // One request when the registry can look a prefix up itself; a whole subagent key is no session's prefix, so
+        // nothing found that way still tries the id as a whole key.
+        if (check.Supports(RegistryCapability.TranscriptPrefixLookup) == CapabilitySupport.Listed && IsLookupPrefix(id))
         {
-            var got = await _api.GetAsync(registry, token, harness.Id, id, cancellationToken);
-            if (got.Ok)
-                exact.Add((harness, got.Value!));
-            else if (!got.TranscriptUnknown)
-                return SessionOpenResult.Fail(SessionSyncFailure.RegistryUnreachable, got.Error, registry);
+            var found = await _api.ListAsync(
+                registry, token, new TranscriptListQuery(null, null, harnessId, null, MaxCandidates + 1, KeyPrefix: id), cancellationToken);
+            if (!found.Ok)
+                return SessionOpenResult.Fail(SessionSyncFailure.RegistryUnreachable, found.Error, registry);
+            var matches = found.Value!.Where(t => harnesses.Any(h => h.Id == t.Harness)).ToList();
+            if (matches.Count > 0)
+                return await OpenMatchAsync(registry, token, harnesses, id, matches, cancellationToken);
+            return await OpenExactAsync(registry, token, harnesses, id, cancellationToken)
+                ?? new SessionOpenResult(SessionOpenOutcome.NotFound, SessionSyncFailure.None, null, registry, null, []);
         }
 
-        if (exact.Count == 1)
-            return Found(registry, token, exact[0].Harness, exact[0].Detail);
-        if (exact.Count > 1)
-            return new SessionOpenResult(SessionOpenOutcome.Ambiguous, SessionSyncFailure.None, null, registry, null, [.. exact.Select(e => e.Detail.Transcript)]);
+        if (await OpenExactAsync(registry, token, harnesses, id, cancellationToken) is { } exact)
+            return exact;
 
         var candidates = new List<RemoteTranscript>();
         var harnessIds = harnesses.Select(h => h.Id).ToHashSet(StringComparer.Ordinal);
@@ -168,10 +184,18 @@ internal sealed class SessionReader : ISessionReader
 
         if (candidates.Count == 0)
             return new SessionOpenResult(SessionOpenOutcome.NotFound, SessionSyncFailure.None, null, registry, null, []);
-        if (candidates.Count > 1)
-            return new SessionOpenResult(SessionOpenOutcome.Ambiguous, SessionSyncFailure.None, null, registry, null, [.. candidates.Take(MaxCandidates)]);
+        return await OpenMatchAsync(registry, token, harnesses, id, candidates, cancellationToken);
+    }
 
-        var match = candidates[0];
+    // Opens the one session the prefix matched (or the one whose whole key it is), or lists the candidates.
+    private async Task<SessionOpenResult> OpenMatchAsync(
+        Uri registry, string token, List<IHarness> harnesses, string id, List<RemoteTranscript> matches, CancellationToken cancellationToken)
+    {
+        var whole = matches.Where(t => string.Equals(t.Key, id, StringComparison.Ordinal)).ToList();
+        if (matches.Count > 1 && whole.Count != 1)
+            return new SessionOpenResult(SessionOpenOutcome.Ambiguous, SessionSyncFailure.None, null, registry, null, [.. matches.Take(MaxCandidates)]);
+
+        var match = whole.Count == 1 ? whole[0] : matches[0];
         var detail = await _api.GetAsync(registry, token, match.Harness, match.Key, cancellationToken);
         if (!detail.Ok)
         {
@@ -182,6 +206,31 @@ internal sealed class SessionReader : ISessionReader
 
         return Found(registry, token, harnesses.First(h => h.Id == match.Harness), detail.Value!);
     }
+
+    // The transcript whose whole key is `id`, subagents included: found, ambiguous across harnesses, a failure, or null when none has it.
+    private async Task<SessionOpenResult?> OpenExactAsync(
+        Uri registry, string token, List<IHarness> harnesses, string id, CancellationToken cancellationToken)
+    {
+        var exact = new List<(IHarness Harness, TranscriptDetail Detail)>();
+        foreach (var harness in harnesses)
+        {
+            var got = await _api.GetAsync(registry, token, harness.Id, id, cancellationToken);
+            if (got.Ok)
+                exact.Add((harness, got.Value!));
+            else if (!got.TranscriptUnknown)
+                return SessionOpenResult.Fail(SessionSyncFailure.RegistryUnreachable, got.Error, registry);
+        }
+
+        if (exact.Count == 1)
+            return Found(registry, token, exact[0].Harness, exact[0].Detail);
+        if (exact.Count > 1)
+            return new SessionOpenResult(SessionOpenOutcome.Ambiguous, SessionSyncFailure.None, null, registry, null, [.. exact.Select(e => e.Detail.Transcript)]);
+        return null;
+    }
+
+    // What the registry's keyPrefix accepts: at least 4 of the characters a key may hold. Anything else is matched by paging.
+    internal static bool IsLookupPrefix(string id) =>
+        id.Length >= MinLookupPrefix && id.All(c => char.IsAsciiLetterOrDigit(c) || c is '.' or '_' or '-');
 
     private static SessionOpenResult Found(Uri registry, string token, IHarness harness, TranscriptDetail detail) =>
         new(SessionOpenOutcome.Found, SessionSyncFailure.None, null, registry, new OpenedSession(registry, token, detail, (ISessionCapability)harness), []);

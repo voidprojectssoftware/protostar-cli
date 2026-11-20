@@ -48,7 +48,7 @@ public sealed class SkillPushServiceTests : IDisposable
     {
         api ??= new FakeRegistryApi();
         api.Skills.AddRange(_inRegistry.Where(r => !api.Skills.Contains(r)));
-        var sut = new SkillPushService(new FakeSkillService(skills.ToList()), new FakeTokens(lookup ?? SessionLookups.Of(session)), api, _ledger, _facts, new FakeMachine(), _projects);
+        var sut = new SkillPushService(new FakeSkillService(skills.ToList()), new FakeTokens(lookup ?? SessionLookups.Of(session)), api, new RegistryCapabilities(api), _ledger, _facts, new FakeMachine(), _projects);
         return (sut, api);
     }
 
@@ -542,6 +542,61 @@ public sealed class SkillPushServiceTests : IDisposable
         var result = await sut.PushAsync(Request(), CancellationToken.None);
 
         Assert.Equal(SkillPushRunFailure.Incompatible, result.Failure);
+        Assert.Empty(api.Pushed);
+    }
+
+    // A registry that lists capabilities but not stale-skill-push stores whatever comes, so a push could overwrite another machine's version.
+    private static RegistryMeta WithoutStaleProtection => new() { ApiMajors = [1], Capabilities = ["skills", "project-skills", "projects"] };
+
+    [Fact]
+    public async Task A_registry_without_stale_protection_is_refused_without_force()
+    {
+        var api = new FakeRegistryApi { Meta = WithoutStaleProtection };
+        var (sut, _) = Build([Skill("alpha")], Session(), api);
+
+        var result = await sut.PushAsync(Request(), CancellationToken.None);
+
+        Assert.Equal(SkillPushRunFailure.Incompatible, result.Failure);
+        Assert.StartsWith(SkillPushService.NoStaleProtection, result.Detail);
+        Assert.Contains("--force", result.Detail);
+        Assert.Empty(api.Pushed);
+    }
+
+    [Fact]
+    public async Task With_force_a_registry_without_stale_protection_is_pushed_to_with_a_warning()
+    {
+        var api = new FakeRegistryApi { Meta = WithoutStaleProtection };
+        var (sut, _) = Build([Skill("alpha")], Session(), api);
+
+        var result = await sut.PushAsync(Request() with { Force = true }, CancellationToken.None);
+
+        Assert.True(result.Succeeded);
+        Assert.Single(api.Pushed);
+        Assert.StartsWith(SkillPushService.NoStaleProtection, result.Warning);
+    }
+
+    [Fact]
+    public async Task A_registry_too_old_to_list_capabilities_is_pushed_to_as_before()
+    {
+        var (sut, api) = Build([Skill("alpha")], Session(), new FakeRegistryApi { Meta = new RegistryMeta { ApiMajors = [1] } });
+
+        var result = await sut.PushAsync(Request(), CancellationToken.None);
+
+        Assert.True(result.Succeeded);
+        Assert.Null(result.Warning);
+        Assert.Single(api.Pushed);
+    }
+
+    [Fact]
+    public async Task A_project_skill_is_not_pushed_to_a_registry_without_project_skills()
+    {
+        var api = new FakeRegistryApi { Meta = new RegistryMeta { ApiMajors = [1], Capabilities = ["skills", "stale-skill-push"] } };
+        var (sut, _) = Build([Skill("alpha", SkillScope.Project)], Session(), api);
+
+        var result = await sut.PushAsync(Request(), CancellationToken.None);
+
+        Assert.Equal(SkillPushRunFailure.Incompatible, result.Failure);
+        Assert.Equal("This registry is too old for project skills. Update the registry.", result.Detail);
         Assert.Empty(api.Pushed);
     }
 

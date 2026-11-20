@@ -15,6 +15,8 @@ internal static class SkillPushPresenter
         var authority = result.Registry?.GetLeftPart(UriPartial.Authority) ?? string.Empty;
         if (FailureMessage(result, catalog) is { } failure)
             return Error(failure);
+        if (result.Warning is { } warning)
+            AnsiConsole.MarkupLine($"[yellow]{Markup.Escape(warning)}[/]");
 
         if (result.Entries.Count == 0)
         {

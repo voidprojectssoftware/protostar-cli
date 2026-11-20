@@ -33,6 +33,12 @@ internal enum CaptureFailure
     /// <summary>The registry refused it, or it changed both here and there; the user has to choose.</summary>
     Refused,
 
+    /// <summary>
+    /// The registry is too old for what the backup needs (it lacks the capability), or speaks another API major; the
+    /// message says which, such as "This registry is too old for memory backups".
+    /// </summary>
+    Incompatible,
+
     /// <summary>Anything else; the message says what.</summary>
     Other,
 }

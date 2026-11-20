@@ -41,18 +41,20 @@ internal sealed class SkillPushService : ISkillPushService
     private readonly ISkillService _skills;
     private readonly IAccessTokenProvider _tokens;
     private readonly IRegistryApi _registry;
+    private readonly IRegistryCapabilities _capabilities;
     private readonly ISkillLedger _ledger;
     private readonly IProjectFactsResolver _facts;
     private readonly IMachineIdentity _machine;
     private readonly IProjectApi _projects;
 
     public SkillPushService(
-        ISkillService skills, IAccessTokenProvider tokens, IRegistryApi registry, ISkillLedger ledger, IProjectFactsResolver facts, IMachineIdentity machine,
-        IProjectApi projects)
+        ISkillService skills, IAccessTokenProvider tokens, IRegistryApi registry, IRegistryCapabilities capabilities, ISkillLedger ledger,
+        IProjectFactsResolver facts, IMachineIdentity machine, IProjectApi projects)
     {
         _skills = skills;
         _tokens = tokens;
         _registry = registry;
+        _capabilities = capabilities;
         _ledger = ledger;
         _facts = facts;
         _machine = machine;
@@ -211,7 +213,7 @@ internal sealed class SkillPushService : ISkillPushService
             if (list.Skills is not { } skills)
             {
                 // Say why when the registry is down or speaks another API; otherwise pass on what the list said.
-                if (await CheckMetaAsync(registry, cancellationToken) is { } failure)
+                if (await CheckRegistryAsync(registry, [], request.Force, cancellationToken) is { } failure)
                     return failure;
                 return SkillPushRunResult.Fail(SkillPushRunFailure.ListFailed, list.Error, registry);
             }
@@ -292,10 +294,15 @@ internal sealed class SkillPushService : ISkillPushService
             }
         }
 
+        string? warning = null;
         if (pending.Count > 0)
         {
-            if (await CheckMetaAsync(registry, cancellationToken) is { } failure)
-                return failure;
+            if (await CheckRegistryAsync(registry, [.. pending.Select(p => selected[p.Index])], request.Force, cancellationToken) is { } check)
+            {
+                if (check.Failure != SkillPushRunFailure.None)
+                    return check;
+                warning = check.Warning;
+            }
 
             foreach (var (index, files, hash) in pending.OrderBy(p => p.Index))
             {
@@ -306,18 +313,37 @@ internal sealed class SkillPushService : ISkillPushService
             }
         }
 
-        return new SkillPushRunResult(SkillPushRunFailure.None, null, registry, entries.Select(e => e!).ToList());
+        return new SkillPushRunResult(SkillPushRunFailure.None, null, registry, entries.Select(e => e!).ToList(), warning);
     }
 
-    // Null when the registry is reachable and speaks this CLI's API; otherwise the failure that stops the run.
-    private async Task<SkillPushRunResult?> CheckMetaAsync(Uri registry, CancellationToken cancellationToken)
+    /// <summary>What a push says when the registry lists capabilities without <c>stale-skill-push</c>.</summary>
+    internal const string NoStaleProtection =
+        "This registry is too old for detecting overwritten skills: a push could replace a newer version pushed from another machine without noticing.";
+
+    // Null when the registry is reachable, speaks this CLI's API, and has what pushing `pushing` needs; a failure that stops
+    // the run otherwise, or a result carrying only a warning when --force pushes to a registry without stale protection.
+    // A registry that lists no capabilities predates the list and is pushed to as before: it ignores what it does not know.
+    private async Task<SkillPushRunResult?> CheckRegistryAsync(
+        Uri registry, IReadOnlyList<DiscoveredSkill> pushing, bool force, CancellationToken cancellationToken)
     {
-        var meta = await _registry.GetMetaAsync(registry, cancellationToken);
-        if (meta is null)
-            return SkillPushRunResult.Fail(SkillPushRunFailure.RegistryUnreachable, null, registry);
-        if (ApiCompatibility.Check(meta) is { } incompatibility)
-            return SkillPushRunResult.Fail(SkillPushRunFailure.Incompatible, incompatibility, registry);
-        return null;
+        // A registry without project skills would file a project skill as global, so it is refused rather than asked.
+        var check = pushing.Any(s => s.Scope == SkillScope.Project)
+            ? await _capabilities.RequireAsync(registry, cancellationToken, RegistryCapability.Skills, RegistryCapability.ProjectSkills, RegistryCapability.Projects)
+            : await _capabilities.RequireAsync(registry, cancellationToken, RegistryCapability.Skills);
+        if (!check.Ok)
+        {
+            var failure = check.Failure == RegistryCheckFailure.Unreachable ? SkillPushRunFailure.RegistryUnreachable : SkillPushRunFailure.Incompatible;
+            return SkillPushRunResult.Fail(failure, check.Detail, registry);
+        }
+
+        if (pushing.Count == 0 || check.Supports(RegistryCapability.StaleSkillPush) != CapabilitySupport.Missing)
+            return null;
+
+        // Without stale protection the registry stores whatever comes, so a push could silently replace another machine's
+        // newer version. Only --force, which means "keep mine" anyway, goes ahead; the hook never forces, so it waits.
+        return force
+            ? new SkillPushRunResult(SkillPushRunFailure.None, null, registry, [], NoStaleProtection + " Pushed anyway (--force).")
+            : SkillPushRunResult.Fail(SkillPushRunFailure.Incompatible, NoStaleProtection + " Update the registry, or push with --force to overwrite anyway.", registry);
     }
 
     // The ledger's record of this copy when it vouches for the copy's registry skill; null when it never synced as it.
@@ -544,7 +570,7 @@ internal sealed class SkillPushService : ISkillPushService
 
         var list = await _registry.ListSkillsAsync(registry, accessToken, cancellationToken);
         if (list.Skills is not { } skills)
-            return new RegistryNames(projectId, [], [], await CheckMetaAsync(registry, cancellationToken) ?? SkillPushRunResult.Fail(SkillPushRunFailure.ListFailed, list.Error, registry));
+            return new RegistryNames(projectId, [], [], await CheckRegistryAsync(registry, [], force: false, cancellationToken) ?? SkillPushRunResult.Fail(SkillPushRunFailure.ListFailed, list.Error, registry));
 
         return new RegistryNames(
             projectId,

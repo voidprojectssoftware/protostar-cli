@@ -46,6 +46,10 @@ internal sealed partial class SessionSyncService
         {
             failure = SessionFailure(lookup.State);
         }
+        else if (await _capabilities.RequireAsync(registry, cancellationToken, RegistryCapability.Sessions) is { Ok: false } check)
+        {
+            (failure, detail) = (CheckFailure(check), check.Detail);
+        }
         else
         {
             var listed = await _api.ListAsync(registry, stored.AccessToken, query, cancellationToken);

@@ -134,7 +134,7 @@ internal sealed partial class MemorySyncService : IMemorySyncService
 
     private readonly IHarnessCatalog _catalog;
     private readonly IAccessTokenProvider _tokens;
-    private readonly IRegistryApi _meta;
+    private readonly IRegistryCapabilities _capabilities;
     private readonly ITranscriptApi _machines;
     private readonly IMemoryApi _api;
     private readonly IMemoryLedger _ledger;
@@ -143,13 +143,13 @@ internal sealed partial class MemorySyncService : IMemorySyncService
     private readonly IProjectApi _projectApi;
 
     public MemorySyncService(
-        IHarnessCatalog catalog, IAccessTokenProvider tokens, IRegistryApi meta, ITranscriptApi machines, IMemoryApi api,
+        IHarnessCatalog catalog, IAccessTokenProvider tokens, IRegistryCapabilities capabilities, ITranscriptApi machines, IMemoryApi api,
         IMemoryLedger ledger, IMachineIdentity machine, IProjectFactsResolver projects, IProjectApi projectApi)
     {
         _projectApi = projectApi;
         _catalog = catalog;
         _tokens = tokens;
-        _meta = meta;
+        _capabilities = capabilities;
         _machines = machines;
         _api = api;
         _ledger = ledger;
@@ -507,7 +507,9 @@ internal sealed partial class MemorySyncService : IMemorySyncService
         return await _api.PushMemoryAsync(registry, session.AccessToken, session.MachineId, facts, files, deleted, cancellationToken);
     }
 
-    private async Task<(SessionSyncFailure Failure, string? Detail, Session? Session)> ConnectAsync(Uri registry, CancellationToken cancellationToken)
+    // Push needs memory backups; pull also names memory-content. Base versions are optional: pull without history falls back to version numbers.
+    private async Task<(SessionSyncFailure Failure, string? Detail, Session? Session)> ConnectAsync(
+        Uri registry, CancellationToken cancellationToken, params string[] also)
     {
         var lookup = await _tokens.GetSessionAsync(registry, cancellationToken);
         if (lookup is not { State: SessionState.Current, Session: { } stored })
@@ -520,11 +522,9 @@ internal sealed partial class MemorySyncService : IMemorySyncService
             }, null, null);
         }
 
-        var meta = await _meta.GetMetaAsync(registry, cancellationToken);
-        if (meta is null)
-            return (SessionSyncFailure.RegistryUnreachable, null, null);
-        if (ApiCompatibility.Check(meta) is { } incompatible)
-            return (SessionSyncFailure.Incompatible, incompatible, null);
+        var check = await _capabilities.RequireAsync(registry, cancellationToken, [RegistryCapability.Memory, .. also]);
+        if (!check.Ok)
+            return (SessionSyncService.CheckFailure(check), check.Detail, null);
 
         var machine = _machine.Get();
         if (!_machine.IsRegisteredWith(registry))

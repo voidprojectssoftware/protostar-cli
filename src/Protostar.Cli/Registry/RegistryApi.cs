@@ -127,18 +127,25 @@ internal sealed partial class RegistryApi : IRegistryApi, IDisposable
     {
         using var request = Request(HttpMethod.Post, registry, SkillPath(name, "/rename", projectId), accessToken);
         request.Content = JsonContent.Create(new { newName }, options: TranscriptJson.Options);
-        return await SendAsync(
+        return MissingRoute(await SendAsync(
             request,
             async response => (await response.Content.ReadFromJsonAsync<RenameResponse>(TranscriptJson.Options))?.Name ?? newName,
-            cancellationToken);
+            cancellationToken), RegistryCapability.SkillRename);
     }
 
     /// <inheritdoc />
     public async Task<ApiResult<bool>> DeleteSkillAsync(Uri registry, string accessToken, string name, Guid? projectId, CancellationToken cancellationToken)
     {
         using var request = Request(HttpMethod.Delete, registry, SkillPath(name, "", projectId), accessToken);
-        return await SendAsync(request, _ => Task.FromResult(true), cancellationToken);
+        return MissingRoute(await SendAsync(request, _ => Task.FromResult(true), cancellationToken), RegistryCapability.SkillDelete);
     }
+
+    // A registry from before the feature has no such route and answers a bare 404 (or 405 where another method shares the
+    // path); an unknown skill carries a problem title instead. Says the registry is too old rather than showing a status code.
+    private static ApiResult<T> MissingRoute<T>(ApiResult<T> result, string capability) =>
+        result.Error == Describe(HttpStatusCode.NotFound) || result.Error == Describe(HttpStatusCode.MethodNotAllowed)
+            ? ApiResult<T>.Fail(ApiCompatibility.TooOld(capability))
+            : result;
 
     private static string SkillPath(string name, string suffix, Guid? projectId) =>
         $"/v1/skills/{Uri.EscapeDataString(name)}{suffix}" + (projectId is { } id ? $"?projectId={id}" : "");

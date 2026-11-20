@@ -62,30 +62,31 @@ internal sealed record MemoryReadResult(
 /// <summary>Production <see cref="IAgentHistoryService"/>.</summary>
 /// <remarks>
 /// Every call resolves the registry and the stored sign-in afresh, so signing in while the server runs takes effect on
-/// the next call, and reads <c>/v1/meta</c> to check the registry speaks this CLI's API and serves the feature.
+/// the next call, and checks through <see cref="IRegistryCapabilities"/> that the registry speaks this CLI's API and
+/// serves the feature (<c>/v1/meta</c> is read once per server process).
 /// Nothing here registers the machine or writes to the registry.
 /// </remarks>
 internal sealed class AgentHistoryService : IAgentHistoryService
 {
     /// <summary>The capability that makes a transcript download honour <c>redacted=true</c> (registry#72).</summary>
-    internal const string RedactedRead = "redacted-read";
+    internal const string RedactedRead = RegistryCapability.RedactedRead;
 
     /// <summary>The capability that makes a memory download honour <c>redacted=true</c>.</summary>
-    internal const string MemoryRedactedRead = "memory-redacted-read";
+    internal const string MemoryRedactedRead = RegistryCapability.MemoryRedactedRead;
 
     /// <summary>The capability that serves the skills a session used (registry#14).</summary>
-    internal const string SessionSkills = "session-skills";
+    internal const string SessionSkills = RegistryCapability.SessionSkills;
 
     private readonly IAccessTokenProvider _tokens;
-    private readonly IRegistryApi _meta;
+    private readonly IRegistryCapabilities _capabilities;
     private readonly ITranscriptApi _transcripts;
     private readonly IMemoryApi _memory;
     private readonly ISessionReader _reader;
 
-    public AgentHistoryService(IAccessTokenProvider tokens, IRegistryApi meta, ITranscriptApi transcripts, IMemoryApi memory, ISessionReader reader)
+    public AgentHistoryService(IAccessTokenProvider tokens, IRegistryCapabilities capabilities, ITranscriptApi transcripts, IMemoryApi memory, ISessionReader reader)
     {
         _tokens = tokens;
-        _meta = meta;
+        _capabilities = capabilities;
         _transcripts = transcripts;
         _memory = memory;
         _reader = reader;
@@ -94,7 +95,7 @@ internal sealed class AgentHistoryService : IAgentHistoryService
     /// <inheritdoc />
     public async Task<SessionListResult> ListSessionsAsync(string? registry, TranscriptListQuery query, CancellationToken cancellationToken)
     {
-        var connection = await ConnectAsync(registry, null, cancellationToken);
+        var connection = await ConnectAsync(registry, RegistryCapability.Sessions, cancellationToken);
         if (connection.Failure != SessionSyncFailure.None)
             return new SessionListResult(connection.Failure, connection.Detail, connection.Registry, []);
 
@@ -168,8 +169,8 @@ internal sealed class AgentHistoryService : IAgentHistoryService
 
     private sealed record Connection(SessionSyncFailure Failure, string? Detail, Uri? Registry, string? Token);
 
-    // The registry, a current access token, and a registry that speaks this CLI's API and lists `capability` when one is named.
-    private async Task<Connection> ConnectAsync(string? registryOption, string? capability, CancellationToken cancellationToken)
+    // The registry, a current access token, and a registry that speaks this CLI's API and has `capability`.
+    private async Task<Connection> ConnectAsync(string? registryOption, string capability, CancellationToken cancellationToken)
     {
         Uri registry;
         try
@@ -185,22 +186,17 @@ internal sealed class AgentHistoryService : IAgentHistoryService
         if (lookup is not { State: SessionState.Current, Session: { } stored })
             return new Connection(SessionSyncService.SessionFailure(lookup.State), null, registry, null);
 
-        var meta = await _meta.GetMetaAsync(registry, cancellationToken);
-        if (meta is null)
-            return new Connection(SessionSyncFailure.RegistryUnreachable, null, registry, null);
-        if (ApiCompatibility.Check(meta) is { } incompatible)
-            return new Connection(SessionSyncFailure.Incompatible, incompatible, registry, null);
-        // A registry too old to list capabilities is refused too: it cannot be shown to redact, and predates session skills.
-        if (capability is not null && meta.Capabilities?.Contains(capability, StringComparer.Ordinal) != true)
-            return new Connection(SessionSyncFailure.Incompatible, Refusal(capability), registry, null);
+        var check = await (Strict(capability)
+            ? _capabilities.RequireListedAsync(registry, cancellationToken, capability)
+            : _capabilities.RequireAsync(registry, cancellationToken, capability));
+        if (!check.Ok)
+            return new Connection(SessionSyncService.CheckFailure(check), check.Detail, registry, null);
 
         return new Connection(SessionSyncFailure.None, null, registry, stored.AccessToken);
     }
 
-    private static string Refusal(string capability) => capability switch
-    {
-        SessionSkills => "This registry cannot list the skills a session used. Update the registry.",
-        MemoryRedactedRead => "This registry cannot serve memory with secrets redacted. Update the registry.",
-        _ => "This registry cannot serve sessions with secrets redacted. Update the registry.",
-    };
+    // Strict: a registry too old to list capabilities is refused, not asked. The redacted reads must never be assumed,
+    // because a registry that ignores `redacted=true` serves the stored lines, secrets included, and refusing is the
+    // lesser harm. Session skills came after the list itself, so a registry without the list cannot have them.
+    private static bool Strict(string capability) => capability is RedactedRead or MemoryRedactedRead or SessionSkills;
 }

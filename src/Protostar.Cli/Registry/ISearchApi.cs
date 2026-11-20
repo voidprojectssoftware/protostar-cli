@@ -1,4 +1,5 @@
 using System.Text.Json.Serialization;
+using Protostar.Cli.Auth;
 
 namespace Protostar.Cli.Registry;
 
@@ -14,7 +15,7 @@ internal interface ISearchApi
     Task<ApiResult<IReadOnlyList<SearchHit>>> SearchAsync(Uri registry, string accessToken, SearchQuery query, CancellationToken cancellationToken);
 
     /// <summary>The error for a registry that has no search: one that does not list the capability, or answers 404.</summary>
-    const string RegistryTooOldForSearch = "This registry is too old for search. Update the registry.";
+    static readonly string RegistryTooOldForSearch = ApiCompatibility.TooOld(RegistryCapability.Search);
 }
 
 /// <summary>What to search for.</summary>
