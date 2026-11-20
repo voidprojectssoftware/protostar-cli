@@ -1199,6 +1199,70 @@ public sealed class SkillPullServiceTests : IDisposable
         Assert.Equal(legacy, _ledger.Get(RegistryUri, path));
     }
 
+    // ----- a copy pulled while the folder was linked to another project, after an unlink (cli#95) -----
+
+    // Project lib's `shared` at v1, and a copy of it in checkout `app` as a pull made while app was linked to lib left it.
+    private (string App, string Copy) PulledWhileLinked()
+    {
+        var lib = Repo("lib");
+        var app = Repo("app");
+        PublishProject(lib, "shared", 1);
+        var copy = ProjectSkill(app, "shared");
+        Directory.CreateDirectory(copy);
+        File.WriteAllText(Path.Combine(copy, "SKILL.md"), Manifest("shared", "project body"));
+        _ledger.Record(RegistryUri, copy, new SkillLedgerEntry(SkillFileReader.Hash(SkillFileReader.Read(copy)), 1, "shared", ProjectOf(lib)));
+        return (app, copy);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)] // the folder has no project of its own yet
+    public async Task After_an_unlink_remote_shows_an_unedited_copy_as_the_linked_projects_skill(bool unknown)
+    {
+        var (app, copy) = PulledWhileLinked();
+        _projects.Unknown = unknown;
+
+        var remote = await Build().CompareAsync(Remote() with { ProjectStart = app }, CancellationToken.None);
+
+        var compared = Assert.Single(remote.Skills);
+        Assert.Equal((SkillSyncState.UpToDate, "lib", copy), (compared.State, compared.Project, compared.LocalPath));
+        Assert.StartsWith("Still project lib's skill", compared.Note);
+    }
+
+    [Fact]
+    public async Task After_an_unlink_pull_updates_an_unedited_copy_from_the_linked_project()
+    {
+        var (app, copy) = PulledWhileLinked();
+        _api.Skills.Clear();
+        PublishProject(Path.Combine(_repos, "lib"), "shared", 2, "v2 body");
+
+        var remote = await Build().CompareAsync(Remote() with { ProjectStart = app }, CancellationToken.None);
+        var pull = await Build().PullAsync(Pull() with { ProjectStart = app }, CancellationToken.None);
+
+        Assert.Equal(SkillSyncState.UpdateAvailable, Assert.Single(remote.Skills).State);
+        var entry = Assert.Single(pull.Entries);
+        Assert.Equal((SkillPullStatus.Updated, "lib"), (entry.Status, entry.Project));
+        Assert.Contains("v2 body", File.ReadAllText(Path.Combine(copy, "SKILL.md")));
+        Assert.Equal((2, ProjectOf(Path.Combine(_repos, "lib"))), (_ledger.Get(RegistryUri, copy)!.Version, _ledger.Get(RegistryUri, copy)!.ProjectId));
+    }
+
+    [Fact]
+    public async Task After_an_unlink_remote_shows_an_edited_copy_as_only_here_and_says_why()
+    {
+        var (app, copy) = PulledWhileLinked();
+        File.WriteAllText(Path.Combine(copy, "SKILL.md"), Manifest("shared", "changed here"));
+
+        var remote = await Build().CompareAsync(Remote() with { ProjectStart = app }, CancellationToken.None);
+        var pull = await Build().PullAsync(Pull() with { ProjectStart = app }, CancellationToken.None);
+
+        var local = Assert.Single(remote.Skills, s => s.State == SkillSyncState.LocalOnly);
+        Assert.Equal(copy, local.LocalPath);
+        Assert.Contains("it has changed here since, so it now belongs to this folder's project. `protostar skills push` backs it up there.", local.Note);
+        Assert.Equal("lib", Assert.Single(remote.Skills, s => s.State == SkillSyncState.OtherProject).Project);
+        Assert.Contains("changed here", File.ReadAllText(Path.Combine(copy, "SKILL.md")));
+        Assert.DoesNotContain(pull.Entries, e => e.Status is SkillPullStatus.Updated or SkillPullStatus.Installed);
+    }
+
     /// <summary>Resolves a folder to the project <see cref="FakeRegistryApi.ProjectIdOf"/> gives it, named after its main worktree.</summary>
     private sealed class FakeProjectApi : IProjectApi
     {

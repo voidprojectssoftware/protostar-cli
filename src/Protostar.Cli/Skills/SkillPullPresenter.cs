@@ -144,7 +144,13 @@ internal static class SkillPullPresenter
         return result.Succeeded ? 0 : 1;
     }
 
-    internal static string Describe(SkillComparison skill, int? version = null) => skill.State switch
+    // The states whose text does not already carry the note get it after, when there is one (cli#95's notes on whose a copy is).
+    internal static string Describe(SkillComparison skill, int? version = null) =>
+        skill.Note is { } note && skill.State is SkillSyncState.UpToDate or SkillSyncState.UpdateAvailable or SkillSyncState.LocalOnly
+            ? $"{State(skill, version)} {Markup.Escape(note)}"
+            : State(skill, version);
+
+    private static string State(SkillComparison skill, int? version) => skill.State switch
     {
         SkillSyncState.UpToDate when version is { } pinned => $"[green]matches v{pinned}[/]",
         SkillSyncState.UpToDate => "[green]up to date[/]",

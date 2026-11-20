@@ -94,6 +94,7 @@ internal static class SkillPushPresenter
         SkillPushStatus.Stale => $"[red]changed here and in the registry:[/] {Markup.Escape(outcome.Message ?? string.Empty)}",
         SkillPushStatus.Removed when outcome.RenamedTo is { } renamedTo => $"[yellow]renamed to {Markup.Escape(renamedTo)} in the registry:[/] {Markup.Escape(outcome.Message ?? string.Empty)}",
         SkillPushStatus.Removed => $"[yellow]deleted in the registry:[/] {Markup.Escape(outcome.Message ?? string.Empty)}",
+        SkillPushStatus.Unchanged when outcome.Message is { } note => $"[grey]unchanged (v{outcome.Version})[/] {Markup.Escape(note)}",
         SkillPushStatus.Unchanged => $"[grey]unchanged (v{outcome.Version})[/]",
         SkillPushStatus.Skipped => $"[yellow]skipped:[/] {Markup.Escape(outcome.Message ?? string.Empty)}",
         SkillPushStatus.Refused => $"[red]refused:[/] {Markup.Escape(outcome.Message ?? string.Empty)}",
