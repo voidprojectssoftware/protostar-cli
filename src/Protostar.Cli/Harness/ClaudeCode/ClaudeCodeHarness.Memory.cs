@@ -62,6 +62,11 @@ internal sealed partial class ClaudeCodeHarness : IMemoryCapability
                 span[i] = char.IsAsciiLetterOrDigit(path[i]) ? path[i] : '-';
         });
 
+    /// <inheritdoc />
+    /// <remarks>Always under the location's own <c>projects/</c>, the root Claude Code writes to, never a fallback root.</remarks>
+    public string MemoryFolderFor(HarnessLocation location, string directory) =>
+        Path.GetFullPath(Path.Combine(location.ConfigDir, "projects", ProjectFolderName(directory), "memory"));
+
     private HarnessProjectFolder Folder(string dir)
     {
         var memory = Path.Combine(dir, "memory");

@@ -53,3 +53,30 @@ internal sealed class MemoryStatusCommand : Command<MemoryStatusCommand.Settings
     protected override int Execute(CommandContext context, Settings settings, CancellationToken cancellation) =>
         MemoryPresenter.RenderStatus(_memory.Status(settings.Registry, settings.HarnessHome), _catalog);
 }
+
+/// <summary><c>protostar memory pull</c>: brings the registry's memory to the local checkouts of each project.</summary>
+internal sealed class MemoryPullCommand : AsyncCommand<MemoryPullCommand.Settings>
+{
+    private readonly IMemorySyncService _memory;
+    private readonly IHarnessCatalog _catalog;
+
+    public MemoryPullCommand(IMemorySyncService memory, IHarnessCatalog catalog)
+    {
+        _memory = memory;
+        _catalog = catalog;
+    }
+
+    public sealed class Settings : MemorySettings
+    {
+        [CommandOption("--scan <DIR>")]
+        [Description("Also look for checkouts in this folder and its direct subfolders (repeatable). Without it, only folders your harness has opened are found.")]
+        public string[] Scan { get; init; } = [];
+    }
+
+    protected override async Task<int> ExecuteAsync(CommandContext context, Settings settings, CancellationToken cancellation)
+    {
+        using var ctrlC = new CtrlCCancellation(cancellation);
+        var result = await _memory.PullAsync(new MemoryPullRequest(settings.Registry, settings.HarnessHome, settings.Scan), ctrlC.Token);
+        return MemoryPresenter.RenderPull(result, _catalog);
+    }
+}

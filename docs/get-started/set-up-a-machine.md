@@ -21,6 +21,7 @@ reason), or **failed**.
 | Sign-in | Signs you in to the registry in your browser, unless you already have a session the registry accepts | `protostar auth login` |
 | Hooks | Installs capture hooks into every harness it finds, so your skill use and sessions are captured | `protostar install-hooks --yes` |
 | Skills | Backs up this machine's skills, then installs or updates your skills from the registry | `protostar skills push`, then `protostar skills pull` |
+| Memory | Brings your agents' memory to each project checked out here, never over a local file | `protostar memory pull` |
 | Configuration | Not available yet: syncing harness configuration is still to come, so this step always says so | |
 | Sessions | Offers to back up the sessions already on this machine | `protostar sessions push` |
 
@@ -57,6 +58,8 @@ Skills: needs a decision. Pushed: 0 backed up, 2 already backed up, 1 not pushed
   brew: kept: changed here and in the registry
     Keep yours: protostar skills push brew --force; theirs: protostar skills pull brew --force; both: protostar skills push brew --as NEW-NAME.
   tidy: kept, removed from the registry: Deleted from the registry (at v1) after this copy last synced. This copy is kept: remove it if you no longer want it, or run `protostar skills push tidy --force` to restore it.
+Memory: already done. Pulled memory for 1 project: 0 written, 3 already here.
+  demo-app /home/alice/src/demo-app: 0 written, 3 already here (~/.claude/projects/-home-alice-src-demo-app/memory)
 Configuration: skipped. Not available yet: syncing harness configuration is still to come.
 Sessions: already done. All 3 transcripts backed up.
   The capture hooks back up new activity from here on.
@@ -75,6 +78,10 @@ Skills: done. Pushed: 1 backed up, 0 already backed up. Pulled: 2 installed, 0 u
   brew: new version v1
   greet-user: installed v1
   tidy-imports: installed v1
+Memory: done. Pulled memory for 1 project: 3 written, 0 already here, 1 kept because they differ from the registry, 1 project not on this machine.
+  demo-app /home/alice/work/demo-app: 3 written, 0 already here (~/.claude/projects/-home-alice-work-demo-app/memory)
+    notes.md: differs from the registry; kept as it is here.
+  Skipped other-app: not on this machine. Clone it, open it in your harness or name its folder with --scan, then pull again.
 Configuration: skipped. Not available yet: syncing harness configuration is still to come.
 2 sessions, 817.6 KB not backed up yet. Backing them up now, newest first; Ctrl+C stops cleanly and the next push carries on.
 ...
@@ -105,6 +112,8 @@ $ protostar setup
 Sign-in: already done. Signed in to https://localhost:7443 as alice.
 Hooks: already done. Claude Code: capture hooks already up to date (~/.claude/settings.json)
 Skills: already done. Pushed: 0 backed up, 3 already backed up. Pulled: 0 installed, 0 updated, 3 already up to date.
+Memory: already done. Pulled memory for 1 project: 0 written, 3 already here.
+  demo-app /home/alice/src/demo-app: 0 written, 3 already here (~/.claude/projects/-home-alice-src-demo-app/memory)
 Configuration: skipped. Not available yet: syncing harness configuration is still to come.
 Sessions: already done. All 3 transcripts backed up.
   The capture hooks back up new activity from here on.

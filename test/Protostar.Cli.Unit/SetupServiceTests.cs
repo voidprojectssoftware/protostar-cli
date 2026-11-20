@@ -1,6 +1,7 @@
 using Protostar.Cli.Auth;
 using Protostar.Cli.Harness;
 using Protostar.Cli.Hooks;
+using Protostar.Cli.Memory;
 using Protostar.Cli.Registry;
 using Protostar.Cli.Sessions;
 using Protostar.Cli.Setup;
@@ -22,6 +23,7 @@ public sealed class SetupServiceTests
     private readonly FakePush _push = new();
     private readonly FakeSkills _skills = new();
     private readonly FakeSessions _sessions = new();
+    private readonly FakeMemory _memory = new();
     private readonly FakeDefaultRegistry _defaultRegistry = new();
     private readonly List<string> _calls = [];
     private readonly List<SetupStepResult> _reported = [];
@@ -30,7 +32,7 @@ public sealed class SetupServiceTests
 
     public SetupServiceTests()
     {
-        _signIn.Calls = _hooks.Calls = _push.Calls = _skills.Calls = _sessions.Calls = _calls;
+        _signIn.Calls = _hooks.Calls = _push.Calls = _skills.Calls = _memory.Calls = _sessions.Calls = _calls;
     }
 
     [Fact]
@@ -41,12 +43,12 @@ public sealed class SetupServiceTests
         var result = await Run(yes: true);
 
         Assert.Equal(
-            [SetupStep.SignIn, SetupStep.Hooks, SetupStep.Skills, SetupStep.Configuration, SetupStep.Sessions],
+            [SetupStep.SignIn, SetupStep.Hooks, SetupStep.Skills, SetupStep.Memory, SetupStep.Configuration, SetupStep.Sessions],
             result.Steps.Select(s => s.Step));
         Assert.Equal(
-            [SetupOutcome.Done, SetupOutcome.Done, SetupOutcome.Done, SetupOutcome.Skipped, SetupOutcome.Done],
+            [SetupOutcome.Done, SetupOutcome.Done, SetupOutcome.Done, SetupOutcome.Done, SetupOutcome.Skipped, SetupOutcome.Done],
             result.Steps.Select(s => s.Outcome));
-        Assert.Equal(SetupSkip.NotAvailableYet, result.Steps[3].Skip);
+        Assert.Equal(SetupSkip.NotAvailableYet, result.Steps[4].Skip);
         Assert.Equal(result.Steps, _reported);
         Assert.True(result.Succeeded);
         Assert.False(result.NothingChanged);
@@ -165,6 +167,7 @@ public sealed class SetupServiceTests
         _hooks.Change = HookChange.Unchanged;
         _push.Status = SkillPushStatus.Unchanged;
         _skills.Status = SkillPullStatus.UpToDate;
+        _memory.Written = 0;
         _sessions.Pending(("s1", TranscriptKind.Session, null, 0));
 
         var result = await Run(yes: true);
@@ -211,7 +214,9 @@ public sealed class SetupServiceTests
         Assert.DoesNotContain("sign-in", _calls);
         Assert.Equal(SetupOutcome.Done, result.Steps[1].Outcome);
         Assert.Equal((SetupOutcome.Skipped, SetupSkip.RegistryUnreachable), (result.Steps[2].Outcome, result.Steps[2].Skip));
-        Assert.Equal((SetupOutcome.Skipped, SetupSkip.RegistryUnreachable), (result.Steps[4].Outcome, result.Steps[4].Skip));
+        Assert.Equal((SetupOutcome.Skipped, SetupSkip.RegistryUnreachable), (result.Steps[3].Outcome, result.Steps[3].Skip));
+        Assert.Equal((SetupOutcome.Skipped, SetupSkip.RegistryUnreachable), (result.Steps[5].Outcome, result.Steps[5].Skip));
+        Assert.DoesNotContain("memory pull", _calls);
         Assert.DoesNotContain("pull", _calls);
         Assert.DoesNotContain("push", _calls);
         Assert.DoesNotContain("sync", _calls);
@@ -252,7 +257,7 @@ public sealed class SetupServiceTests
 
         Assert.Equal(SetupOutcome.Failed, result.Steps[0].Outcome);
         Assert.Equal(SetupSkip.RegistryUnreachable, result.Steps[2].Skip);
-        Assert.Equal(SetupSkip.RegistryUnreachable, result.Steps[4].Skip);
+        Assert.Equal(SetupSkip.RegistryUnreachable, result.Steps[5].Skip);
         Assert.False(result.Succeeded);
     }
 
@@ -263,7 +268,7 @@ public sealed class SetupServiceTests
 
         var result = await Run(yes: false, canAsk: false);
 
-        var sessions = result.Steps[4];
+        var sessions = result.Steps[5];
         Assert.Equal((SetupOutcome.Skipped, SetupSkip.NoTerminal), (sessions.Outcome, sessions.Skip));
         Assert.Equal(0, _asked);
         Assert.DoesNotContain("sync", _calls);
@@ -282,7 +287,7 @@ public sealed class SetupServiceTests
         var result = await Run(yes: false, canAsk: true);
 
         Assert.Equal(1, _asked);
-        Assert.Equal((outcome, skip), (result.Steps[4].Outcome, result.Steps[4].Skip));
+        Assert.Equal((outcome, skip), (result.Steps[5].Outcome, result.Steps[5].Skip));
         Assert.Equal(answer, _calls.Contains("sync"));
     }
 
@@ -297,7 +302,7 @@ public sealed class SetupServiceTests
 
         var result = await Run(yes: false, canAsk: false);
 
-        Assert.Equal(new SessionBacklog(2, 3, 125), result.Steps[4].Backlog);
+        Assert.Equal(new SessionBacklog(2, 3, 125), result.Steps[5].Backlog);
     }
 
     [Fact]
@@ -308,27 +313,63 @@ public sealed class SetupServiceTests
 
         var result = await Run(yes: true);
 
-        Assert.Equal(SetupOutcome.Failed, result.Steps[4].Outcome);
+        Assert.Equal(SetupOutcome.Failed, result.Steps[5].Outcome);
         Assert.False(result.Succeeded);
     }
 
     [Fact]
-    public async Task No_harness_skips_hooks_and_skills()
+    public async Task No_harness_skips_hooks_skills_and_memory()
     {
         _hooks.NoHarness = true;
         _skills.Failure = SkillPullRunFailure.NoHarness;
+        _memory.NoHarness = true;
 
         var result = await Run(yes: true);
 
         Assert.Equal((SetupOutcome.Skipped, SetupSkip.NoHarness), (result.Steps[1].Outcome, result.Steps[1].Skip));
         Assert.Equal((SetupOutcome.Skipped, SetupSkip.NoHarness), (result.Steps[2].Outcome, result.Steps[2].Skip));
+        Assert.Equal((SetupOutcome.Skipped, SetupSkip.NoHarness), (result.Steps[3].Outcome, result.Steps[3].Skip));
         Assert.True(result.Succeeded);
+    }
+
+    [Fact]
+    public async Task Memory_is_pulled_after_hooks_and_skills_with_the_harness_home()
+    {
+        await Run(yes: true);
+
+        Assert.True(_calls.IndexOf("hooks") < _calls.IndexOf("memory pull"), string.Join(", ", _calls));
+        Assert.True(_calls.IndexOf("pull") < _calls.IndexOf("memory pull"), string.Join(", ", _calls));
+        Assert.Equal("/harness", Assert.Single(_memory.Requests).HarnessHome);
+    }
+
+    [Fact]
+    public async Task A_memory_pull_that_wrote_nothing_and_kept_a_differing_file_is_already_done_not_a_decision()
+    {
+        _memory.Written = 0;
+        _memory.Kept = true;
+
+        var result = await Run(yes: true);
+
+        Assert.Equal(SetupOutcome.AlreadyDone, result.Steps[3].Outcome);
+        Assert.Equal(MemoryPullNoteKind.DiffersFromRegistry, Assert.Single(Assert.Single(result.Steps[3].MemoryPull!.Folders).Notes).Kind);
+        Assert.True(result.Succeeded);
+    }
+
+    [Fact]
+    public async Task A_memory_pull_that_failed_for_a_folder_fails_the_step()
+    {
+        _memory.Error = "Could not write MEMORY.md";
+
+        var result = await Run(yes: true);
+
+        Assert.Equal(SetupOutcome.Failed, result.Steps[3].Outcome);
+        Assert.False(result.Succeeded);
     }
 
     [Fact]
     public async Task An_invalid_registry_stops_before_any_step()
     {
-        var service = new SetupService(_signIn, _hooks, _push, _skills, _sessions, _defaultRegistry);
+        var service = new SetupService(_signIn, _hooks, _push, _skills, _memory, _sessions, _defaultRegistry);
         var request = new SetupRequest("not a url", null, new SignInOptions(null, false, TimeSpan.FromMinutes(5)), true, false, null);
 
         var result = await service.RunAsync(request, Interaction(), CancellationToken.None);
@@ -343,7 +384,7 @@ public sealed class SetupServiceTests
     {
         _calls.Clear();
         _reported.Clear();
-        var service = new SetupService(_signIn, _hooks, _push, _skills, _sessions, _defaultRegistry);
+        var service = new SetupService(_signIn, _hooks, _push, _skills, _memory, _sessions, _defaultRegistry);
         var request = new SetupRequest(Registry, "/harness", new SignInOptions("dev", true, TimeSpan.FromMinutes(5)), yes, canAsk, null);
         return await service.RunAsync(request, Interaction(), CancellationToken.None);
     }
@@ -499,5 +540,28 @@ public sealed class SetupServiceTests
 
         public Task<SessionListResult> ListAsync(string? registry, string? harnessHome, TranscriptListQuery query, CancellationToken cancellationToken) =>
             throw new NotSupportedException();
+    }
+
+    private sealed class FakeMemory : IMemorySyncService
+    {
+        public List<string> Calls { get; set; } = [];
+        public List<MemoryPullRequest> Requests { get; } = [];
+        public int Written { get; set; } = 1;
+        public bool Kept { get; set; }
+        public bool NoHarness { get; set; }
+        public string? Error { get; set; }
+
+        public Task<MemoryPushResult> PushAsync(MemoryPushRequest request, CancellationToken cancellationToken) => throw new NotSupportedException();
+
+        public MemoryStatusResult Status(string? registry, string? harnessHome) => throw new NotSupportedException();
+
+        public Task<MemoryPullResult> PullAsync(MemoryPullRequest request, CancellationToken cancellationToken)
+        {
+            Calls.Add("memory pull");
+            Requests.Add(request);
+            var notes = Kept ? new[] { new MemoryPullNote("MEMORY.md", MemoryPullNoteKind.DiffersFromRegistry, []) } : [];
+            var folder = new MemoryPullFolder("repo", "/src/repo", "/harness/projects/-src-repo/memory", Written, 1, notes, Error);
+            return Task.FromResult(new MemoryPullResult(SessionSyncFailure.None, null, new Uri(Registry), 1, NoHarness ? [] : [folder], []) { NoHarness = NoHarness });
+        }
     }
 }

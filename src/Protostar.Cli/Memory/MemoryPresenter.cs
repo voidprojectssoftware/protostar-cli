@@ -92,6 +92,63 @@ internal static class MemoryPresenter
         return result.FullySynced ? 0 : 1;
     }
 
+    /// <summary>Renders a pull and returns the exit code: 0 when no folder failed (kept files and absent projects are reported, not failed), 1 otherwise.</summary>
+    public static int RenderPull(MemoryPullResult result, IHarnessCatalog catalog)
+    {
+        if (SessionsPresenter.FailureMessage(result.Failure, result.Detail, result.Registry, catalog) is { } message)
+        {
+            AnsiConsole.MarkupLine($"[red]{Markup.Escape(message)}[/]");
+            return 1;
+        }
+
+        foreach (var line in PullLines(result))
+            AnsiConsole.MarkupLine(line);
+        return result.Complete ? 0 : 1;
+    }
+
+    /// <summary>A pull's summary line, then one line per checkout written to, kept file, and project not on this machine.</summary>
+    /// <remarks>Shared with the Memory step of <c>protostar setup</c>, so a pull reads the same either way.</remarks>
+    public static List<string> PullLines(MemoryPullResult result)
+    {
+        if (result.NoHarness)
+            return ["No supported harness that keeps agent memory was found on this machine."];
+        if (result.Projects == 0)
+            return ["No memory in the registry yet."];
+
+        var kept = result.Folders.Sum(f => f.Notes.Count(n => n.Kind == MemoryPullNoteKind.DiffersFromRegistry));
+        var lines = new List<string>
+        {
+            $"Pulled memory for {SessionsPresenter.Count(result.Folders.Select(f => f.ProjectName).Distinct().Count(), "project")}: " +
+            $"{result.Written} written, {result.Folders.Sum(f => f.UpToDate)} already here" +
+            (kept > 0 ? $", [yellow]{kept} kept because they differ from the registry[/]" : "") +
+            (result.NotHere.Count > 0 ? $", [grey]{SessionsPresenter.Count(result.NotHere.Count, "project")} not on this machine[/]" : "") + ".",
+        };
+
+        foreach (var folder in result.Folders)
+        {
+            lines.Add(
+                $"  [aqua]{Markup.Escape(folder.ProjectName)}[/] [grey]{Markup.Escape(folder.Directory)}[/]: " +
+                (folder.Error is { } error
+                    ? $"[red]{Markup.Escape(error)}[/]"
+                    : $"{folder.Written} written, {folder.UpToDate} already here [grey]({Markup.Escape(folder.MemoryFolder)})[/]"));
+            foreach (var note in folder.Notes)
+                lines.Add($"    {Markup.Escape(note.Path)}: {Describe(note)}");
+        }
+
+        foreach (var absent in result.NotHere)
+            lines.Add($"  [yellow]Skipped[/] [aqua]{Markup.Escape(absent.ProjectName)}[/]: not on this machine. Clone it, open it in your harness or name its folder with --scan, then pull again.");
+        return lines;
+    }
+
+    private static string Describe(MemoryPullNote note) => note.Kind switch
+    {
+        MemoryPullNoteKind.DiffersFromRegistry => "[yellow]differs from the registry; kept as it is here.[/]",
+        MemoryPullNoteKind.DeletedHere => "[grey]deleted here; not brought back.[/]",
+        MemoryPullNoteKind.DeletedEverywhere => "[grey]deleted on every machine; not written.[/]",
+        MemoryPullNoteKind.DeletedElsewhere => $"[yellow]deleted on {Markup.Escape(string.Join(", ", note.Machines))}; kept here.[/]",
+        _ => "[red]refused: its path or content failed a safety check; not written.[/]",
+    };
+
     private static void RenderProblems(IEnumerable<(string Folder, OversizedMemoryFile File)> oversized, IReadOnlyList<SkippedMemoryFolder> skipped)
     {
         foreach (var (folder, file) in oversized)

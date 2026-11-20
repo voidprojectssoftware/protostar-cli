@@ -1,6 +1,7 @@
 using Protostar.Cli.Auth;
 using Protostar.Cli.Harness;
 using Protostar.Cli.Hooks;
+using Protostar.Cli.Memory;
 using Protostar.Cli.Registry;
 using Protostar.Cli.Sessions;
 using Protostar.Cli.Skills;
@@ -67,6 +68,7 @@ internal static class SetupPresenter
             SetupStep.SignIn => "Sign-in",
             SetupStep.Hooks => "Hooks",
             SetupStep.Skills => "Skills",
+            SetupStep.Memory => "Memory",
             SetupStep.Configuration => "Configuration",
             _ => "Sessions",
         };
@@ -84,6 +86,7 @@ internal static class SetupPresenter
             SetupStep.SignIn => SignIn(step),
             SetupStep.Hooks => Hooks(step, catalog),
             SetupStep.Skills => Skills(step, catalog),
+            SetupStep.Memory => Memory(step, catalog),
             SetupStep.Configuration => ["Not available yet: syncing harness configuration is still to come."],
             _ => Sessions(step, catalog, pushCommand),
         };
@@ -221,6 +224,21 @@ internal static class SetupPresenter
         if (notable.Count > MaxSkillLines)
             lines.Add($"[grey]... and {notable.Count - MaxSkillLines} more pushed. `protostar skills remote` lists them all.[/]");
         return (summary, lines);
+    }
+
+    private static List<string> Memory(SetupStepResult step, IHarnessCatalog catalog)
+    {
+        if (step.Skip == SetupSkip.NotSignedIn)
+            return ["Needs sign-in."];
+        if (step.Skip == SetupSkip.RegistryUnreachable)
+            return [RegistryUnreachable];
+
+        var pull = step.MemoryPull!;
+        if (SessionsPresenter.FailureMessage(pull.Failure, pull.Detail, pull.Registry, catalog) is { } failure)
+            return [$"[red]{Markup.Escape(failure)}[/]"];
+
+        // The pull's own lines are indented for `memory pull`; setup indents continuation lines itself.
+        return [.. MemoryPresenter.PullLines(pull).Select(l => l.StartsWith("  ", StringComparison.Ordinal) ? l[2..] : l)];
     }
 
     private static List<string> Sessions(SetupStepResult step, IHarnessCatalog catalog, string pushCommand)

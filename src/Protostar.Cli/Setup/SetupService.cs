@@ -1,13 +1,14 @@
 using Protostar.Cli.Auth;
 using Protostar.Cli.Harness;
 using Protostar.Cli.Hooks;
+using Protostar.Cli.Memory;
 using Protostar.Cli.Registry;
 using Protostar.Cli.Sessions;
 using Protostar.Cli.Skills;
 
 namespace Protostar.Cli.Setup;
 
-/// <summary>Production <see cref="ISetupService"/>: composes the sign-in, hook, skill push and pull, and session services.</summary>
+/// <summary>Production <see cref="ISetupService"/>: composes the sign-in, hook, skill push and pull, memory, and session services.</summary>
 /// <remarks>
 /// Each step only classifies the result of the services it calls: <see cref="SetupOutcome.Done"/> when that result
 /// shows a change, <see cref="SetupOutcome.AlreadyDone"/> when it shows none. Hooks are installed into every detected
@@ -22,11 +23,13 @@ internal sealed class SetupService : ISetupService
     private readonly ISkillPushService _push;
     private readonly ISkillPullService _skills;
     private readonly ISessionSyncService _sessions;
+    private readonly IMemorySyncService _memory;
     private readonly IDefaultRegistryStore _defaultRegistry;
 
     public SetupService(ISignInService signIn, IHookInstallService hooks, ISkillPushService push, ISkillPullService skills,
-        ISessionSyncService sessions, IDefaultRegistryStore defaultRegistry)
+        IMemorySyncService memory, ISessionSyncService sessions, IDefaultRegistryStore defaultRegistry)
     {
+        _memory = memory;
         _push = push;
         _signIn = signIn;
         _defaultRegistry = defaultRegistry;
@@ -68,6 +71,10 @@ internal sealed class SetupService : ISetupService
         Finish(whyNotSignedIn == SetupSkip.None
             ? await SyncSkillsAsync(request, cancellationToken)
             : new SetupStepResult(SetupStep.Skills, SetupOutcome.Skipped, whyNotSignedIn));
+
+        Finish(whyNotSignedIn == SetupSkip.None
+            ? await PullMemoryAsync(request, cancellationToken)
+            : new SetupStepResult(SetupStep.Memory, SetupOutcome.Skipped, whyNotSignedIn));
 
         Finish(new SetupStepResult(SetupStep.Configuration, SetupOutcome.Skipped, SetupSkip.NotAvailableYet));
 
@@ -150,6 +157,21 @@ internal sealed class SetupService : ISetupService
         return outcome is (SetupOutcome.Done or SetupOutcome.AlreadyDone) && step.SkillDecisions.Count > 0
             ? step with { Outcome = SetupOutcome.NeedsDecision }
             : step;
+    }
+
+    // Pull only: local memory reaches the registry through `memory push` and the hooks. A file kept because it differs
+    // from the registry is reported in the step's lines, not as a decision, since no command settles it yet (6.3).
+    private async Task<SetupStepResult> PullMemoryAsync(SetupRequest request, CancellationToken cancellationToken)
+    {
+        var pull = await _memory.PullAsync(new MemoryPullRequest(request.Registry, request.HarnessHome, []), cancellationToken);
+        var outcome = pull switch
+        {
+            { NoHarness: true } => SetupOutcome.Skipped,
+            { Complete: false } => SetupOutcome.Failed,
+            { Written: > 0 } => SetupOutcome.Done,
+            _ => SetupOutcome.AlreadyDone,
+        };
+        return new SetupStepResult(SetupStep.Memory, outcome, outcome == SetupOutcome.Skipped ? SetupSkip.NoHarness : SetupSkip.None) { MemoryPull = pull };
     }
 
     private async Task<SetupStepResult> BackUpSessionsAsync(
