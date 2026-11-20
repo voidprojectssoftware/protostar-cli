@@ -206,9 +206,9 @@ codes add fields of their own, listed below.
 | `not_signed_in` | No sign-in is stored for the registry. Run `protostar auth login`. | `sessions list`, `show`, `push`, `status --verify`; `search` |
 | `session_expired` | The sign-in expired and could not be refreshed. Run `protostar auth login`. | as above |
 | `registry_unreachable` | The registry did not answer, or refused or failed the request. | as above |
-| `registry_incompatible` | The registry speaks an API version this protostar does not, or (for `search`) is too old to offer the feature. | as above |
-| `not_found` | No transcript has that id, and no session id starts with it. Run `protostar sessions list`. For `get_memory`, no project with memory matches (the error adds `projects`, those that have memory), or it has no file at that path. | `sessions show`; MCP `get_session`, `get_memory` |
-| `ambiguous_id` | More than one session id starts with the id given. The error adds `candidates`: up to 10 objects with `id`, `harness`, `title` and `lastActivityAt`. Give more of the id. | `sessions show`; MCP `get_session` |
+| `registry_incompatible` | The registry speaks an API version this protostar does not, or (for `search` and the MCP tools) is too old to offer the feature: `get_session` needs `redacted-read`, `get_session_skills` needs `session-skills`, `get_memory` needs `memory-redacted-read`. | as above |
+| `not_found` | No transcript has that id, and no session id starts with it. Run `protostar sessions list`. For `get_memory`, no project with memory matches (the error adds `projects`, those that have memory), or it has no file at that path. | `sessions show`; MCP `get_session`, `get_session_skills`, `get_memory` |
+| `ambiguous_id` | More than one session id starts with the id given. The error adds `candidates`: up to 10 objects with `id`, `harness`, `title` and `lastActivityAt`. Give more of the id. | `sessions show`; MCP `get_session`, `get_session_skills` |
 | `invalid_argument` | A tool argument is out of range or malformed, such as `limit` 500. | MCP tools |
 | `ambiguous_project` | The project name matches more than one project with memory. The error adds `projects`: objects with `projectId`, `project` and `files`. Give the id. | MCP `get_memory` |
 | `incomplete` | The push ran, but some transcripts failed or were left part way; their records say which. | `sessions push` |
@@ -238,7 +238,10 @@ of [search hits](#search), `list_sessions` gives `{"sessions":[...]}` of
 [session records](#sessions-list), `get_session` gives `session` (a session
 record), `offset`, `messages` ([`sessions show` records](#sessions-show), each
 with `index`, and `truncated: true` on one with a field cut at 4,000 characters)
-and `nextOffset` when there are more, and `get_memory` gives `projectId`,
+and `nextOffset` when there are more, `get_session_skills` gives `session` (a
+session record) and `skills` (each with `name`, `uses`, `firstUsedAt`,
+`lastUsedAt`, `skillId`, `version`, `versionInferred` and `deleted`, as the
+registry reports them), and `get_memory` gives `projectId`,
 `project`, `files` (each with `path`, `version`, `machineId`, `machineName`,
 `deletedEverywhere` when set, `content`, and `truncated` when cut) and `omitted`
 (paths that did not fit). A failed call is a tool error whose text is the

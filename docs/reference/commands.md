@@ -857,8 +857,8 @@ yourself:
 $ claude mcp add --scope user protostar -- protostar mcp
 ```
 
-It serves four read-only tools, `search`, `list_sessions`, `get_session` and
-`get_memory`, with no tool that changes anything. Everything they return is
+It serves five read-only tools, `search`, `list_sessions`, `get_session`,
+`get_session_skills` and `get_memory`, with no tool that changes anything. Everything they return is
 redacted by the registry, and one result is at most 80,000 characters, with long
 sessions paged. It uses the stored sign-in, resolved on every call, and keeps
 standard output for the protocol alone. See

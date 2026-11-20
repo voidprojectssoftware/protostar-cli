@@ -19,8 +19,8 @@ anything.
   other commands use.
 - Your sessions and memory are backed up (`protostar sessions push`,
   `protostar memory push`, or the capture hooks do it as you work).
-- The registry is recent enough: it lists `search`, `redacted-read` and
-  `memory-redacted-read` in its capabilities. A tool that needs one the registry
+- The registry is recent enough: it lists `search`, `redacted-read`,
+  `session-skills` and `memory-redacted-read` in its capabilities. A tool that needs one the registry
   lacks says so instead of answering.
 
 ## Add the server to Claude Code
@@ -46,11 +46,13 @@ speaks MCP over standard input and output.
 | `search` | `query`, and optionally `kind` (`session` or `memory`), `project` (an id, text in its name, or `.` for the project of the folder the agent runs in) and `limit` (1 to 100, default 20) | Hits, best first: each with `kind`, a session's `id`, `title` or memory `path`, `project`, `machineName`, `date` and a `snippet` with the matches between « and ». The same as `protostar search --json`. |
 | `list_sessions` | Optionally `project`, `machine` (a machine id), `since` (an ISO 8601 date or time) and `limit` (1 to 100, default 25) | Backed-up sessions, newest activity first, as `protostar sessions list --json` prints them. Sessions not backed up yet are not listed. |
 | `get_session` | `id` (a whole id or enough of its start), and optionally `full` and `offset` | The session's record and its messages in order: prompts, replies and tool calls, each with an `index`. With `full`, also tool inputs and results, and each subagent's conversation where it ran. The records are those of `protostar sessions show --json`. |
+| `get_session_skills` | `id` (a whole id or enough of its start) | The session's record and the skills it and its subagents used, earliest first: `name`, `uses`, `firstUsedAt`, `lastUsedAt`, and the registry skill it matched (`skillId`) with `version` and `versionInferred: true`. A transcript records only a skill's name, so the registry infers the version as the newest one pushed by the time the session used it; with none pushed by then, `version` is absent. A plugin skill (`plugin:skill`) matches no registry skill. `deleted: true` marks a skill since deleted. |
 | `get_memory` | `project` (an id or text in its name), and optionally `path` | The project's memory files as the registry has them now: `path`, `version`, the machine that wrote it and its `content`. |
 
 A typical exchange: the agent calls `search` with "EF Core migration", takes the
-`id` of the session hit, and calls `get_session` with it to read the prompts,
-replies and tool calls in order.
+`id` of the session hit, calls `get_session` with it to read the prompts,
+replies and tool calls in order, and `get_session_skills` to see which skills it
+used, so it can repeat the approach with the same ones.
 
 ## Secrets stay redacted
 
@@ -85,8 +87,3 @@ The codes are listed in [JSON output](../reference/json-output.md#errors). The
 tools add `invalid_argument` (an argument out of range, such as `limit` 500) and
 `ambiguous_project` (a `get_memory` project name that matches more than one
 project; the error lists them under `projects`).
-
-## Not yet
-
-Seeing which skills a session used, so an agent can reuse them, waits on the
-registry recording that (protostar-registry#14).
