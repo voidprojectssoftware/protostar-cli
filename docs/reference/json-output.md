@@ -17,7 +17,7 @@ codes. The output without `--json` is unchanged.
 | `protostar sessions list` | One JSON array of [session records](#sessions-list). |
 | `protostar sessions status` | One JSON array of [transcript records](#sessions-status). |
 | `protostar sessions push` | One JSON array of [backup records](#sessions-push). |
-| `protostar sessions show` | [JSON Lines](#sessions-show): one record per message, one per line, as the session downloads. |
+| `protostar sessions show` | [JSON Lines](#sessions-show): a session record, then one record per message, one per line, as the session downloads. |
 | `protostar search` | One JSON array of [search hits](#search). |
 | `protostar status` | One JSON object; see [`protostar status`](commands.md#protostar-status). |
 
@@ -129,8 +129,9 @@ One record per transcript the push looked at. There is no progress display with
 
 ## `sessions show`
 
-[JSON Lines](https://jsonlines.org/): one JSON object per line, one per message,
-in the order they happened, written as the transcript downloads. A session can be
+[JSON Lines](https://jsonlines.org/): one JSON object per line. The first is the
+[session record](#the-session-record); then one per message, in the order they
+happened, written as the transcript downloads. A session can be
 hundreds of megabytes, so it is never one giant array: read it line by line
 (`jq -c 'select(.type == "prompt")'` works on it as it is). The text is redacted
 by the registry: secrets appear as `[redacted:<type>]`.
@@ -142,7 +143,7 @@ after the result of the call that ran it.
 
 | Field | Type | Meaning |
 |---|---|---|
-| `type` | string | `prompt`, `reply`, `toolCall`, `toolResult`, `subagentStart` or `subagentEnd`. |
+| `type` | string | `prompt`, `reply`, `toolCall`, `toolResult`, `subagentStart` or `subagentEnd` (or `session` for the first record). |
 | `transcriptId` | string | The [id](#ids) of the transcript the message is in: the session's, or a subagent's for what ran inside it. |
 | `harness` | string | The harness. |
 | `at` | time | The message's timestamp. |
@@ -163,6 +164,29 @@ skipped.
 
 If the download fails part way, the records already printed stand and a
 `registry_unreachable` error object follows on standard error, with exit code `1`.
+
+### The session record
+
+The first line, `type` `session`, describes the session and the skills it used.
+It comes before the first message (once the download has started), so read it
+with `head -n 1`, or skip it with `select(.type != "session")`.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `type` | string | `session`. |
+| `transcriptId`, `harness` | string | As in the message records. |
+| `session` | object | The [`sessions list` record](#sessions-list) of the session. |
+| `skills` | array | The skills it used, its subagents' included, earliest first used first. Absent when the registry cannot list them: it does not list `session-skills`, or the request failed. Empty when it used none. |
+
+Each skill has the fields `get_session_skills` gives (see [The MCP tools](#the-mcp-tools)):
+`name` (a plugin's skill as `plugin:skill`), `uses`, `firstUsedAt`, `lastUsedAt`,
+`skillId` and `version` when it matched one of your registry skills,
+`versionInferred` (`true` when `version` is present: it is inferred from when
+versions were pushed) and `deleted` (since deleted from the registry). It adds:
+
+| Field | Type | Meaning |
+|---|---|---|
+| `installedHere` | boolean | A skill of that name is installed on this machine: a personal skill, or a project skill of the folder the command ran in when that folder is the session's project. Absent for a plugin's skill, which is not looked for. |
 
 ## `search`
 

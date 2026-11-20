@@ -740,6 +740,12 @@ $ protostar sessions show 7d3c9a52
 List files and summarise README
 github.com/example/demo-app · vm-dev-01 · claude-code · 2026-11-19 04:00 to 2026-11-19 04:01
 7d3c9a52-1f4e-4b8a-9c0d-2e6f8a1b3c4d
+Skills used
+  code-review                   2 uses  v3?
+  user-stories                   1 use  v1?  not installed here
+  old-helper                     1 use       deleted from the registry, not installed here
+  b-fac:orchestrated-delivery    1 use       plugin
+  ? the version in use then, inferred from when the skill's versions were pushed
 
 You 04:00
   List the files here, then ask a helper to summarise README.md. My token is [redacted:github-token]
@@ -753,6 +759,27 @@ Assistant 04:00
 
 Secrets the registry recognises (tokens, keys, passwords) are shown as
 `[redacted:<type>]`. The backup itself keeps the original bytes.
+
+**Skills used** lists the skills the session ran (its subagents' too), with how
+many times. The version is the registry's guess, marked `?`: the newest version
+pushed before the skill was last used. Each one is also marked when it applies:
+
+- **not installed here**: this machine has no skill of that name where the
+  session would load it. Your personal skills count (`~/.claude/skills`, or under
+  `--harness-home`), and so do the project skills of the folder you run the command
+  in (`<project>/.claude/skills`), but only when that folder is the session's
+  project. Checking that asks the registry once, and only when a skill is found
+  nowhere but there.
+- **deleted from the registry**: the skill was deleted there since. A local copy
+  can still be installed.
+- **not in the registry**: it was never pushed, so it has no version.
+- **plugin**: a plugin's skill (`plugin:skill`). Plugins are not checked, so
+  these are never marked "not installed here".
+
+A registry that does not offer this (it does not list `session-skills`) shows
+the session without the block. One too old to list its capabilities is asked
+anyway, and a refusal is ignored the same way. Listing the skills costs one
+request, made while the conversation downloads.
 
 With `--full`, each tool call's input and result follow it, and each subagent's
 own conversation is nested, marked with a bar, right after the call that ran it:
@@ -791,7 +818,8 @@ is matched by reading the session list a page at a time.
 | `--registry <URL>` | Registry to use. Defaults to `PROTOSTAR_REGISTRY_URL`, then the saved default, then `https://localhost:7443`. |
 | `-H, --harness <ID>` | Only look in this harness's sessions. |
 | `--full` | Also show tool call inputs and results, and subagents' conversations where they ran. |
-| `--json` | Print one JSON record per message (JSON Lines) instead of the conversation. See [JSON output](json-output.md#sessions-show). |
+| `--harness-home <DIR>` | Look for this machine's skills under this harness config root instead of the default (`~/.claude`). |
+| `--json` | Print a session record, then one JSON record per message (JSON Lines), instead of the conversation. See [JSON output](json-output.md#sessions-show). |
 
 ## `protostar search <QUERY>`
 
