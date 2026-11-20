@@ -15,6 +15,11 @@ command line with the option moved after it. A command with no subcommand keeps
 its options where they are: `protostar skills --global-only` and
 `protostar project --dir ../other` work.
 
+An option the command does not have (`protostar skills pull --forse`) is refused
+before anything runs, and the error names the closest option it does have
+(`--force`). `--version` belongs to `protostar` itself: `protostar skills
+--version` is refused and points at `protostar --version`.
+
 ## Global
 
 ```console
