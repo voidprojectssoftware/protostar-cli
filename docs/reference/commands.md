@@ -569,15 +569,21 @@ up the memory of the session's project, so memory goes up as agents write it.
 
 ### `protostar memory status`
 
-Show which memory files are not backed up. It works offline: it compares the files
-on disk with what this machine last recorded as sent.
+Show which memory files are not backed up, and which conflicts a pull left for you
+to resolve. It works offline: it compares the files on disk with what this machine
+last recorded as sent.
 
 ```console
 $ protostar memory status
 Memory for 2 projects on this machine, 5 files. All backed up.
 ```
 
-The exit code is `0` when nothing is pending and `1` while anything is.
+A conflict stays listed while its copy (`<name>.from-<machine>.md`, see
+[`memory pull`](#protostar-memory-pull)) is in the memory folder. Merge what is
+worth keeping into the file it is beside, then delete the copy.
+
+The exit code is `0` when nothing is pending and no conflict is left, and `1`
+otherwise.
 
 ### `protostar memory pull`
 
@@ -599,13 +605,45 @@ checkout's main worktree, named by encoding its path the way Claude Code does, a
 created when Claude Code has never opened the project here. Two checkouts of one
 project at different paths each get the memory.
 
-Pull never overwrites or deletes a local file:
+Pull never loses a change made on this machine. For each file it compares three
+things: the file here, the registry's current version, and the version this machine
+last synced (what it last pushed or pulled):
 
-- a file already here with other content is left as it is and reported as
-  differing from the registry;
-- a file you deleted here is not brought back;
-- a file deleted on every machine is not written; one deleted on another machine
-  but present here is kept and reported.
+- **New on either side:** a file only the registry has is written; a file only
+  this machine has is left for `memory push`.
+- **Changed elsewhere only:** a file unchanged here since this machine last synced
+  it is updated to the newer version, when that version was edited from the one
+  this machine has (`memory push` tells the registry which version each file was
+  edited from). The version it had stays in the registry. A version another
+  machine made without ever having this one counts as changed on both sides.
+- **Changed here only:** left as it is for the next `memory push`.
+- **Changed on both sides:** this machine's file is kept, and the other machine's
+  version is written beside it as `<name>.from-<machine>.md` (for example
+  `notes/port.from-laptop.md`; the machine name keeps letters, digits, `-` and `_`,
+  and `-2`, `-3` are added when a different copy already has the name). A pointer
+  line to it goes at the top of `MEMORY.md`, so an agent reads it, and the pull
+  reports `conflicted (here and on laptop)`. Nothing is merged by a model: merge
+  it yourself, or ask an agent to, then delete the copy. Pulling again makes no
+  second copy.
+- **`MEMORY.md` changed on both sides:** merged line by line. Its lines are
+  one-line pointers, so the result is every line this machine has, in its order,
+  then each line from the other machine this one lacks. No line from either side
+  is dropped. This rule applies to `MEMORY.md` only, by name; every other file
+  conflicts as above. When the merged index is longer than Claude Code loads into
+  a session (200 lines or 25 KB), the pull says so.
+- **Deleted here, changed elsewhere since:** the change wins and the file comes
+  back, with a message. Deleted here and not changed elsewhere: not brought back.
+- **Deleted elsewhere, still here:** kept, and reported. Deleted on every machine:
+  not written.
+
+The merge happens on the machine that pulls. The other machine receives the merged
+file the next time this one pushes (the capture hooks push at the end of each
+session) and it pulls.
+
+Conflict copies stay on this machine. `memory push` never sends them, and their
+pointer lines are left out of the `MEMORY.md` it sends, so another machine is never
+handed a pointer to a file it does not have. A note of your own whose name has the
+same shape (`x.from-name.md`, no dot in the name) is treated as a copy too.
 
 Files are written through a temporary file and a move, never through a symbolic
 link, and only inside the memory folder. Each file written is recorded as backed
@@ -614,9 +652,10 @@ checkout here are listed as skipped.
 
 ```console
 $ protostar memory pull
-Pulled memory for 1 project: 2 written, 0 already here, 1 kept because they differ from the registry, 1 project not on this machine.
-  alpha /home/alice/work/alpha: 2 written, 0 already here (/home/alice/.claude/projects/-home-alice-work-alpha/memory)
-    MEMORY.md: differs from the registry; kept as it is here.
+Pulled memory for 1 project: 1 written, 1 updated, 0 already here, 1 conflicted, 1 project not on this machine.
+  alpha /home/alice/work/alpha: 1 written, 1 updated, 0 already here (/home/alice/.claude/projects/-home-alice-work-alpha/memory)
+    MEMORY.md: changed here and on laptop; merged line by line, 1 line added.
+    notes/port.md: conflicted (here and on laptop). Kept this machine's; laptop's is beside it as notes/port.from-laptop.md, listed in MEMORY.md. Merge it by hand, then delete the copy.
   Skipped beta: not on this machine. Clone it, open it in your harness or name its folder with --scan, then pull again.
 ```
 
@@ -624,7 +663,7 @@ Pulled memory for 1 project: 2 written, 0 already here, 1 kept because they diff
 |---|---|
 | `--scan <DIR>` | Also look for checkouts in this folder and its direct subfolders. Repeatable. |
 
-The exit code is `0` unless a memory folder could not be written. Kept files and
+The exit code is `0` unless a memory folder could not be written. Conflicts and
 skipped projects do not fail the pull.
 
 ## `protostar project`

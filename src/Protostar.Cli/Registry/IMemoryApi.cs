@@ -52,11 +52,31 @@ internal sealed record RemoteMemoryFile
 
     [JsonPropertyName("content")] public byte[] Content { get; init; } = [];
 
+    /// <summary>The machine that first sent this version: whose change it is.</summary>
+    /// <remarks><see cref="Guid.Empty"/> from a registry older than protostar-cli#47.</remarks>
+    [JsonPropertyName("machineId")] public Guid MachineId { get; init; }
+
+    /// <summary>That machine's name; <c>null</c> once it is no longer registered, or from an older registry.</summary>
+    [JsonPropertyName("machineName")] public string? MachineName { get; init; }
+
+    /// <summary>Every version of the file with the version it was edited from, so a pull can tell which versions build on the one it has.</summary>
+    /// <remarks>Empty from a registry older than protostar-cli#47.</remarks>
+    [JsonPropertyName("history")] public IReadOnlyList<RemoteMemoryVersionBase> History { get; init; } = [];
+
     /// <summary>Whether no machine's copy still has the file.</summary>
     [JsonPropertyName("deletedEverywhere")] public bool DeletedEverywhere { get; init; }
 
     /// <summary>The copies that deleted the file.</summary>
     [JsonPropertyName("deletedOn")] public IReadOnlyList<RemoteMemoryCopy> DeletedOn { get; init; } = [];
+}
+
+/// <summary>One version of a memory file and the version its sender had last synced when it sent it.</summary>
+internal sealed record RemoteMemoryVersionBase
+{
+    [JsonPropertyName("version")] public int Version { get; init; }
+
+    /// <summary><c>null</c> when the sender had no version of the file, or the registry does not know it.</summary>
+    [JsonPropertyName("base")] public int? Base { get; init; }
 }
 
 /// <summary>One machine's copy of a memory file.</summary>
@@ -73,7 +93,8 @@ internal sealed record RemoteMemoryCopy
 /// <summary>One memory file to back up.</summary>
 /// <param name="Path">Its path within the memory folder, with <c>/</c> separators.</param>
 /// <param name="Content">Its bytes.</param>
-internal sealed record MemoryUpload(string Path, byte[] Content);
+/// <param name="BaseVersion">The version this machine last synced for the file, which it was edited from; <c>null</c> for a file new here.</param>
+internal sealed record MemoryUpload(string Path, byte[] Content, int? BaseVersion = null);
 
 /// <summary>What a memory push did, as the registry answers it.</summary>
 internal sealed record MemoryPushResponse

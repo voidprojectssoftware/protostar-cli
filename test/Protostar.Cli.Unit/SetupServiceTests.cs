@@ -343,7 +343,7 @@ public sealed class SetupServiceTests
     }
 
     [Fact]
-    public async Task A_memory_pull_that_wrote_nothing_and_kept_a_differing_file_is_already_done_not_a_decision()
+    public async Task A_memory_pull_that_wrote_nothing_and_left_a_conflict_is_already_done_not_a_decision()
     {
         _memory.Written = 0;
         _memory.Kept = true;
@@ -351,7 +351,7 @@ public sealed class SetupServiceTests
         var result = await Run(yes: true);
 
         Assert.Equal(SetupOutcome.AlreadyDone, result.Steps[3].Outcome);
-        Assert.Equal(MemoryPullNoteKind.DiffersFromRegistry, Assert.Single(Assert.Single(result.Steps[3].MemoryPull!.Folders).Notes).Kind);
+        Assert.Equal(MemoryPullNoteKind.Conflicted, Assert.Single(Assert.Single(result.Steps[3].MemoryPull!.Folders).Notes).Kind);
         Assert.True(result.Succeeded);
     }
 
@@ -559,8 +559,8 @@ public sealed class SetupServiceTests
         {
             Calls.Add("memory pull");
             Requests.Add(request);
-            var notes = Kept ? new[] { new MemoryPullNote("MEMORY.md", MemoryPullNoteKind.DiffersFromRegistry, []) } : [];
-            var folder = new MemoryPullFolder("repo", "/src/repo", "/harness/projects/-src-repo/memory", Written, 1, notes, Error);
+            var notes = Kept ? new[] { new MemoryPullNote("notes.md", MemoryPullNoteKind.Conflicted, ["laptop"], "notes.from-laptop.md") } : [];
+            var folder = new MemoryPullFolder("repo", "/src/repo", "/harness/projects/-src-repo/memory", Written, 0, 1, notes, Error);
             return Task.FromResult(new MemoryPullResult(SessionSyncFailure.None, null, new Uri(Registry), 1, NoHarness ? [] : [folder], []) { NoHarness = NoHarness });
         }
     }
