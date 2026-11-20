@@ -1,0 +1,161 @@
+---
+sidebar_position: 4
+title: JSON output for agents and scripts
+---
+
+# JSON output for agents and scripts
+
+The `protostar sessions` commands, and `protostar status`, take `--json`. With it
+they print structured records instead of tables, so a coding agent or a script can
+act on the result without parsing text meant for people. This page is the
+contract: what goes where, the field names and types, the error codes and the exit
+codes. The output without `--json` is unchanged.
+
+| Command | Standard output with `--json` |
+|---|---|
+| `protostar sessions list` | One JSON array of [session records](#sessions-list). |
+| `protostar sessions status` | One JSON array of [transcript records](#sessions-status). |
+| `protostar sessions push` | One JSON array of [backup records](#sessions-push). |
+| `protostar status` | One JSON object; see [`protostar status`](commands.md#protostar-status). |
+
+## The rules
+
+- **Standard output holds data and nothing else.** There are no colour codes,
+  table borders, progress lines or messages on it, so it can be piped straight
+  into `jq` or a JSON parser. Each command prints its result on one line.
+- **Standard error holds at most one error object**, on one line, when the
+  command could not do all it was asked (see [Errors](#errors)). Anything else a
+  command has to say is left out under `--json`.
+- **Names are camelCase. Absent values are left out**, never written as `null`.
+  Enum values are camelCase strings (`neverBackedUp`, `upToDate`). Sizes are
+  bytes, as integers. Times are ISO 8601 with an offset
+  (`2026-11-19T10:00:00+00:00`).
+- **Fields may be added** in later versions. Read the fields you need and ignore
+  the rest. A field is not removed or renamed without a major version.
+
+## Ids
+
+Every record names its transcript with `id`, and `harness` beside it.
+
+`id` is the harness's own key for the transcript. For Claude Code that is the
+session id (a UUID, the transcript's file name), and for a subagent
+`<session id>.agent-<agent id>`. The harness writes it, and the registry stores it
+as given, so the same session has the same `id` on every machine: an id taken from
+`sessions list` on a laptop names the same session on a build VM.
+
+The registry's full identity for a transcript is `harness` plus `id`. The `id`
+alone is used because harness keys are UUIDs, so in practice it never collides
+across harnesses, and it is the value people see and type (the table's Id column
+shows its first 8 characters). Where a command takes an id, `--harness` narrows it
+if two harnesses ever do share a key.
+
+## `sessions list`
+
+One record per session, newest activity first. Each is the registry's record of
+the session with `id` added first. The registry's fields are the ones
+`sessions list --json` has always printed, so `key` (the same value as `id`) and
+`parentKey` stay.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `id` | string | The session's [id](#ids). |
+| `harness` | string | The harness that wrote it, for example `claude-code`. |
+| `key` | string | The same as `id`, kept for scripts written before `id`. |
+| `kind` | string | `session`. |
+| `title` | string | The harness's title, or the first prompt when it has none. |
+| `firstPrompt` | string | The first prompt, shortened to 200 characters. |
+| `projectId` | string (UUID) | The project, the same on every machine. |
+| `project` | string | The project's name, for example `github.com/example/demo-app`. |
+| `projectSubpath` | string | The folder within the repo, when the session ran in a subfolder. |
+| `workingDirectory` | string | The folder it ran in, on the machine it ran on. |
+| `gitBranch` | string | The branch it was on. |
+| `machineId` | string (UUID) | The machine it came from. |
+| `machineName` | string | That machine's name. |
+| `sourcePath` | string | The transcript file on that machine. |
+| `startedAt`, `lastActivityAt` | time | Its first and latest timestamps. |
+| `userMessages`, `assistantMessages` | integer | Prompts typed and replies. |
+| `length` | integer | Bytes stored. |
+| `subagentCount` | integer | Subagent transcripts backed up for it. |
+| `pending` | object | Only for a session on this machine not fully backed up: `bytes` still to send, `inRegistry` (whether the registry holds part of it), `fromFile` (the registry has none of it, so the row was made from the file and has no title or counts), `path`, `changedAt`. |
+
+When the registry cannot be asked (not signed in, unreachable), the array still
+lists this machine's pending sessions, the error object goes to standard error,
+and the exit code is `1`.
+
+## `sessions status`
+
+One record per transcript on this machine, sessions and subagents, most recently
+changed first. As in the table, only pending transcripts (and ones the registry
+holds differently) are listed unless you pass `--all`.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `id` | string | The transcript's [id](#ids). |
+| `harness` | string | The harness. |
+| `kind` | string | `session` or `subagent`. |
+| `parentId` | string | For a subagent, the `id` of its session. |
+| `path` | string | The file. |
+| `state` | string | `backedUp`, `neverBackedUp`, `newContent`, `rewritten` (goes again in full), `backupFailed` (a hook's backup failed; a later hook retries), `missing`, `short` or `diverged` (the last three only with `--verify`). |
+| `size` | integer | Bytes on disk. |
+| `bytesBackedUp` | integer | Bytes this machine has sent. |
+| `bytesPending` | integer | Bytes still to send. |
+| `lastModifiedAt` | time | When the file last changed. |
+| `lastBackedUpAt` | time | When the registry last accepted it. |
+| `backupFailedAt` | time | When a hook's backup of its session last failed. |
+| `verified` | object | Only with `--verify`: `check` (`confirmed`, `missing`, `short`, `diverged`), and the registry's `revision` and `length`. |
+
+The exit code is `0` when everything is backed up and `1` while anything is
+pending, as without `--json`. Pending is not an error, so it writes no error
+object.
+
+## `sessions push`
+
+One record per transcript the push looked at. There is no progress display with
+`--json`.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `id`, `harness`, `kind`, `parentId`, `path` | | As in [`sessions status`](#sessions-status). |
+| `result` | string | `upToDate`, `uploaded`, `partial` (time ran out), `skipped` or `failed`. |
+| `bytesSent` | integer | Bytes sent by this push. |
+| `bytesPending` | integer | Bytes the registry still does not have. |
+| `rewritten` | boolean | The file was rewritten, so a new revision was started. |
+| `message` | string | Why it was skipped or failed. |
+| `verified` | object | Only with `--verify`; as in `sessions status`. |
+
+## Errors
+
+When a command fails, standard error holds one object:
+
+```json
+{"error":{"code":"not_signed_in","message":"Not logged in to https://registry.example. Run `protostar auth login` first."}}
+```
+
+`code` is stable: branch on it. `message` is for people and may change. Some
+codes add fields of their own, listed below.
+
+| Code | Meaning | Commands |
+|---|---|---|
+| `invalid_registry` | The registry URL (from `--registry`, the environment or the saved default) is not usable. | all |
+| `unknown_harness` | `--harness` names no harness that keeps sessions. | `sessions` |
+| `not_signed_in` | No sign-in is stored for the registry. Run `protostar auth login`. | `sessions list`, `push`, `status --verify` |
+| `session_expired` | The sign-in expired and could not be refreshed. Run `protostar auth login`. | as above |
+| `registry_unreachable` | The registry did not answer, or refused or failed the request. | as above |
+| `registry_incompatible` | The registry speaks an API version this protostar does not. | as above |
+| `incomplete` | The push ran, but some transcripts failed or were left part way; their records say which. | `sessions push` |
+| `interrupted` | Stopped with Ctrl+C. Nothing is lost; push again to carry on. | `sessions push` |
+
+A misplaced or unknown option is refused before the command runs, as text on
+standard error with exit code `255`, whether or not `--json` is given.
+
+## Exit codes
+
+| Code | Meaning |
+|---|---|
+| `0` | Success. For `sessions status`, everything is backed up. |
+| `1` | An error (with an error object), or for `sessions status` and `protostar status`, something pending or needing attention (no error object). |
+| `130` | `sessions push` was stopped with Ctrl+C (`interrupted`). |
+| `255` | The command line was refused (an unknown or misplaced option). |
+
+Check the error object, not only the exit code, to tell a failure from pending
+work.

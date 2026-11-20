@@ -67,11 +67,18 @@ internal sealed class SessionsPushCommand : AsyncCommand<SessionsPushCommand.Set
         [Description("Ask the registry what it holds of every backed-up transcript, in batches, and back up again what it lost.")]
         public bool Verify { get; init; }
 
-        // Hooks run on every turn; a verify costs requests even when nothing changed, so it is never part of one.
+        [CommandOption("--json")]
+        [Description("Print one JSON record per transcript instead of progress and a table, for agents and scripts.")]
+        public bool Json { get; init; }
+
+        // Hooks run on every turn; a verify costs requests even when nothing changed, so it is never part of one. A
+        // hook's push writes to capture.log, not standard output, so it has nothing to print as JSON.
         public override ValidationResult Validate() =>
             Verify && Session is not null
                 ? ValidationResult.Error("--verify cannot be combined with --session; capture hooks never verify.")
-                : ValidationResult.Success();
+                : Json && Session is not null
+                    ? ValidationResult.Error("--json cannot be combined with --session; a hook's push logs to capture.log.")
+                    : ValidationResult.Success();
     }
 
     protected override async Task<int> ExecuteAsync(CommandContext context, Settings settings, CancellationToken cancellation)
@@ -90,8 +97,11 @@ internal sealed class SessionsPushCommand : AsyncCommand<SessionsPushCommand.Set
         // Ctrl+C stops between or during chunks, with the ledger and locks left clean, rather than killing the process.
         using var ctrlC = new CtrlCCancellation(cancellation);
         var request = new SessionSyncRequest(settings.Registry, settings.Harness, settings.HarnessHome, null, null, null, settings.Verify);
-        var result = await SessionsPresenter.WithProgressAsync(progress => _sessions.SyncAsync(request, progress, ctrlC.Token));
-        return SessionsPresenter.RenderSync(result, _catalog);
+        // Progress lines would put text that is not JSON on standard output.
+        var result = settings.Json
+            ? await _sessions.SyncAsync(request, null, ctrlC.Token)
+            : await SessionsPresenter.WithProgressAsync(progress => _sessions.SyncAsync(request, progress, ctrlC.Token));
+        return SessionsPresenter.RenderSync(result, _catalog, settings.Json);
     }
 }
 
@@ -116,6 +126,10 @@ internal sealed class SessionsStatusCommand : AsyncCommand<SessionsStatusCommand
         [CommandOption("--verify")]
         [Description("Also ask the registry what it holds, to confirm the backups are really there (before wiping a machine). Changes nothing.")]
         public bool Verify { get; init; }
+
+        [CommandOption("--json")]
+        [Description("Print one JSON record per transcript instead of a table, for agents and scripts.")]
+        public bool Json { get; init; }
     }
 
     protected override async Task<int> ExecuteAsync(CommandContext context, Settings settings, CancellationToken cancellation)
@@ -123,7 +137,7 @@ internal sealed class SessionsStatusCommand : AsyncCommand<SessionsStatusCommand
         var result = settings.Verify
             ? await _sessions.VerifyAsync(settings.Registry, settings.Harness, settings.HarnessHome, cancellation)
             : _sessions.Status(settings.Registry, settings.Harness, settings.HarnessHome);
-        return SessionsPresenter.RenderStatus(result, _catalog, settings.All);
+        return SessionsPresenter.RenderStatus(result, _catalog, settings.All, settings.Json);
     }
 }
 
@@ -158,7 +172,7 @@ internal sealed class SessionsListCommand : AsyncCommand<SessionsListCommand.Set
         public int Limit { get; init; } = 25;
 
         [CommandOption("--json")]
-        [Description("Print JSON instead of a table, for agents and scripts.")]
+        [Description("Print one JSON record per session instead of a table, for agents and scripts.")]
         public bool Json { get; init; }
     }
 
