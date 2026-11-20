@@ -56,6 +56,7 @@ internal static class CapturePresenter
         {
             SkillPushStatus.Created => $"{prefix}: backed up skill '{result.SkillName}' as v{outcome.Version}.",
             SkillPushStatus.Unchanged => $"{prefix}: skill '{result.SkillName}' unchanged.",
+            SkillPushStatus.Stale => $"{prefix}: skill '{result.SkillName}' not backed up: {outcome.Message} Run `protostar skills remote` to choose which to keep.",
             null => $"{prefix}: nothing to do.",
             _ => $"{prefix}: skill '{result.SkillName}' not backed up: {outcome.Message}",
         };
@@ -144,10 +145,12 @@ internal static class CapturePresenter
         _ => $"{push.Detail ?? push.Failure.ToString()}",
     };
 
-    // Worth a log line: anything other than success, ignore, or "not a local skill".
+    // Worth a log line: anything other than success, ignore, or "not a local skill". A stale refusal is logged once:
+    // later uses of the same content are answered from the ledger (Remembered) and not logged again.
     private static bool NeedsAttention(CaptureResult result) =>
         result.Action == CaptureAction.Failed ||
         (result.Push is { } push &&
          (push.Failure is not (SkillPushRunFailure.None or SkillPushRunFailure.SkillNotFound) ||
-          push.Entries.Any(e => e.Outcome.Status is SkillPushStatus.Refused or SkillPushStatus.Failed or SkillPushStatus.Conflict)));
+          push.Entries.Any(e => e.Outcome.Status is SkillPushStatus.Refused or SkillPushStatus.Failed or SkillPushStatus.Conflict ||
+                                e.Outcome is { Status: SkillPushStatus.Stale, Remembered: false })));
 }

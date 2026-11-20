@@ -41,18 +41,31 @@ internal static class SkillPullPresenter
                 cells.Add(Project(skill.Project));
             cells.Add(Markup.Escape(skill.Name));
             cells.Add(skill.Remote is { } remote ? $"v{remote.Version}" : "[grey]-[/]");
-            cells.Add(Describe(skill));
+            cells.Add(Describe(skill, result.Version));
             cells.Add(Markup.Escape(SkillsPresenter.Truncate(skill.Remote?.Description ?? string.Empty, 60)));
             table.AddRow(cells.ToArray());
         }
         AnsiConsole.Write(table);
 
         var pullable = result.Skills.Count(s => s.State is SkillSyncState.NotInstalled or SkillSyncState.UpdateAvailable);
+        if (result.Version is { } version)
+        {
+            // A single skill compared with an earlier version: say what `pull --version` would do.
+            var name = result.Skills.FirstOrDefault(s => s.Remote is not null)?.Remote?.Name ?? string.Empty;
+            AnsiConsole.MarkupLine(pullable > 0
+                ? $"Run `protostar skills pull {Markup.Escape(name)} --version {version}` to install v{version}."
+                : $"Nothing here would be replaced by v{version} without --force.");
+            foreach (var both in result.Skills.Where(s => s.State == SkillSyncState.ChangedBoth))
+                SkillPushPresenter.ResolutionHelp(both.Name, registryVersion: null);
+            return 0;
+        }
+
         var conflicts = result.Skills.Count(s => s.State == SkillSyncState.Conflict);
+        var changedBoth = result.Skills.Count(s => s.State == SkillSyncState.ChangedBoth);
         var elsewhere = result.Skills.Count(s => s.State == SkillSyncState.OtherProject);
         AnsiConsole.MarkupLine(pullable > 0
             ? $"{pullable} can be pulled from [grey]{Markup.Escape(authority)}[/]. Run `protostar skills pull` to get them."
-            : conflicts > 0
+            : conflicts > 0 || changedBoth > 0
                 ? $"Nothing else can be pulled from [grey]{Markup.Escape(authority)}[/]."
                 : $"Everything in [grey]{Markup.Escape(authority)}[/] is on this machine.");
         if (conflicts > 0)
@@ -61,6 +74,8 @@ internal static class SkillPullPresenter
             AnsiConsole.MarkupLine(elsewhere == 1
                 ? "[grey]1 belongs to another project and is only pulled from a checkout of that project.[/]"
                 : $"[grey]{elsewhere} belong to other projects and are only pulled from a checkout of their project.[/]");
+        foreach (var both in result.Skills.Where(s => s.State == SkillSyncState.ChangedBoth))
+            SkillPushPresenter.ResolutionHelp(both.Name, both.Remote?.Version);
         return 0;
     }
 
@@ -105,6 +120,7 @@ internal static class SkillPullPresenter
         var updated = result.Entries.Count(e => e.Status == SkillPullStatus.Updated);
         var current = result.Entries.Count(e => e.Status == SkillPullStatus.UpToDate);
         var held = result.Entries.Count(e => e.Status == SkillPullStatus.LocalChanges);
+        var both = result.Entries.Count(e => e.Status == SkillPullStatus.ChangedBoth);
         var failed = result.Entries.Count(e => e.Status == SkillPullStatus.Failed);
         var conflicted = result.Entries.Count(e => e.Status == SkillPullStatus.Conflict);
         var elsewhere = result.Entries.Count(e => e.Status == SkillPullStatus.OtherProject);
@@ -112,21 +128,31 @@ internal static class SkillPullPresenter
         AnsiConsole.MarkupLine(
             $"From [grey]{Markup.Escape(authority)}[/]: {installed} installed, {updated} updated, {current} already up to date" +
             (held > 0 ? $", [yellow]{held} kept because of local changes[/]" : string.Empty) +
+            (both > 0 ? $", [yellow]{both} kept because they changed here and in the registry[/]" : string.Empty) +
             (conflicted > 0 ? $", [red]{conflicted} skipped as conflicts[/]" : string.Empty) +
             (failed > 0 ? $", [red]{failed} failed[/]" : string.Empty) +
             (elsewhere > 0 ? $", [grey]{elsewhere} left for other projects' checkouts[/]" : string.Empty) + ".");
         if (held > 0)
             AnsiConsole.MarkupLine("[grey]Back up local changes with `protostar skills push`, or overwrite them with `protostar skills pull --force`.[/]");
+        foreach (var entry in result.Entries.Where(e => e.Status == SkillPullStatus.ChangedBoth))
+            SkillPushPresenter.ResolutionHelp(entry.Name, result.Version is null ? entry.Version : null);
 
         return result.Succeeded ? 0 : 1;
     }
 
-    internal static string Describe(SkillComparison skill) => skill.State switch
+    internal static string Describe(SkillComparison skill, int? version = null) => skill.State switch
     {
+        SkillSyncState.UpToDate when version is { } pinned => $"[green]matches v{pinned}[/]",
         SkillSyncState.UpToDate => "[green]up to date[/]",
         SkillSyncState.NotInstalled => "[blue]not installed[/]",
+        SkillSyncState.UpdateAvailable when version is { } pinned => skill.LocalVersion is { } have
+            ? $"[yellow]can be replaced with v{pinned} (have v{have}, unedited)[/]"
+            : $"[yellow]can be replaced with v{pinned} (unedited)[/]",
         SkillSyncState.UpdateAvailable => skill.LocalVersion is { } v ? $"[yellow]update available (have v{v})[/]" : "[yellow]update available[/]",
         SkillSyncState.LocalChanges => "[red]local changes[/]",
+        SkillSyncState.ChangedBoth => skill.LocalVersion is { } based and > 0
+            ? $"[red]changed here and in the registry[/] (this copy is based on v{based})"
+            : "[red]changed here and in the registry[/]",
         SkillSyncState.Conflict => $"[red]conflict:[/] {Markup.Escape(skill.Note ?? string.Empty)}",
         SkillSyncState.OtherProject => $"[grey]other project:[/] {Markup.Escape(skill.Note ?? string.Empty)}",
         _ => "[grey]only here (not backed up)[/]",
@@ -139,6 +165,7 @@ internal static class SkillPullPresenter
         var text = entry.Status switch
         {
             SkillPullStatus.Installed => $"[green]installed v{entry.Version}[/]",
+            SkillPullStatus.ChangedBoth => "[yellow]kept: changed here and in the registry[/]",
             SkillPullStatus.Updated => $"[green]updated to v{entry.Version}[/]",
             SkillPullStatus.UpToDate => $"[grey]up to date (v{entry.Version})[/]",
             SkillPullStatus.LocalChanges => "[yellow]kept: has local changes[/]",
@@ -180,6 +207,8 @@ internal static class SkillPullPresenter
             SkillPullRunFailure.Incompatible => detail,
             SkillPullRunFailure.ListFailed => $"Could not list skills in {authority}: {detail}",
             SkillPullRunFailure.SkillNotFound => $"There is no skill named '{detail}' in {authority}. Run `protostar skills remote` to see what is there.",
+            SkillPullRunFailure.InvalidVersion => detail,
+            SkillPullRunFailure.VersionNotFound => $"Could not fetch that version from {authority}: {detail}",
             _ => detail,
         };
     }

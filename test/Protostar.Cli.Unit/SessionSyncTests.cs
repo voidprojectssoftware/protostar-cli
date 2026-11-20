@@ -1250,7 +1250,8 @@ public sealed class SessionSyncServiceTests : IDisposable
             return Task.FromResult(Offline ? null : new RegistryMeta { ApiMajors = [1] });
         }
 
-        public Task<SkillPushOutcome> PushSkillAsync(Uri registry, string accessToken, string name, IReadOnlyList<SkillUploadFile> files, SkillProject? project, CancellationToken cancellationToken) =>
+        public Task<SkillPushOutcome> PushSkillAsync(
+            Uri registry, string accessToken, string name, IReadOnlyList<SkillUploadFile> files, SkillProject? project, int? baseVersion, CancellationToken cancellationToken) =>
             throw new NotSupportedException();
 
         public Task<RegistrySkillList> ListSkillsAsync(Uri registry, string accessToken, CancellationToken cancellationToken) =>

@@ -125,28 +125,13 @@ internal sealed partial class SkillChangeService : ISkillChangeService
         if (download.Content is not { } content)
             return (new SkillPushOutcome(SkillPushStatus.Failed, null, download.Error), "");
 
-        var files = new List<SkillUploadFile>();
-        var changed = false;
-        foreach (var file in content.Files)
-        {
-            if (!string.Equals(file.RelativePath, "SKILL.md", StringComparison.OrdinalIgnoreCase))
-            {
-                files.Add(new SkillUploadFile(file.RelativePath, file.Content));
-                continue;
-            }
-
-            var bom = file.Content.AsSpan().StartsWith(Encoding.UTF8.Preamble);
-            var rewritten = RewriteName(Encoding.UTF8.GetString(bom ? file.Content[3..] : file.Content), newName);
-            changed |= rewritten is not null;
-            files.Add(rewritten is null ? new SkillUploadFile(file.RelativePath, file.Content)
-                : new SkillUploadFile(file.RelativePath, [.. bom ? Encoding.UTF8.Preamble : [], .. Encoding.UTF8.GetBytes(rewritten)]));
-        }
-
+        var (files, changed) = RenameInManifest(content.Files.Select(f => new SkillUploadFile(f.RelativePath, f.Content)), newName);
         if (!changed)
             return null;
 
+        // Based on the version just downloaded, so a push from another machine in between is refused, not overwritten.
         var project = target.ProjectFacts is { } facts ? new SkillProject(_machine.Get().Id, facts) : null;
-        var pushed = await _registry.PushSkillAsync(target.Registry, target.AccessToken, newName, files, project, cancellationToken);
+        var pushed = await _registry.PushSkillAsync(target.Registry, target.AccessToken, newName, files, project, content.Version, cancellationToken);
         if (pushed.Succeeded && pushed.ProjectId != skill.ProjectId)
             pushed = new SkillPushOutcome(SkillPushStatus.Failed, null, "The registry filed the renamed SKILL.md under another project.");
         return (pushed, SkillFileReader.Hash(files));
@@ -202,8 +187,34 @@ internal sealed partial class SkillChangeService : ISkillChangeService
         return copies;
     }
 
-    // Rewrites the copy's SKILL.md name and renames its folder when the folder carried the old name.
-    private static (string Path, bool ManifestRenamed, string? Note) RenameCopy(string path, string oldName, string newName)
+    /// <summary><paramref name="files"/> with the SKILL.md <c>name</c> set to <paramref name="newName"/>; <c>Changed</c> is false when it declares none.</summary>
+    /// <remarks>A UTF-8 byte order mark is kept, as is every other byte (see <see cref="RewriteName"/>).</remarks>
+    internal static (List<SkillUploadFile> Files, bool Changed) RenameInManifest(IEnumerable<SkillUploadFile> files, string newName)
+    {
+        var renamed = new List<SkillUploadFile>();
+        var changed = false;
+        foreach (var file in files)
+        {
+            if (!string.Equals(file.RelativePath, "SKILL.md", StringComparison.OrdinalIgnoreCase))
+            {
+                renamed.Add(file);
+                continue;
+            }
+
+            var bom = file.Content.AsSpan().StartsWith(Encoding.UTF8.Preamble);
+            var rewritten = RewriteName(Encoding.UTF8.GetString(bom ? file.Content[3..] : file.Content), newName);
+            changed |= rewritten is not null;
+            renamed.Add(rewritten is null ? file
+                : new SkillUploadFile(file.RelativePath, [.. bom ? Encoding.UTF8.Preamble : [], .. Encoding.UTF8.GetBytes(rewritten)]));
+        }
+
+        return (renamed, changed);
+    }
+
+    /// <summary>Rewrites the copy's SKILL.md name and renames its folder when the folder carried the old name.</summary>
+    /// <returns>Where the copy is now, whether its SKILL.md changed, and why anything was left as it was.</returns>
+    /// <remarks>Also how <c>skills push --as</c> renames the copy it pushed under a new name.</remarks>
+    internal static (string Path, bool ManifestRenamed, string? Note) RenameCopy(string path, string oldName, string newName)
     {
         string? note = null;
         var manifestRenamed = false;

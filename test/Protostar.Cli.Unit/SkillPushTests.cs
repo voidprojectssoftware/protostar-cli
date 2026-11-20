@@ -381,6 +381,280 @@ public sealed class SkillPushServiceTests : IDisposable
         Assert.Equal("alpha", _ledger.Get(new Uri(Registry), skill.Path)!.Name);
     }
 
+    // ----- Base version and stale refusals (#52) -----
+
+    private static readonly Uri RegistryUri = new(Registry);
+
+    // A registry that is at `current` and, like the real one, refuses any push whose base is not current.
+    private static FakeRegistryApi AtVersion(int current) => new()
+    {
+        Answer = (_, based) => based is null || based == current
+            ? new SkillPushOutcome(SkillPushStatus.Created, current + 1, null)
+            : new SkillPushOutcome(SkillPushStatus.Stale, current, "stale"),
+    };
+
+    private void Synced(DiscoveredSkill skill, int? version, Guid? projectId = null) =>
+        _ledger.Record(RegistryUri, skill.Path, new SkillLedgerEntry(SkillFileReader.Hash(SkillFileReader.Read(skill.Path)), version, skill.Name, projectId));
+
+    private static void Edit(DiscoveredSkill skill, string body) =>
+        File.WriteAllText(Path.Combine(skill.Path, "SKILL.md"), $"---\nname: {skill.Name}\n---\n{body}");
+
+    [Fact]
+    public async Task A_push_names_the_version_the_copy_last_synced_as_its_base()
+    {
+        var skill = Skill("alpha");
+        Synced(skill, 4);
+        Edit(skill, "edited");
+        var (sut, api) = Build([skill], Session());
+
+        await sut.PushAsync(Request(), CancellationToken.None);
+
+        Assert.Equal([4], api.Bases);
+    }
+
+    [Fact]
+    public async Task A_copy_with_no_record_pushes_with_base_zero_so_it_cannot_overwrite_a_skill_it_never_saw()
+    {
+        var (sut, api) = Build([Skill("alpha")], Session());
+
+        await sut.PushAsync(Request(), CancellationToken.None);
+
+        Assert.Equal([0], api.Bases);
+    }
+
+    [Fact]
+    public async Task A_record_of_another_scope_or_name_does_not_lend_its_version_as_the_base()
+    {
+        var project = Skill("deploy", SkillScope.Project);
+        Synced(project, 3);
+        Edit(project, "edited");
+        var renamed = Skill("beta");
+        _ledger.Record(RegistryUri, renamed.Path, new SkillLedgerEntry("old", 5, "Beta"));
+        var (sut, api) = Build([project, renamed], Session());
+
+        await sut.PushAsync(Request(), CancellationToken.None);
+
+        Assert.Equal([0, 0], api.Bases);
+    }
+
+    [Fact]
+    public async Task A_record_from_before_versions_were_kept_pushes_with_no_base_as_before()
+    {
+        var skill = Skill("alpha");
+        Synced(skill, version: null);
+        Edit(skill, "edited");
+        var (sut, api) = Build([skill], Session());
+
+        await sut.PushAsync(Request(), CancellationToken.None);
+
+        Assert.Equal([null], api.Bases);
+    }
+
+    [Fact]
+    public async Task A_stale_push_is_not_retried_and_the_ledger_remembers_the_refused_content()
+    {
+        var skill = Skill("alpha");
+        Synced(skill, 1);
+        Edit(skill, "B's edit");
+        var (sut, api) = Build([skill], Session(), AtVersion(2));
+
+        var result = await sut.PushAsync(Request(), CancellationToken.None);
+
+        var outcome = Assert.Single(result.Entries).Outcome;
+        Assert.Equal(SkillPushStatus.Stale, outcome.Status);
+        Assert.Equal(2, outcome.Version);
+        Assert.Contains("based on v1", outcome.Message);
+        Assert.False(result.Succeeded);
+        Assert.Single(api.Pushed);
+        var recorded = _ledger.Get(RegistryUri, skill.Path)!;
+        Assert.Equal(1, recorded.Version);
+        Assert.Equal(SkillFileReader.Hash(SkillFileReader.Read(skill.Path)), recorded.RefusedHash);
+        Assert.Equal(2, recorded.RefusedVersion);
+    }
+
+    [Fact]
+    public async Task A_stale_push_of_a_copy_that_never_synced_is_remembered_with_version_zero()
+    {
+        var skill = Skill("alpha");
+        var (sut, _) = Build([skill], Session(), AtVersion(1));
+
+        await sut.PushAsync(Request(), CancellationToken.None);
+
+        var recorded = _ledger.Get(RegistryUri, skill.Path)!;
+        Assert.Equal(0, recorded.Version);
+        Assert.Equal(string.Empty, recorded.ContentHash);
+        Assert.NotNull(recorded.RefusedHash);
+    }
+
+    [Fact]
+    public async Task The_hook_does_not_send_content_the_registry_already_refused()
+    {
+        var skill = Skill("alpha");
+        Synced(skill, 1);
+        Edit(skill, "B's edit");
+        var (sut, api) = Build([skill], Session(), AtVersion(2));
+        await sut.PushAsync(Request() with { FromHook = true }, CancellationToken.None);
+
+        var again = await sut.PushAsync(Request() with { FromHook = true }, CancellationToken.None);
+
+        var outcome = Assert.Single(again.Entries).Outcome;
+        Assert.Equal(SkillPushStatus.Stale, outcome.Status);
+        Assert.True(outcome.Remembered);
+        Assert.Single(api.Pushed);
+        Assert.Equal(1, api.MetaCalls);
+    }
+
+    [Fact]
+    public async Task The_hook_sends_a_refused_copy_again_once_it_changes()
+    {
+        var skill = Skill("alpha");
+        Synced(skill, 1);
+        Edit(skill, "B's edit");
+        var (sut, api) = Build([skill], Session(), AtVersion(2));
+        await sut.PushAsync(Request() with { FromHook = true }, CancellationToken.None);
+
+        Edit(skill, "B's second edit");
+        var again = await sut.PushAsync(Request() with { FromHook = true }, CancellationToken.None);
+
+        Assert.Equal(2, api.Pushed.Count);
+        Assert.Equal([1, 1], api.Bases);
+        Assert.False(Assert.Single(again.Entries).Outcome.Remembered);
+    }
+
+    [Fact]
+    public async Task A_manual_push_asks_the_registry_again_after_a_refusal()
+    {
+        var skill = Skill("alpha");
+        Synced(skill, 1);
+        Edit(skill, "B's edit");
+        var (sut, api) = Build([skill], Session(), AtVersion(2));
+        await sut.PushAsync(Request() with { FromHook = true }, CancellationToken.None);
+
+        await sut.PushAsync(Request(), CancellationToken.None);
+
+        Assert.Equal(2, api.Pushed.Count);
+    }
+
+    [Fact]
+    public async Task Force_replaces_a_newer_registry_version_by_pushing_again_based_on_it_and_says_so()
+    {
+        var skill = Skill("alpha");
+        Synced(skill, 1);
+        Edit(skill, "B's edit");
+        var (sut, api) = Build([skill], Session(), AtVersion(2));
+
+        var result = await sut.PushAsync(Request() with { Force = true }, CancellationToken.None);
+
+        var outcome = Assert.Single(result.Entries).Outcome;
+        Assert.Equal(SkillPushStatus.Created, outcome.Status);
+        Assert.Equal(3, outcome.Version);
+        Assert.Contains("Replaced v2", outcome.Message);
+        Assert.Contains("--version 2", outcome.Message);
+        Assert.Equal([1, 2], api.Bases);
+        var recorded = _ledger.Get(RegistryUri, skill.Path)!;
+        Assert.Equal(3, recorded.Version);
+        Assert.Null(recorded.RefusedHash);
+    }
+
+    [Fact]
+    public async Task Force_does_not_replace_a_version_that_arrives_between_its_two_pushes()
+    {
+        var skill = Skill("alpha");
+        Synced(skill, 1);
+        Edit(skill, "B's edit");
+        var api = new FakeRegistryApi { Answer = (_, based) => new SkillPushOutcome(SkillPushStatus.Stale, based + 1, "stale") };
+        var (sut, _) = Build([skill], Session(), api);
+
+        var result = await sut.PushAsync(Request() with { Force = true }, CancellationToken.None);
+
+        Assert.Equal(SkillPushStatus.Stale, Assert.Single(result.Entries).Outcome.Status);
+        Assert.Equal(2, api.Pushed.Count);
+    }
+
+    [Fact]
+    public async Task A_successful_push_after_a_refusal_clears_it()
+    {
+        var skill = Skill("alpha");
+        _ledger.Record(RegistryUri, skill.Path, new SkillLedgerEntry("old", 2, "alpha", null, "refused", 3));
+        var (sut, _) = Build([skill], Session(), AtVersion(2));
+
+        await sut.PushAsync(Request(), CancellationToken.None);
+
+        var recorded = _ledger.Get(RegistryUri, skill.Path)!;
+        Assert.Equal(3, recorded.Version);
+        Assert.Null(recorded.RefusedHash);
+        Assert.Null(recorded.RefusedVersion);
+    }
+
+    [Fact]
+    public async Task Push_as_sends_the_copy_as_a_new_skill_and_renames_it_here()
+    {
+        var skill = Skill("alpha", dir: "alpha");
+        Synced(skill, 1);
+        Edit(skill, "B's edit");
+        var (sut, api) = Build([skill], Session());
+
+        var result = await sut.PushAsync(Request("alpha") with { As = "alpha-b" }, CancellationToken.None);
+
+        var outcome = Assert.Single(result.Entries).Outcome;
+        Assert.Equal(SkillPushStatus.Created, outcome.Status);
+        Assert.Contains("skills pull alpha", outcome.Message);
+        var (name, _, files, _) = Assert.Single(api.Pushed);
+        Assert.Equal("alpha-b", name);
+        Assert.Equal([0], api.Bases);
+        Assert.Contains("name: alpha-b", Encoding.UTF8.GetString(Assert.Single(files).Content));
+        var moved = Path.Combine(_root, "alpha-b");
+        Assert.False(Directory.Exists(skill.Path));
+        Assert.Contains("name: alpha-b", File.ReadAllText(Path.Combine(moved, "SKILL.md")));
+        Assert.Contains("B's edit", File.ReadAllText(Path.Combine(moved, "SKILL.md")));
+        Assert.Null(_ledger.Get(RegistryUri, skill.Path));
+        var recorded = _ledger.Get(RegistryUri, moved)!;
+        Assert.Equal(("alpha-b", 1), (recorded.Name, recorded.Version));
+        Assert.Equal(SkillFileReader.Hash(SkillFileReader.Read(moved)), recorded.ContentHash);
+    }
+
+    [Fact]
+    public async Task Push_as_never_overwrites_an_existing_skill_of_the_new_name()
+    {
+        var skill = Skill("alpha", dir: "alpha");
+        var (sut, _) = Build([skill], Session(), AtVersion(4));
+
+        var result = await sut.PushAsync(Request("alpha") with { As = "taken" }, CancellationToken.None);
+
+        var outcome = Assert.Single(result.Entries).Outcome;
+        Assert.Equal(SkillPushStatus.Refused, outcome.Status);
+        Assert.Contains("already has a skill named 'taken'", outcome.Message);
+        Assert.True(Directory.Exists(skill.Path));
+        Assert.Null(_ledger.Get(RegistryUri, skill.Path));
+    }
+
+    [Theory]
+    [InlineData(new[] { "alpha", "beta" }, "alpha-b", "name exactly one")]
+    [InlineData(new string[0], "alpha-b", "name exactly one")]
+    [InlineData(new[] { "alpha" }, "a/b", "cannot name a skill")]
+    [InlineData(new[] { "alpha" }, "alpha", "already this skill's name")]
+    public async Task Push_as_needs_one_skill_and_a_usable_new_name(string[] names, string newName, string message)
+    {
+        var (sut, api) = Build([Skill("alpha"), Skill("beta")], Session());
+
+        var result = await sut.PushAsync(Request(names) with { As = newName }, CancellationToken.None);
+
+        Assert.Equal(SkillPushRunFailure.InvalidAs, result.Failure);
+        Assert.Contains(message, result.Detail);
+        Assert.Empty(api.Pushed);
+    }
+
+    [Fact]
+    public async Task Push_as_refuses_a_name_that_matches_a_global_and_a_project_skill()
+    {
+        var (sut, _) = Build([Skill("alpha"), Skill("alpha", SkillScope.Project)], Session());
+
+        var result = await sut.PushAsync(Request("alpha") with { As = "alpha-b" }, CancellationToken.None);
+
+        Assert.Equal(SkillPushRunFailure.InvalidAs, result.Failure);
+        Assert.Contains("matches 2 local skills", result.Detail);
+    }
+
     /// <summary>Facts for a folder outside git, recording which folders were asked about.</summary>
     internal sealed class FakeFacts : IProjectFactsResolver
     {
@@ -445,10 +719,20 @@ public sealed class SkillPushServiceTests : IDisposable
             return Task.FromResult(Meta);
         }
 
+        /// <summary>The base version each push named, in push order.</summary>
+        public List<int?> Bases { get; } = [];
+
+        /// <summary>When set, answers each push from its name and base instead of <see cref="Outcomes"/>.</summary>
+        public Func<string, int?, SkillPushOutcome>? Answer { get; set; }
+
         public Task<SkillPushOutcome> PushSkillAsync(
-            Uri registry, string accessToken, string name, IReadOnlyList<SkillUploadFile> files, SkillProject? project, CancellationToken cancellationToken)
+            Uri registry, string accessToken, string name, IReadOnlyList<SkillUploadFile> files, SkillProject? project, int? baseVersion,
+            CancellationToken cancellationToken)
         {
             Pushed.Add((name, accessToken, files, project));
+            Bases.Add(baseVersion);
+            if (Answer is { } answer)
+                return Task.FromResult(answer(name, baseVersion));
             var projectId = project is null ? (Guid?)null : ProjectIdOf(project.Facts);
             return Task.FromResult(Outcomes.GetValueOrDefault(name) ?? new SkillPushOutcome(SkillPushStatus.Created, 1, null, projectId));
         }
@@ -628,7 +912,7 @@ public sealed class RegistryApiTests
         var handler = new StubHandler(_ => Json(HttpStatusCode.Created, """{"status":"created","version":3}"""));
         using var api = new RegistryApi(handler);
 
-        var outcome = await api.PushSkillAsync(Registry, "tok", "alpha", Files, null, CancellationToken.None);
+        var outcome = await api.PushSkillAsync(Registry, "tok", "alpha", Files, null, null, CancellationToken.None);
 
         Assert.Equal(new SkillPushOutcome(SkillPushStatus.Created, 3, null), outcome);
         Assert.Equal(HttpMethod.Post, handler.Method);
@@ -649,7 +933,7 @@ public sealed class RegistryApiTests
         var machine = Guid.NewGuid();
         var facts = ProjectFacts.NotGit("/w/a", "/w/a");
 
-        var outcome = await api.PushSkillAsync(Registry, "tok", "deploy", Files, new SkillProject(machine, facts), CancellationToken.None);
+        var outcome = await api.PushSkillAsync(Registry, "tok", "deploy", Files, new SkillProject(machine, facts), null, CancellationToken.None);
 
         Assert.Equal(new SkillPushOutcome(SkillPushStatus.Created, 1, null, projectId, "github.com/acme/a"), outcome);
         Assert.Contains("name=project", handler.Body);
@@ -663,7 +947,7 @@ public sealed class RegistryApiTests
         var handler = new StubHandler(_ => Json(HttpStatusCode.Created, """{"status":"created","version":1}"""));
         using var api = new RegistryApi(handler);
 
-        await api.PushSkillAsync(Registry, "tok", "deploy", Files, null, CancellationToken.None);
+        await api.PushSkillAsync(Registry, "tok", "deploy", Files, null, null, CancellationToken.None);
 
         Assert.DoesNotContain("name=project", handler.Body);
     }
@@ -708,11 +992,47 @@ public sealed class RegistryApiTests
     }
 
     [Fact]
+    public async Task A_push_with_a_base_sends_it_as_a_form_field_and_one_without_sends_none()
+    {
+        var handler = new StubHandler(_ => Json(HttpStatusCode.Created, """{"status":"created","version":3}"""));
+        using var api = new RegistryApi(handler);
+
+        await api.PushSkillAsync(Registry, "tok", "alpha", Files, null, 2, CancellationToken.None);
+        Assert.Contains("name=baseVersion", handler.Body);
+        Assert.Contains("\r\n\r\n2\r\n", handler.Body);
+
+        await api.PushSkillAsync(Registry, "tok", "alpha", Files, null, null, CancellationToken.None);
+        Assert.DoesNotContain("baseVersion", handler.Body);
+    }
+
+    [Fact]
+    public async Task A_stale_problem_maps_to_stale_with_the_registrys_current_version_and_project()
+    {
+        var projectId = Guid.NewGuid();
+        var body = $$"""{"type":"https://protostar.dev/problems/stale-skill-version","title":"changed here and in the registry","status":409,"currentVersion":3,"projectId":"{{projectId}}"}""";
+        using var api = new RegistryApi(new StubHandler(_ => Json(HttpStatusCode.Conflict, body, "application/problem+json")));
+
+        var outcome = await api.PushSkillAsync(Registry, "tok", "alpha", Files, null, 1, CancellationToken.None);
+
+        Assert.Equal(new SkillPushOutcome(SkillPushStatus.Stale, 3, "changed here and in the registry", projectId), outcome);
+    }
+
+    [Fact]
+    public async Task A_409_of_another_type_is_an_ordinary_refusal()
+    {
+        using var api = new RegistryApi(new StubHandler(_ => Json(HttpStatusCode.Conflict, """{"title":"something else","status":409}""", "application/problem+json")));
+
+        var outcome = await api.PushSkillAsync(Registry, "tok", "alpha", Files, null, 1, CancellationToken.None);
+
+        Assert.Equal(new SkillPushOutcome(SkillPushStatus.Refused, null, "something else"), outcome);
+    }
+
+    [Fact]
     public async Task Ok_maps_to_unchanged_with_the_current_version()
     {
         using var api = new RegistryApi(new StubHandler(_ => Json(HttpStatusCode.OK, """{"status":"unchanged","version":2}""")));
 
-        var outcome = await api.PushSkillAsync(Registry, "tok", "alpha", Files, null, CancellationToken.None);
+        var outcome = await api.PushSkillAsync(Registry, "tok", "alpha", Files, null, null, CancellationToken.None);
 
         Assert.Equal(new SkillPushOutcome(SkillPushStatus.Unchanged, 2, null), outcome);
     }
@@ -726,7 +1046,7 @@ public sealed class RegistryApiTests
         var body = $$"""{"title":"{{title}}","status":{{(int)status}}}""";
         using var api = new RegistryApi(new StubHandler(_ => Json(status, body, "application/problem+json")));
 
-        var outcome = await api.PushSkillAsync(Registry, "tok", "alpha", Files, null, CancellationToken.None);
+        var outcome = await api.PushSkillAsync(Registry, "tok", "alpha", Files, null, null, CancellationToken.None);
 
         Assert.Equal(new SkillPushOutcome(SkillPushStatus.Refused, null, title), outcome);
     }
@@ -736,7 +1056,7 @@ public sealed class RegistryApiTests
     {
         using var api = new RegistryApi(new StubHandler(_ => new HttpResponseMessage(HttpStatusCode.Unauthorized)));
 
-        var outcome = await api.PushSkillAsync(Registry, "tok", "alpha", Files, null, CancellationToken.None);
+        var outcome = await api.PushSkillAsync(Registry, "tok", "alpha", Files, null, null, CancellationToken.None);
 
         Assert.Equal(SkillPushStatus.Failed, outcome.Status);
         Assert.Contains("auth login", outcome.Message);
@@ -747,7 +1067,7 @@ public sealed class RegistryApiTests
     {
         using var api = new RegistryApi(new StubHandler(_ => new HttpResponseMessage(HttpStatusCode.BadGateway)));
 
-        var outcome = await api.PushSkillAsync(Registry, "tok", "alpha", Files, null, CancellationToken.None);
+        var outcome = await api.PushSkillAsync(Registry, "tok", "alpha", Files, null, null, CancellationToken.None);
 
         Assert.Equal(SkillPushStatus.Failed, outcome.Status);
         Assert.Contains("502", outcome.Message);
@@ -758,7 +1078,7 @@ public sealed class RegistryApiTests
     {
         using var api = new RegistryApi(new StubHandler(_ => throw new HttpRequestException("connection refused")));
 
-        var outcome = await api.PushSkillAsync(Registry, "tok", "alpha", Files, null, CancellationToken.None);
+        var outcome = await api.PushSkillAsync(Registry, "tok", "alpha", Files, null, null, CancellationToken.None);
 
         Assert.Equal(SkillPushStatus.Failed, outcome.Status);
         Assert.Contains("connection refused", outcome.Message);

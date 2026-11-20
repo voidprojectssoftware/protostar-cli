@@ -30,6 +30,7 @@ internal static class SkillPushPresenter
             case SkillPushRunFailure.RegistryUnreachable:
                 return Error($"Could not reach the registry at {authority}.");
             case SkillPushRunFailure.Incompatible:
+            case SkillPushRunFailure.InvalidAs:
                 return Error(result.Detail!);
         }
 
@@ -54,7 +55,7 @@ internal static class SkillPushPresenter
 
         var created = result.Entries.Count(e => e.Outcome.Status == SkillPushStatus.Created);
         var unchanged = result.Entries.Count(e => e.Outcome.Status == SkillPushStatus.Unchanged);
-        var problems = result.Entries.Count(e => e.Outcome.Status is SkillPushStatus.Refused or SkillPushStatus.Failed or SkillPushStatus.Conflict);
+        var problems = result.Entries.Count(e => e.Outcome.Status is SkillPushStatus.Refused or SkillPushStatus.Failed or SkillPushStatus.Conflict or SkillPushStatus.Stale);
 
         if (created == 0 && problems == 0)
             AnsiConsole.MarkupLine($"Everything was already up to date in [grey]{Markup.Escape(authority)}[/].");
@@ -63,13 +64,32 @@ internal static class SkillPushPresenter
                 $"Backed up to [grey]{Markup.Escape(authority)}[/]: {created} new, {unchanged} unchanged" +
                 (problems > 0 ? $", [red]{problems} not backed up[/]." : "."));
 
+        foreach (var entry in result.Entries.Where(e => e.Outcome.Status == SkillPushStatus.Stale))
+            ResolutionHelp(entry.Skill.Name, entry.Outcome.Version);
+
         return result.Succeeded ? 0 : 1;
     }
+
+    /// <summary>The three ways out of "changed here and in the registry", for the skill <paramref name="name"/>.</summary>
+    /// <remarks>Also printed by <c>skills remote</c> and <c>skills pull</c> for a copy in that state.</remarks>
+    internal static void ResolutionHelp(string name, int? registryVersion)
+    {
+        var theirs = registryVersion is { } v ? $"v{v}" : "the registry's version";
+        var quoted = Quote(name);
+        AnsiConsole.MarkupLine($"[yellow]'{Markup.Escape(name)}' changed here and in the registry.[/] Choose one:");
+        AnsiConsole.MarkupLine($"  keep yours:   [blue]protostar skills push {Markup.Escape(quoted)} --force[/] [grey](replaces {theirs}, which stays in history)[/]");
+        AnsiConsole.MarkupLine($"  keep theirs:  [blue]protostar skills pull {Markup.Escape(quoted)} --force[/] [grey](overwrites your copy here)[/]");
+        AnsiConsole.MarkupLine($"  keep both:    [blue]protostar skills push {Markup.Escape(quoted)} --as NEW-NAME[/] [grey](pushes yours as a new skill, then pull {Markup.Escape(quoted)})[/]");
+    }
+
+    private static string Quote(string name) => name.Any(char.IsWhiteSpace) ? $"\"{name}\"" : name;
 
     // Markup for one skill's outcome. The registry's reason is escaped; the colour tags are not.
     internal static string Describe(SkillPushOutcome outcome) => outcome.Status switch
     {
+        SkillPushStatus.Created when outcome.Message is { } note => $"[green]new version v{outcome.Version}[/] {Markup.Escape(note)}",
         SkillPushStatus.Created => $"[green]new version v{outcome.Version}[/]",
+        SkillPushStatus.Stale => $"[red]changed here and in the registry:[/] {Markup.Escape(outcome.Message ?? string.Empty)}",
         SkillPushStatus.Unchanged => $"[grey]unchanged (v{outcome.Version})[/]",
         SkillPushStatus.Skipped => $"[yellow]skipped:[/] {Markup.Escape(outcome.Message ?? string.Empty)}",
         SkillPushStatus.Refused => $"[red]refused:[/] {Markup.Escape(outcome.Message ?? string.Empty)}",

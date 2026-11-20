@@ -138,6 +138,7 @@ internal static class SetupPresenter
         var summary =
             $"{Of(SkillPullStatus.Installed)} installed, {Of(SkillPullStatus.Updated)} updated, {Of(SkillPullStatus.UpToDate)} already up to date" +
             (Of(SkillPullStatus.LocalChanges) is > 0 and var held ? $", [yellow]{held} kept because of local changes[/]" : "") +
+            (Of(SkillPullStatus.ChangedBoth) is > 0 and var both ? $", [yellow]{both} kept because they changed here and in the registry[/]" : "") +
             (Of(SkillPullStatus.Conflict) is > 0 and var conflicts ? $", [red]{conflicts} skipped as conflicts[/]" : "") +
             (Of(SkillPullStatus.Failed) is > 0 and var failed ? $", [red]{failed} failed[/]" : "") +
             (Of(SkillPullStatus.OtherProject) is > 0 and var elsewhere ? $", [grey]{elsewhere} left for other projects' checkouts[/]" : "") + ".";
@@ -153,6 +154,8 @@ internal static class SetupPresenter
             lines.Add($"[grey]... and {notable.Count - MaxSkillLines} more. `protostar skills remote` lists them all.[/]");
         if (Of(SkillPullStatus.LocalChanges) > 0)
             lines.Add("[grey]Back up local changes with `protostar skills push`, or overwrite them with `protostar skills pull --force`.[/]");
+        if (Of(SkillPullStatus.ChangedBoth) > 0)
+            lines.Add("[grey]`protostar skills remote` shows how to keep yours, theirs, or both.[/]");
         return lines;
     }
 

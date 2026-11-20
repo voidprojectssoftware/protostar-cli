@@ -14,7 +14,8 @@ namespace Protostar.Cli.Capture;
 /// <c>model</c>, <c>status</c>) says whether the skill used was a global or a project skill, or gives its path,
 /// and both can share a name. So the hook backs up every local skill of that name: the global one and the one
 /// in <c>cwd</c>'s project, each as its own registry skill. The push goes through
-/// <see cref="ISkillPushService"/>, whose ledger makes the one that did not change cost no network call.
+/// <see cref="ISkillPushService"/>, whose ledger makes the one that did not change cost no network call, and makes a
+/// copy the registry already refused as stale (changed here and in the registry) cost none either until it changes.
 /// Plugin skills (<c>plugin:name</c>) are not local user skills and are ignored.
 /// <c>Stop</c> and <c>SessionEnd</c> hand the session to <see cref="IBackgroundPush"/> and return at once.
 /// </remarks>
@@ -56,7 +57,7 @@ internal sealed class CaptureService : ICaptureService
 
         try
         {
-            var request = new SkillPushRequest([skill], HarnessId: null, HarnessHome: null, ProjectStart: cwd, Registry: null);
+            var request = new SkillPushRequest([skill], HarnessId: null, HarnessHome: null, ProjectStart: cwd, Registry: null, FromHook: true);
             var result = await _push.PushAsync(request, cancellationToken);
             return new CaptureResult(CaptureAction.SkillBackedUp, skill, result, null);
         }

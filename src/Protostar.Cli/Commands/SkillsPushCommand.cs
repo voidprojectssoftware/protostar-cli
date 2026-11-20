@@ -50,8 +50,12 @@ internal sealed class SkillsPushCommand : AsyncCommand<SkillsPushCommand.Setting
         public string? Registry { get; init; }
 
         [CommandOption("--force")]
-        [Description("Upload every selected skill even if it has not changed since its last backup.")]
+        [Description("Upload every selected skill even if it has not changed since its last backup, and replace the registry's version when it changed elsewhere since this copy was synced (keep mine).")]
         public bool Force { get; init; }
+
+        [CommandOption("--as <NEW-NAME>")]
+        [Description("Push the one named skill as a new registry skill with this name, and rename the copy here to match (keep both).")]
+        public string? As { get; init; }
     }
 
     protected override async Task<int> ExecuteAsync(CommandContext context, Settings settings, CancellationToken cancellation)
@@ -62,7 +66,8 @@ internal sealed class SkillsPushCommand : AsyncCommand<SkillsPushCommand.Setting
             settings.HarnessHome,
             settings.GlobalOnly ? null : settings.Project ?? Directory.GetCurrentDirectory(),
             settings.Registry,
-            settings.Force);
+            settings.Force,
+            settings.As);
 
         var result = await _push.PushAsync(request, cancellation);
         return SkillPushPresenter.Render(result, _catalog);

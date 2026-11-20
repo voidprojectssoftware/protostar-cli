@@ -147,7 +147,7 @@ public sealed class SkillPullServiceTests : IDisposable
     }
 
     [Fact]
-    public async Task Pull_keeps_a_skill_edited_here_unless_forced()
+    public async Task Pull_keeps_a_skill_changed_here_and_in_the_registry_unless_forced()
     {
         var path = Local("alpha", ("SKILL.md", Manifest("alpha", "old")));
         RecordSynced(path, 1);
@@ -156,7 +156,7 @@ public sealed class SkillPullServiceTests : IDisposable
 
         var kept = await Build().PullAsync(Pull(), CancellationToken.None);
 
-        Assert.Equal(SkillPullStatus.LocalChanges, Assert.Single(kept.Entries).Status);
+        Assert.Equal(SkillPullStatus.ChangedBoth, Assert.Single(kept.Entries).Status);
         Assert.Equal(Manifest("alpha", "my edit"), File.ReadAllText(Path.Combine(path, "SKILL.md")));
         Assert.True(kept.Succeeded);
 
@@ -166,6 +166,207 @@ public sealed class SkillPullServiceTests : IDisposable
         Assert.Equal(SkillPullStatus.Updated, entry.Status);
         Assert.NotNull(entry.Message);
         Assert.Equal(Manifest("alpha", "new"), File.ReadAllText(Path.Combine(path, "SKILL.md")));
+    }
+
+    [Fact]
+    public async Task Pull_keeps_a_skill_edited_here_when_the_registry_has_not_moved()
+    {
+        var path = Local("alpha", ("SKILL.md", Manifest("alpha", "v2")));
+        RecordSynced(path, 2);
+        Publish("alpha", 2, ("SKILL.md", Manifest("alpha", "v2")));
+        File.WriteAllText(Path.Combine(path, "SKILL.md"), Manifest("alpha", "my edit"));
+
+        var remote = await Build().CompareAsync(Remote(), CancellationToken.None);
+        var kept = await Build().PullAsync(Pull(), CancellationToken.None);
+
+        Assert.Equal(SkillSyncState.LocalChanges, Assert.Single(remote.Skills).State);
+        Assert.Equal(SkillPullStatus.LocalChanges, Assert.Single(kept.Entries).Status);
+    }
+
+    // ----- Changed here and in the registry (#52) -----
+
+    [Fact]
+    public async Task Remote_shows_a_copy_changed_here_and_in_the_registry_with_the_version_it_is_based_on()
+    {
+        var path = Local("alpha", ("SKILL.md", Manifest("alpha", "v1")));
+        RecordSynced(path, 1);
+        File.WriteAllText(Path.Combine(path, "SKILL.md"), Manifest("alpha", "B's edit"));
+        Publish("alpha", 2, ("SKILL.md", Manifest("alpha", "A's edit")));
+
+        var result = await Build().CompareAsync(Remote(), CancellationToken.None);
+
+        var alpha = Assert.Single(result.Skills);
+        Assert.Equal(SkillSyncState.ChangedBoth, alpha.State);
+        Assert.Equal(1, alpha.LocalVersion);
+        Assert.Equal(2, alpha.Remote!.Version);
+    }
+
+    [Fact]
+    public async Task Content_the_registry_refused_as_stale_is_changed_on_both_sides_even_without_a_version()
+    {
+        // A record without a version cannot show the registry moved; the refusal can, and wins.
+        var path = Local("alpha", ("SKILL.md", Manifest("alpha", "mine")));
+        var hash = SkillFileReader.Hash(SkillFileReader.Read(path));
+        _ledger.Record(RegistryUri, path, new SkillLedgerEntry("synced", null, "alpha", null, hash, 2));
+        Publish("alpha", 2, ("SKILL.md", Manifest("alpha", "theirs")));
+
+        var pulled = await Build().PullAsync(Pull(), CancellationToken.None);
+
+        Assert.Equal(SkillPullStatus.ChangedBoth, Assert.Single(pulled.Entries).Status);
+        Assert.Equal(Manifest("alpha", "mine"), File.ReadAllText(Path.Combine(path, "SKILL.md")));
+    }
+
+    [Fact]
+    public async Task A_copy_that_never_synced_and_was_refused_is_changed_on_both_sides()
+    {
+        var path = Local("alpha", ("SKILL.md", Manifest("alpha", "mine")));
+        var hash = SkillFileReader.Hash(SkillFileReader.Read(path));
+        _ledger.Record(RegistryUri, path, new SkillLedgerEntry(string.Empty, 0, "alpha", null, hash, 1));
+        Publish("alpha", 1, ("SKILL.md", Manifest("alpha", "theirs")));
+
+        var result = await Build().CompareAsync(Remote(), CancellationToken.None);
+
+        Assert.Equal(SkillSyncState.ChangedBoth, Assert.Single(result.Skills).State);
+    }
+
+    [Fact]
+    public async Task Pull_force_keeps_theirs_and_clears_the_refusal()
+    {
+        var path = Local("alpha", ("SKILL.md", Manifest("alpha", "mine")));
+        var hash = SkillFileReader.Hash(SkillFileReader.Read(path));
+        _ledger.Record(RegistryUri, path, new SkillLedgerEntry("synced", 1, "alpha", null, hash, 2));
+        Publish("alpha", 2, ("SKILL.md", Manifest("alpha", "theirs")));
+
+        var pulled = await Build().PullAsync(Pull() with { Force = true }, CancellationToken.None);
+
+        var entry = Assert.Single(pulled.Entries);
+        Assert.Equal(SkillPullStatus.Updated, entry.Status);
+        Assert.Contains("overwritten", entry.Message);
+        Assert.Equal(Manifest("alpha", "theirs"), File.ReadAllText(Path.Combine(path, "SKILL.md")));
+        var recorded = _ledger.Get(RegistryUri, path)!;
+        Assert.Equal(2, recorded.Version);
+        Assert.Null(recorded.RefusedHash);
+    }
+
+    // ----- Pull an earlier version (#52) -----
+
+    [Fact]
+    public async Task Pull_version_installs_an_earlier_version_into_a_fresh_home()
+    {
+        _api.History["alpha@1"] = Publish("alpha", 1, ("SKILL.md", Manifest("alpha", "A's lost edit")));
+        Publish("alpha", 2, ("SKILL.md", Manifest("alpha", "B's edit")));
+
+        var result = await Build().PullAsync(Pull("alpha") with { Version = 1 }, CancellationToken.None);
+
+        var entry = Assert.Single(result.Entries);
+        Assert.Equal((SkillPullStatus.Installed, 1), (entry.Status, entry.Version));
+        Assert.Equal(1, result.Version);
+        var path = Path.Combine(SkillsDir, "alpha");
+        Assert.Equal(Manifest("alpha", "A's lost edit"), File.ReadAllText(Path.Combine(path, "SKILL.md")));
+        Assert.Equal(1, _ledger.Get(RegistryUri, path)!.Version);
+    }
+
+    [Fact]
+    public async Task Pull_version_replaces_an_unedited_copy_and_says_how_to_make_it_current()
+    {
+        _api.History["alpha@1"] = Publish("alpha", 1, ("SKILL.md", Manifest("alpha", "v1")));
+        Publish("alpha", 2, ("SKILL.md", Manifest("alpha", "v2")));
+        var path = Local("alpha", ("SKILL.md", Manifest("alpha", "v2")));
+        RecordSynced(path, 2);
+
+        var result = await Build().PullAsync(Pull("alpha") with { Version = 1 }, CancellationToken.None);
+
+        var entry = Assert.Single(result.Entries);
+        Assert.Equal((SkillPullStatus.Updated, 1), (entry.Status, entry.Version));
+        Assert.Contains("push alpha --force", entry.Message);
+        Assert.Equal(Manifest("alpha", "v1"), File.ReadAllText(Path.Combine(path, "SKILL.md")));
+    }
+
+    [Fact]
+    public async Task Pull_version_keeps_local_changes_unless_forced()
+    {
+        _api.History["alpha@1"] = Publish("alpha", 1, ("SKILL.md", Manifest("alpha", "v1")));
+        Publish("alpha", 2, ("SKILL.md", Manifest("alpha", "v2")));
+        var path = Local("alpha", ("SKILL.md", Manifest("alpha", "v2")));
+        RecordSynced(path, 2);
+        File.WriteAllText(Path.Combine(path, "SKILL.md"), Manifest("alpha", "my edit"));
+
+        var kept = await Build().PullAsync(Pull("alpha") with { Version = 1 }, CancellationToken.None);
+        Assert.Equal(SkillPullStatus.LocalChanges, Assert.Single(kept.Entries).Status);
+        Assert.Equal(Manifest("alpha", "my edit"), File.ReadAllText(Path.Combine(path, "SKILL.md")));
+
+        var forced = await Build().PullAsync(Pull("alpha") with { Version = 1, Force = true }, CancellationToken.None);
+        Assert.Equal(SkillPullStatus.Updated, Assert.Single(forced.Entries).Status);
+        Assert.Equal(Manifest("alpha", "v1"), File.ReadAllText(Path.Combine(path, "SKILL.md")));
+    }
+
+    [Fact]
+    public async Task Pull_version_of_a_copy_that_already_matches_it_writes_nothing_and_records_that_version()
+    {
+        _api.History["alpha@1"] = Publish("alpha", 1, ("SKILL.md", Manifest("alpha", "v1")));
+        Publish("alpha", 2, ("SKILL.md", Manifest("alpha", "v2")));
+        var path = Local("alpha", ("SKILL.md", Manifest("alpha", "v1")));
+
+        var result = await Build().PullAsync(Pull("alpha") with { Version = 1 }, CancellationToken.None);
+
+        Assert.Equal(SkillPullStatus.UpToDate, Assert.Single(result.Entries).Status);
+        Assert.Equal(1, _ledger.Get(RegistryUri, path)!.Version);
+    }
+
+    [Fact]
+    public async Task Pull_version_never_writes_a_conflict_even_with_force()
+    {
+        _api.History["foo@1"] = Publish("foo", 1);
+        Publish("foo", 2, ("SKILL.md", Manifest("foo", "v2")));
+        var path = Local("foo", ("SKILL.md", Manifest("bar")));
+
+        var result = await Build().PullAsync(Pull("foo") with { Version = 1, Force = true }, CancellationToken.None);
+
+        Assert.Equal(SkillPullStatus.Conflict, Assert.Single(result.Entries).Status);
+        Assert.Equal(Manifest("bar"), File.ReadAllText(Path.Combine(path, "SKILL.md")));
+    }
+
+    [Theory]
+    [InlineData(new string[0], 1, "name exactly one")]
+    [InlineData(new[] { "alpha", "beta" }, 1, "name exactly one")]
+    [InlineData(new[] { "alpha" }, 0, "1 or more")]
+    public async Task Version_needs_one_skill_name_and_a_version_number(string[] names, int version, string message)
+    {
+        Publish("alpha", 1);
+
+        var pull = await Build().PullAsync(Pull(names) with { Version = version }, CancellationToken.None);
+        var remote = await Build().CompareAsync(Remote() with { Names = names, Version = version }, CancellationToken.None);
+
+        Assert.Equal((SkillPullRunFailure.InvalidVersion, SkillPullRunFailure.InvalidVersion), (pull.Failure, remote.Failure));
+        Assert.Contains(message, pull.Detail);
+    }
+
+    [Fact]
+    public async Task A_version_the_registry_does_not_have_stops_the_run_before_anything_is_written()
+    {
+        Publish("alpha", 2);
+
+        var result = await Build().PullAsync(Pull("alpha") with { Version = 9 }, CancellationToken.None);
+
+        Assert.Equal(SkillPullRunFailure.VersionNotFound, result.Failure);
+        Assert.False(Directory.Exists(Path.Combine(SkillsDir, "alpha")));
+    }
+
+    [Fact]
+    public async Task Remote_version_shows_what_pulling_that_version_would_do()
+    {
+        _api.History["alpha@1"] = Publish("alpha", 1, ("SKILL.md", Manifest("alpha", "v1")));
+        Publish("alpha", 2, ("SKILL.md", Manifest("alpha", "v2")));
+        var path = Local("alpha", ("SKILL.md", Manifest("alpha", "v2")));
+        RecordSynced(path, 2);
+        Local("other", ("SKILL.md", Manifest("other")));
+
+        var result = await Build().CompareAsync(Remote() with { Names = ["alpha"], Version = 1 }, CancellationToken.None);
+
+        var alpha = Assert.Single(result.Skills);
+        Assert.Equal((SkillSyncState.UpdateAvailable, 1, 2), (alpha.State, alpha.Remote!.Version, alpha.LocalVersion));
+        Assert.Equal(1, result.Version);
+        Assert.Equal(File.ReadAllText(Path.Combine(path, "SKILL.md")), Manifest("alpha", "v2"));
     }
 
     [Fact]
@@ -778,8 +979,9 @@ public sealed class SkillPullServiceTests : IDisposable
         var remote = await Build().CompareAsync(Remote() with { ProjectStart = a }, CancellationToken.None);
         var pull = await Build().PullAsync(Pull() with { ProjectStart = a }, CancellationToken.None);
 
-        Assert.Equal(SkillSyncState.LocalChanges, Assert.Single(remote.Skills).State);
-        Assert.Equal(SkillPullStatus.LocalChanges, Assert.Single(pull.Entries).Status);
+        // Edited here from v1 while the moved skill reached v2: changed on both sides, so protected.
+        Assert.Equal(SkillSyncState.ChangedBoth, Assert.Single(remote.Skills).State);
+        Assert.Equal(SkillPullStatus.ChangedBoth, Assert.Single(pull.Entries).Status);
         Assert.Equal(Manifest("notes", "my edit"), File.ReadAllText(Path.Combine(path, "SKILL.md")));
         Assert.Equal(ProjectOf(a), _ledger.Get(RegistryUri, path)!.ProjectId);
     }
