@@ -16,11 +16,16 @@ namespace Protostar.Cli.Acceptance.Steps;
 public sealed partial class CliSteps : IDisposable
 {
     private readonly HarnessSandbox _harness;
+    private readonly StubRegistry _registry;
     private Sandbox? _sandbox;
     private BufferedCommandResult? _result;
 
-    // Reqnroll resolves one HarnessSandbox per scenario and injects it here.
-    public CliSteps(HarnessSandbox harness) => _harness = harness;
+    // Reqnroll resolves one HarnessSandbox and one StubRegistry per scenario and injects them here.
+    public CliSteps(HarnessSandbox harness, StubRegistry registry)
+    {
+        _harness = harness;
+        _registry = registry;
+    }
 
     private Sandbox Sandbox => _sandbox ??= new Sandbox();
 
@@ -62,6 +67,7 @@ public sealed partial class CliSteps : IDisposable
                 "{installDir}" => Sandbox.InstallDir,
                 "{harnessHome}" => _harness.ConfigDir,
                 "{protostar}" => CliRunner.BinaryPath,
+                "{registry}" => _registry.Url,
                 _ => token,
             })
             .ToList();
@@ -103,6 +109,19 @@ public sealed partial class CliSteps : IDisposable
         };
         File.WriteAllText(path, file.ToJsonString());
     }
+
+    // A registry whose /v1/meta lists only the given capabilities (comma-separated), with a current session stored for it.
+    [Given("I am signed in to a registry whose capabilities are {string}")]
+    public void GivenARegistryWithCapabilities(string capabilities)
+    {
+        var listed = new JsonArray([.. capabilities.Split(',', StringSplitOptions.RemoveEmptyEntries).Select(c => (JsonNode)JsonValue.Create(c.Trim()))]);
+        _registry.Start(new JsonObject { ["service"] = "protostar-registry", ["apiMajors"] = new JsonArray(1), ["capabilities"] = listed }.ToJsonString());
+        GivenAStoredSession(_registry.Url, "current");
+    }
+
+    [Then("the registry was asked only for its capabilities")]
+    public void ThenTheRegistryWasAskedOnlyForMeta() =>
+        Assert.All(_registry.Requests, r => Assert.StartsWith("GET /v1/meta ", r, StringComparison.Ordinal));
 
     [Given("a session transcript {string} in the harness")]
     public void GivenASessionTranscriptInTheHarness(string key)

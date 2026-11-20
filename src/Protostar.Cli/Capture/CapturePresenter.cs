@@ -52,6 +52,7 @@ internal static class CapturePresenter
             SkillPushRunFailure.NotLoggedIn => CaptureFailure.NotSignedIn,
             SkillPushRunFailure.SessionExpired => CaptureFailure.SessionExpired,
             SkillPushRunFailure.RegistryUnreachable => CaptureFailure.RegistryUnreachable,
+            SkillPushRunFailure.Incompatible => CaptureFailure.Incompatible,
             _ => CaptureFailure.Other,
         };
         return reason is null
@@ -153,6 +154,7 @@ internal static class CapturePresenter
         SessionSyncFailure.NotLoggedIn => CaptureFailure.NotSignedIn,
         SessionSyncFailure.SessionExpired => CaptureFailure.SessionExpired,
         SessionSyncFailure.RegistryUnreachable => CaptureFailure.RegistryUnreachable,
+        SessionSyncFailure.Incompatible => CaptureFailure.Incompatible,
         _ => CaptureFailure.Other,
     };
 

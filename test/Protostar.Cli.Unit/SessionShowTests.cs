@@ -111,11 +111,12 @@ public sealed class SessionReaderTests
     private const string SubagentId = SessionId + ".agent-a1b2";
 
     private readonly FakeTranscripts _api = new();
+    private readonly MetaOnlyRegistry _meta = new();
     private StoredToken? _token = new() { Registry = Registry, AccessToken = "tok", ExpiresAtUtc = DateTimeOffset.UtcNow.AddHours(1) };
 
     private ISessionReader Sut() => new SessionReader(
         new Catalog(new ClaudeCodeHarness(new ClaudeCodeSkillParser(), new ClaudeCodeSkillMapper())),
-        new Tokens(() => SessionLookups.Of(_token)), _api);
+        new Tokens(() => SessionLookups.Of(_token)), new RegistryCapabilities(_meta), _api);
 
     private Task<SessionOpenResult> Open(string id) => Sut().OpenAsync(Registry, null, id, CancellationToken.None);
 
@@ -140,9 +141,13 @@ public sealed class SessionReaderTests
         """{"type":"assistant","isSidechain":true,"message":{"content":[{"type":"text","text":"A demo."}]}}""",
     ];
 
+    // A registry from before the capability list (registry#15), which cannot look a prefix up.
+    private static RegistryMeta BeforeCapabilities => new() { ApiMajors = [1] };
+
     [Fact]
-    public async Task A_whole_id_is_looked_up_directly()
+    public async Task A_whole_id_is_looked_up_directly_on_a_registry_without_prefix_lookup()
     {
+        _meta.Meta = BeforeCapabilities;
         _api.Add(Session(SessionId), Conversation);
 
         var opened = await Open(SessionId);
@@ -150,6 +155,72 @@ public sealed class SessionReaderTests
         Assert.Equal(SessionOpenOutcome.Found, opened.Outcome);
         Assert.Equal(SessionId, opened.Session!.Detail.Transcript.Key);
         Assert.Equal(0, _api.Lists);
+    }
+
+    [Fact]
+    public async Task A_whole_id_is_one_prefix_lookup_on_a_registry_that_has_it()
+    {
+        _api.Add(Session(SessionId), Conversation);
+
+        var opened = await Open(SessionId);
+
+        Assert.Equal(SessionOpenOutcome.Found, opened.Outcome);
+        Assert.Equal([SessionId], _api.Prefixes);
+        Assert.Equal((1, 1), (_api.Lists, _api.Gets));
+    }
+
+    [Fact]
+    public async Task A_prefix_is_resolved_in_one_request_when_the_registry_lists_prefix_lookup()
+    {
+        for (var i = 0; i < 250; i++)
+            _api.Add(Session($"{i:x8}-0000-4000-8000-000000000000", minute: 1000 - i), []);
+        _api.Add(Session(SessionId, minute: 0), Conversation);
+
+        var opened = await Open("7d3c9a52");
+
+        Assert.Equal(SessionOpenOutcome.Found, opened.Outcome);
+        Assert.Equal(["7d3c9a52"], _api.Prefixes);
+        Assert.Equal(SessionReader.MaxCandidates + 1, _api.Limits.Single());
+        // The one lookup, then the session itself.
+        Assert.Equal((1, 1), (_api.Lists, _api.Gets));
+    }
+
+    [Fact]
+    public async Task A_prefix_shorter_than_the_registry_accepts_is_matched_by_paging()
+    {
+        _api.Add(Session(SessionId), Conversation);
+        _api.Add(Session("11111111-2222-4333-8444-555555555555"), []);
+
+        var opened = await Open("7d3");
+
+        Assert.Equal(SessionOpenOutcome.Found, opened.Outcome);
+        Assert.Empty(_api.Prefixes);
+        Assert.Equal(1, _api.Lists);
+    }
+
+    [Fact]
+    public async Task A_whole_subagent_id_is_still_found_when_no_session_starts_with_it()
+    {
+        _api.Add(Session(SessionId), Conversation);
+        _api.Add(new RemoteTranscript { Harness = "claude-code", Key = SubagentId, Kind = "subagent", ParentKey = SessionId }, SubagentLines);
+
+        var opened = await Open(SubagentId);
+
+        Assert.Equal(SessionOpenOutcome.Found, opened.Outcome);
+        Assert.Equal(SubagentId, opened.Session!.Detail.Transcript.Key);
+        Assert.Equal([SubagentId], _api.Prefixes);
+    }
+
+    [Fact]
+    public async Task A_registry_that_lists_capabilities_without_sessions_is_refused_before_anything_is_asked()
+    {
+        _meta.Meta = new RegistryMeta { ApiMajors = [1], Capabilities = ["skills"] };
+
+        var opened = await Open(SessionId);
+
+        Assert.Equal((SessionOpenOutcome.Failed, SessionSyncFailure.Incompatible), (opened.Outcome, opened.Failure));
+        Assert.Equal("This registry is too old for session backups. Update the registry.", opened.Detail);
+        Assert.Equal((0, 0), (_api.Lists, _api.Gets));
     }
 
     [Fact]
@@ -174,11 +245,13 @@ public sealed class SessionReaderTests
 
         Assert.Equal(SessionOpenOutcome.Ambiguous, opened.Outcome);
         Assert.Equal(["7d3c1111-2222-4333-8444-555555555555", SessionId], opened.Candidates.Select(c => c.Key));
+        Assert.Equal(["7d3c"], _api.Prefixes);
     }
 
     [Fact]
-    public async Task A_prefix_is_matched_on_every_page_of_the_list()
+    public async Task A_prefix_is_matched_on_every_page_of_the_list_on_a_registry_without_prefix_lookup()
     {
+        _meta.Meta = BeforeCapabilities;
         for (var i = 0; i < 250; i++)
             _api.Add(Session($"{i:x8}-0000-4000-8000-000000000000", minute: 1000 - i), []);
         _api.Add(Session(SessionId, minute: 0), Conversation);
@@ -315,6 +388,10 @@ public sealed class SessionReaderTests
 
         public int Gets { get; private set; }
         public int Lists { get; private set; }
+
+        /// <summary>The <c>keyPrefix</c> of every list that sent one, and the limit it asked for.</summary>
+        public List<string> Prefixes { get; } = [];
+        public List<int> Limits { get; } = [];
         public string? GetError { get; set; }
         public int? CutOffAfterBytes { get; set; }
 
@@ -338,13 +415,22 @@ public sealed class SessionReaderTests
             var session = _sessions.FirstOrDefault(s => s.Harness == harness && s.Key == key);
             return Task.FromResult(session is null
                 ? ApiResult<TranscriptDetail>.UnknownTranscript("No transcript with that harness and key.")
-                : ApiResult<TranscriptDetail>.Success(new TranscriptDetail(session, _subagents[key])));
+                : ApiResult<TranscriptDetail>.Success(new TranscriptDetail(session, _subagents.GetValueOrDefault(key) ?? [])));
         }
 
         public Task<ApiResult<IReadOnlyList<RemoteTranscript>>> ListAsync(Uri registry, string accessToken, TranscriptListQuery query, CancellationToken cancellationToken)
         {
             Lists++;
+            if (query.KeyPrefix is { } prefix)
+            {
+                Prefixes.Add(prefix);
+                Limits.Add(query.Limit);
+            }
+
+            // Sessions only, as the registry lists them by default.
             IReadOnlyList<RemoteTranscript> page = [.. _sessions
+                .Where(s => s.Kind == "session")
+                .Where(s => query.KeyPrefix is null || s.Key.StartsWith(query.KeyPrefix, StringComparison.OrdinalIgnoreCase))
                 .Where(s => query.Before is null || s.LastActivityAt < query.Before)
                 .OrderByDescending(s => s.LastActivityAt)
                 .Take(query.Limit)];

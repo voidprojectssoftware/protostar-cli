@@ -96,7 +96,7 @@ internal enum SkillPushRunFailure
     /// <summary>The registry did not answer its metadata endpoint.</summary>
     RegistryUnreachable,
 
-    /// <summary>The registry does not speak this CLI's API major.</summary>
+    /// <summary>The registry does not speak this CLI's API major, or lacks a feature the push needs; the detail says which.</summary>
     Incompatible,
 
     /// <summary>
@@ -117,11 +117,13 @@ internal sealed record SkillPushEntry(DiscoveredSkill Skill, SkillPushOutcome Ou
 /// <param name="Detail">The offending value or explanation for a failure; <c>null</c> otherwise.</param>
 /// <param name="Registry">The registry the run targeted; <c>null</c> when its URL was invalid.</param>
 /// <param name="Entries">One entry per discovered skill, in discovery order; empty on an early failure.</param>
+/// <param name="Warning">Something the run went ahead despite, such as a <c>--force</c> push to a registry without stale protection.</param>
 internal sealed record SkillPushRunResult(
     SkillPushRunFailure Failure,
     string? Detail,
     Uri? Registry,
-    IReadOnlyList<SkillPushEntry> Entries)
+    IReadOnlyList<SkillPushEntry> Entries,
+    string? Warning = null)
 {
     /// <summary>True when the run went ahead and every skill reached the registry.</summary>
     public bool Succeeded => Failure == SkillPushRunFailure.None && Entries.All(e => e.Outcome.Succeeded || e.Outcome.Status == SkillPushStatus.Skipped);

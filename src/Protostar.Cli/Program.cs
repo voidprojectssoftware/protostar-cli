@@ -32,6 +32,7 @@ services.AddSingleton<IAccessTokenProvider, AccessTokenProvider>();
 services.AddSingleton<RegistryApi>();
 services.AddSingleton<IRegistryApi>(sp => sp.GetRequiredService<RegistryApi>());
 services.AddSingleton<ITranscriptApi>(sp => sp.GetRequiredService<RegistryApi>());
+services.AddSingleton<IRegistryCapabilities, RegistryCapabilities>();
 services.AddSingleton<ISessionLedger, SessionLedger>();
 services.AddSingleton<IMachineIdentity, MachineIdentity>();
 services.AddSingleton(TimeProvider.System);

@@ -26,7 +26,7 @@ public sealed class MemorySyncTests : IDisposable
     public void Dispose() => Directory.Delete(_root, recursive: true);
 
     private IMemorySyncService Sut() => new MemorySyncService(
-        new FakeCatalog(_harness), new FakeTokens(() => SessionLookups.Of(_token)), _registry, _registry, _registry, _ledger, new FakeMachine(), _projects, _registry);
+        new FakeCatalog(_harness), new FakeTokens(() => SessionLookups.Of(_token)), new RegistryCapabilities(_registry), _registry, _registry, _ledger, new FakeMachine(), _projects, _registry);
 
     private Task<MemoryPushResult> Push(string? sessionPath = null) =>
         Sut().PushAsync(new MemoryPushRequest(Registry, _root, sessionPath), CancellationToken.None);

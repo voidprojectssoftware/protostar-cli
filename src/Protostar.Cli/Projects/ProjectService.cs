@@ -36,6 +36,9 @@ internal enum ProjectFailure
 
     /// <summary>The registry could not be reached or refused the request; <c>Detail</c> says which.</summary>
     Failed,
+
+    /// <summary>The registry speaks another API major or has no projects; <c>Detail</c> says which.</summary>
+    Incompatible,
 }
 
 /// <summary>A folder's local facts and, when the registry answered, its project.</summary>
@@ -59,14 +62,17 @@ internal sealed class ProjectService : IProjectService
 {
     private readonly IProjectFactsResolver _facts;
     private readonly IAccessTokenProvider _tokens;
+    private readonly IRegistryCapabilities _capabilities;
     private readonly IProjectApi _api;
     private readonly IMachineIdentity _machine;
     private readonly ISkillLedger _ledger;
 
-    public ProjectService(IProjectFactsResolver facts, IAccessTokenProvider tokens, IProjectApi api, IMachineIdentity machine, ISkillLedger ledger)
+    public ProjectService(
+        IProjectFactsResolver facts, IAccessTokenProvider tokens, IRegistryCapabilities capabilities, IProjectApi api, IMachineIdentity machine, ISkillLedger ledger)
     {
         _facts = facts;
         _tokens = tokens;
+        _capabilities = capabilities;
         _api = api;
         _machine = machine;
         _ledger = ledger;
@@ -129,14 +135,23 @@ internal sealed class ProjectService : IProjectService
         }
 
         var lookup = await _tokens.GetSessionAsync(uri, cancellationToken);
-        if (lookup is { State: SessionState.Current, Session: { } stored })
-            return (uri, stored.AccessToken, ProjectFailure.None, null);
-        return lookup.State switch
+        if (lookup is not { State: SessionState.Current, Session: { } stored })
         {
-            SessionState.None => (uri, null, ProjectFailure.NotLoggedIn, null),
-            // Failed with no detail reads "could not reach" the registry.
-            SessionState.RegistryUnreachable => (uri, null, ProjectFailure.Failed, null),
-            _ => (uri, null, ProjectFailure.SessionExpired, null),
+            return lookup.State switch
+            {
+                SessionState.None => (uri, null, ProjectFailure.NotLoggedIn, null),
+                // Failed with no detail reads "could not reach" the registry.
+                SessionState.RegistryUnreachable => (uri, null, ProjectFailure.Failed, null),
+                _ => (uri, null, ProjectFailure.SessionExpired, null),
+            };
+        }
+
+        var check = await _capabilities.RequireAsync(uri, cancellationToken, RegistryCapability.Projects);
+        return check.Failure switch
+        {
+            RegistryCheckFailure.None => (uri, stored.AccessToken, ProjectFailure.None, null),
+            RegistryCheckFailure.Unreachable => (uri, null, ProjectFailure.Failed, null),
+            _ => (uri, null, ProjectFailure.Incompatible, check.Detail),
         };
     }
 }

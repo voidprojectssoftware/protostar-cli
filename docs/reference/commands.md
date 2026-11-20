@@ -198,7 +198,7 @@ Takes the same options as `protostar skills`, plus:
 | Option | Description |
 |---|---|
 | `--registry <URL>` | Registry to back up to. Defaults to `PROTOSTAR_REGISTRY_URL`, then the saved default, then `https://localhost:7443`. |
-| `--force` | Upload every selected skill even if it has not changed since its last backup. When the registry has a newer version than the one this copy was based on, replace it (keep yours): the output names the version replaced, which stays in the registry's history. |
+| `--force` | Upload every selected skill even if it has not changed since its last backup. When the registry has a newer version than the one this copy was based on, replace it (keep yours): the output names the version replaced, which stays in the registry's history. Also needed to push to a registry that cannot detect overwrites (it lists capabilities without `stale-skill-push`); the push then warns. See [Troubleshooting](troubleshooting.md#registry-too-old). |
 | `--as <NEW-NAME>` | Push the one named skill as a new registry skill called `NEW-NAME`, and rename the copy here to match (its `SKILL.md` name, and its folder when the folder has the old name). Refused before anything is pushed or changed when `NEW-NAME` is already taken in the skill's scope (global, or its project): by another skill here (its folder or its `SKILL.md` name, in any harness), by any folder of that name beside it, or by a registry skill, or one deleted or renamed away from the registry. The refusal names what holds the name and suggests a free one. |
 
 protostar remembers what it last backed up to each registry in
@@ -779,7 +779,10 @@ $ protostar sessions show 7d3c9a52 --full
 A session is shown as it downloads, so even a very large one starts at once and
 uses little memory. An id that matches nothing says so and suggests
 `protostar sessions list`. A prefix that matches several sessions lists them,
-and you give more of the id. Either way the exit code is `1`.
+and you give more of the id. Either way the exit code is `1`. A prefix of 4
+characters or more is looked up in one request on a registry that lists
+`transcript-prefix-lookup`; a shorter one, or any prefix on an older registry,
+is matched by reading the session list a page at a time.
 
 | Option | Description |
 |---|---|

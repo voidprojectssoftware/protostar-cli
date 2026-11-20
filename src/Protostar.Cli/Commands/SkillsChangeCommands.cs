@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using Protostar.Cli.Auth;
 using Protostar.Cli.Harness;
 using Protostar.Cli.Skills;
 using Spectre.Console.Cli;
@@ -20,8 +21,8 @@ internal class SkillChangeSettings : CommandSettings
     [Description("Registry base URL. Defaults to $PROTOSTAR_REGISTRY_URL, then the registry saved by setup or auth login, then the built-in dev default.")]
     public string? Registry { get; init; }
 
-    public SkillTargetRequest Target(string name) =>
-        new(name, Registry, GlobalOnly ? null : Project ?? Directory.GetCurrentDirectory());
+    public SkillTargetRequest Target(string name, string needs) =>
+        new(name, Registry, GlobalOnly ? null : Project ?? Directory.GetCurrentDirectory(), needs);
 }
 
 /// <summary><c>protostar skills delete &lt;name&gt;</c>: deletes a skill and all its versions from the registry, never the local copy.</summary>
@@ -49,7 +50,7 @@ internal sealed class SkillsDeleteCommand : AsyncCommand<SkillsDeleteCommand.Set
 
     protected override async Task<int> ExecuteAsync(CommandContext context, Settings settings, CancellationToken cancellation)
     {
-        var found = await _changes.FindAsync(settings.Target(settings.Name), cancellation);
+        var found = await _changes.FindAsync(settings.Target(settings.Name, RegistryCapability.SkillDelete), cancellation);
         if (SkillChangePresenter.RenderFindFailure(found, _catalog) is { } failed)
             return failed;
         if (SkillChangePresenter.ConfirmDelete(found.Target!, settings.Yes, Console.IsInputRedirected) is { } declined)
@@ -83,7 +84,7 @@ internal sealed class SkillsRenameCommand : AsyncCommand<SkillsRenameCommand.Set
 
     protected override async Task<int> ExecuteAsync(CommandContext context, Settings settings, CancellationToken cancellation)
     {
-        var found = await _changes.FindAsync(settings.Target(settings.OldName), cancellation);
+        var found = await _changes.FindAsync(settings.Target(settings.OldName, RegistryCapability.SkillRename), cancellation);
         if (SkillChangePresenter.RenderFindFailure(found, _catalog) is { } failed)
             return failed;
         return SkillChangePresenter.RenderRename(await _changes.RenameAsync(found.Target!, settings.NewName, cancellation));

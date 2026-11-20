@@ -1,3 +1,4 @@
+using Protostar.Cli.Auth;
 using Protostar.Cli.Harness;
 using Protostar.Cli.Registry;
 
@@ -79,7 +80,7 @@ internal sealed partial class SessionSyncService
         Uri registry, IReadOnlyList<(LocalTranscript Transcript, UploadPlan Plan)> located, bool registerMachine,
         CancellationToken cancellationToken)
     {
-        var connected = await ConnectAsync(registry, cancellationToken, registerMachine);
+        var connected = await ConnectAsync(registry, cancellationToken, registerMachine, RegistryCapability.TranscriptLookup);
         if (connected.Failure != SessionSyncFailure.None)
             return new Verification(connected.Failure, connected.Detail, null, null);
 

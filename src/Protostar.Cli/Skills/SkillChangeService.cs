@@ -12,16 +12,19 @@ internal sealed partial class SkillChangeService : ISkillChangeService
 {
     private readonly IAccessTokenProvider _tokens;
     private readonly IRegistryApi _registry;
+    private readonly IRegistryCapabilities _capabilities;
     private readonly ISkillLedger _ledger;
     private readonly IProjectFactsResolver _facts;
     private readonly IProjectApi _projects;
     private readonly IMachineIdentity _machine;
 
     public SkillChangeService(
-        IAccessTokenProvider tokens, IRegistryApi registry, ISkillLedger ledger, IProjectFactsResolver facts, IProjectApi projects, IMachineIdentity machine)
+        IAccessTokenProvider tokens, IRegistryApi registry, IRegistryCapabilities capabilities, ISkillLedger ledger, IProjectFactsResolver facts,
+        IProjectApi projects, IMachineIdentity machine)
     {
         _tokens = tokens;
         _registry = registry;
+        _capabilities = capabilities;
         _ledger = ledger;
         _facts = facts;
         _projects = projects;
@@ -45,11 +48,12 @@ internal sealed partial class SkillChangeService : ISkillChangeService
         if (lookup is not { State: SessionState.Current, Session: { } session })
             return SkillTargetResult.Fail(SkillPullService.Failure(lookup.State), null, registry);
 
-        var meta = await _registry.GetMetaAsync(registry, cancellationToken);
-        if (meta is null)
-            return SkillTargetResult.Fail(SkillPullRunFailure.RegistryUnreachable, null, registry);
-        if (ApiCompatibility.Check(meta) is { } incompatibility)
-            return SkillTargetResult.Fail(SkillPullRunFailure.Incompatible, incompatibility, registry);
+        // A project skill needs the registry's projects too; the global skill does not.
+        var check = request.ProjectStart is null
+            ? await _capabilities.RequireAsync(registry, cancellationToken, RegistryCapability.Skills, request.Needs)
+            : await _capabilities.RequireAsync(registry, cancellationToken, RegistryCapability.Skills, request.Needs, RegistryCapability.ProjectSkills, RegistryCapability.Projects);
+        if (!check.Ok)
+            return SkillTargetResult.Fail(SkillPullService.Failure(check), check.Detail, registry);
 
         var list = await _registry.ListSkillsAsync(registry, session.AccessToken, cancellationToken);
         if (list.Skills is not { } skills)

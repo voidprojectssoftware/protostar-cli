@@ -57,7 +57,11 @@ internal interface ISkillChangeService
 /// <param name="Name">The registry skill's exact name.</param>
 /// <param name="Registry">The <c>--registry</c> option; <c>null</c> falls back to the environment, the saved default, then the built-in one.</param>
 /// <param name="ProjectStart">The folder whose project's skill is meant; <c>null</c> means the global skill only.</param>
-internal sealed record SkillTargetRequest(string Name, string? Registry, string? ProjectStart);
+/// <param name="Needs">
+/// The capability the change will use (<see cref="Auth.RegistryCapability.SkillRename"/> or <see cref="Auth.RegistryCapability.SkillDelete"/>),
+/// checked before anything is looked up so an old registry is refused before the user is asked to confirm.
+/// </param>
+internal sealed record SkillTargetRequest(string Name, string? Registry, string? ProjectStart, string Needs);
 
 /// <summary>A registry skill to rename or delete, with what is needed to change it.</summary>
 /// <param name="Registry">The registry it is in.</param>

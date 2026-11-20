@@ -23,7 +23,9 @@ public sealed class ProjectServiceTests : IDisposable
 
     public void Dispose() => Directory.Delete(_folder, recursive: true);
 
-    private ProjectService Sut() => new(_resolver, new FakeTokens(() => _session ?? SessionLookups.Of(_token)), _api, new FakeMachine(), _ledger);
+    private readonly MetaOnlyRegistry _meta = new();
+
+    private ProjectService Sut() => new(_resolver, new FakeTokens(() => _session ?? SessionLookups.Of(_token)), new RegistryCapabilities(_meta), _api, new FakeMachine(), _ledger);
 
     [Fact]
     public async Task Show_asks_the_registry_with_the_facts_the_session_resolver_gives()
@@ -35,6 +37,19 @@ public sealed class ProjectServiceTests : IDisposable
         Assert.Equal([_folder], _resolver.Asked);
         Assert.Same(result.Facts, _api.LastFacts);
         Assert.Equal(MachineId, _api.LastMachine);
+    }
+
+    [Fact]
+    public async Task A_registry_without_projects_is_refused_before_it_is_asked_and_local_facts_still_show()
+    {
+        _meta.Meta = new RegistryMeta { ApiMajors = [1], Capabilities = ["sessions"] };
+
+        var result = await Sut().ShowAsync(Registry, _folder, CancellationToken.None);
+
+        Assert.Equal(ProjectFailure.Incompatible, result.Failure);
+        Assert.Equal("This registry is too old for projects. Update the registry.", result.Detail);
+        Assert.NotNull(result.Facts);
+        Assert.Equal(0, _api.Calls);
     }
 
     [Fact]

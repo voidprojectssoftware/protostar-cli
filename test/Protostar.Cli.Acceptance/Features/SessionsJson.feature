@@ -39,3 +39,19 @@ Feature: Session commands give agents structured results
   Scenario: sessions show needs an id
     When I run protostar with "sessions show"
     Then the exit code is not 0
+
+  Scenario: A registry too old for sessions is refused by name, not with a 404
+    Given I am signed in to a registry whose capabilities are "skills,search"
+    When I run protostar with "sessions show 7d3c9a52 --registry {registry}"
+    Then the exit code is 1
+    And the output contains "This registry is too old for session backups. Update the registry."
+    And the registry was asked only for its capabilities
+
+  Scenario: A registry too old for sessions is registry_incompatible under --json
+    Given I am signed in to a registry whose capabilities are "skills,search"
+    When I run protostar with "sessions show 7d3c9a52 --json --registry {registry}"
+    Then the exit code is 1
+    And standard output is empty
+    And standard error is a JSON error with code "registry_incompatible"
+    And the output contains "too old for session backups"
+    And the registry was asked only for its capabilities

@@ -58,6 +58,7 @@ internal sealed class SkillPullService : ISkillPullService
     private readonly IHarnessCatalog _catalog;
     private readonly IAccessTokenProvider _tokens;
     private readonly IRegistryApi _registry;
+    private readonly IRegistryCapabilities _capabilities;
     private readonly ISkillLedger _ledger;
     private readonly IProjectFactsResolver _facts;
     private readonly IProjectApi _projects;
@@ -67,6 +68,7 @@ internal sealed class SkillPullService : ISkillPullService
         IHarnessCatalog catalog,
         IAccessTokenProvider tokens,
         IRegistryApi registry,
+        IRegistryCapabilities capabilities,
         ISkillLedger ledger,
         IProjectFactsResolver facts,
         IProjectApi projects,
@@ -75,6 +77,7 @@ internal sealed class SkillPullService : ISkillPullService
         _catalog = catalog;
         _tokens = tokens;
         _registry = registry;
+        _capabilities = capabilities;
         _ledger = ledger;
         _facts = facts;
         _projects = projects;
@@ -696,11 +699,12 @@ internal sealed class SkillPullService : ISkillPullService
         if (lookup is not { State: SessionState.Current, Session: { } session })
             return Context.Fail(SkillPullService.Failure(lookup.State), null, registry);
 
-        var meta = await _registry.GetMetaAsync(registry, cancellationToken);
-        if (meta is null)
-            return Context.Fail(SkillPullRunFailure.RegistryUnreachable, null, registry);
-        if (ApiCompatibility.Check(meta) is { } incompatibility)
-            return Context.Fail(SkillPullRunFailure.Incompatible, incompatibility, registry);
+        // Project skills are only looked for from a folder; without one a registry without them is fine.
+        var check = projectStart is null
+            ? await _capabilities.RequireAsync(registry, cancellationToken, RegistryCapability.Skills)
+            : await _capabilities.RequireAsync(registry, cancellationToken, RegistryCapability.Skills, RegistryCapability.ProjectSkills, RegistryCapability.Projects);
+        if (!check.Ok)
+            return Context.Fail(Failure(check), check.Detail, registry);
 
         var list = await _registry.ListSkillsAsync(registry, session.AccessToken, cancellationToken);
         if (list.Skills is not { } skills)
@@ -731,6 +735,10 @@ internal sealed class SkillPullService : ISkillPullService
             ? new Here(resolved.Value!.ProjectId, resolved.Value.Name, root, null)
             : new Here(null, null, null, resolved.Error);
     }
+
+    // Why a command that lists the registry's skills stops when the registry check fails; shared with SkillChangeService.
+    internal static SkillPullRunFailure Failure(RegistryCheck check) =>
+        check.Failure == RegistryCheckFailure.Unreachable ? SkillPullRunFailure.RegistryUnreachable : SkillPullRunFailure.Incompatible;
 
     // Why a command that lists the registry's skills stops when there is no current session; shared with SkillChangeService.
     internal static SkillPullRunFailure Failure(SessionState session) => session switch
