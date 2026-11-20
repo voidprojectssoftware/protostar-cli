@@ -59,6 +59,10 @@ app.Configure(config =>
     config.SetApplicationName("protostar");
     config.SetApplicationVersion(CliInfo.Version);
 
+    // Every option belongs to a subcommand; one typed before it (`skills --global-only push`) is refused with the
+    // command line that puts it after, instead of being silently dropped. See OptionPlacementGuard.
+    config.SetInterceptor(new OptionPlacementGuard());
+
     config.AddCommand<SetupCommand>("setup")
         .WithDescription("Set up this machine in one step: sign in, install hooks, push and pull skills, and back up sessions. Safe to run again.");
     config.AddCommand<InstallCommand>("install")

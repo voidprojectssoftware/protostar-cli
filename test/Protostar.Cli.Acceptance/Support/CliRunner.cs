@@ -41,6 +41,26 @@ public static class CliRunner
             .ExecuteBufferedAsync();
     }
 
+    /// <summary>
+    /// Runs a whole command line through the platform shell, the way a harness runs an installed hook: the line is
+    /// handed over exactly as written, quoting included, with <paramref name="stdin"/> piped in.
+    /// </summary>
+    public static async Task<BufferedCommandResult> RunShellAsync(string commandLine, string stdin, string harnessRoot)
+    {
+        var shell = OperatingSystem.IsWindows()
+            ? CliWrap.Cli.Wrap("cmd.exe").WithArguments($"/d /s /c \"{commandLine}\"")
+            : CliWrap.Cli.Wrap("/bin/sh").WithArguments(["-c", commandLine]);
+
+        return await shell
+            .WithEnvironmentVariables(env => env
+                .Set("PROTOSTAR_CONFIG_DIR", LazyConfigDir.Value)
+                .Set("PROTOSTAR_HARNESS_ROOT", harnessRoot)
+                .Build())
+            .WithStandardInputPipe(PipeSource.FromString(stdin))
+            .WithValidation(CommandResultValidation.None)
+            .ExecuteBufferedAsync();
+    }
+
     private static string ResolveBinary()
     {
         // CI publishes a self-contained binary and points us at it.

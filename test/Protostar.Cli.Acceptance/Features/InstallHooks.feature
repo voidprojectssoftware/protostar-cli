@@ -78,3 +78,9 @@ Feature: Installing capture hooks into a harness
     When I run protostar with "capture --hook PostToolUse"
     Then the exit code is 0
     And the output contains "protostar capture"
+
+  Scenario: The exact hook command lines install-hooks writes still parse
+    Given a fake claude-code harness
+    When I run protostar with "install-hooks --harness claude-code --harness-home {harnessHome} --exe-path {protostar} --yes"
+    Then the exit code is 0
+    And every installed hook command runs through the shell and names its own event
