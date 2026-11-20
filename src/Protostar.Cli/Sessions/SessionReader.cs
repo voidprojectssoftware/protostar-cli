@@ -268,21 +268,9 @@ internal sealed class SessionReader : ISessionReader
                     if (!full && read is ToolResultEntry || !full && read.Sidechain)
                         continue;
 
-                    // Only the result of a call that ran a subagent names one (#121): an agent id on any other result is
-                    // text that happens to mention it, and must neither take the subagent nor reach the JSON.
-                    var entry = read;
-                    SubagentCall? subagent = null;
-                    if (read is ToolResultEntry { AgentId: not null } named)
-                    {
-                        subagent = calls.GetValueOrDefault(named.ToolUseId)?.Subagent;
-                        if (subagent is null)
-                            entry = named with { AgentId = null };
-                    }
-
+                    var entry = Linked(read, calls, out var subagent);
                     yield return new ShownEntry(transcript.Key, entry.Sidechain ? 1 : 0, entry);
 
-                    if (entry is ToolCallEntry call)
-                        calls[call.Id] = call;
                     if (entry is ToolResultEntry { AgentId: { } agentId } &&
                         subagents.Remove($"{transcript.Key}.agent-{agentId}", out var ran))
                     {
@@ -305,17 +293,37 @@ internal sealed class SessionReader : ISessionReader
         }
     }
 
+    // The entry as shown, with `calls` updated. Only the result of a call that ran a subagent names one (#121): an
+    // agent id on any other result is text that happens to mention it, so it is cleared, and neither takes a subagent
+    // nor reaches the JSON. `subagent` is what the call that ran it asked for, when the result keeps its id.
+    private static ConversationEntry Linked(ConversationEntry read, Dictionary<string, ToolCallEntry> calls, out SubagentCall? subagent)
+    {
+        subagent = null;
+        switch (read)
+        {
+            case ToolCallEntry call:
+                calls[call.Id] = call;
+                return read;
+            case ToolResultEntry { AgentId: not null } result:
+                subagent = calls.GetValueOrDefault(result.ToolUseId)?.Subagent;
+                return subagent is null ? result with { AgentId = null } : read;
+            default:
+                return read;
+        }
+    }
+
     private static async IAsyncEnumerable<ShownEntry> SubagentAsync(
         OpenedSession session, RemoteTranscript subagent, string file, SubagentCall? call, bool linked,
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
         yield return new ShownEntry(subagent.Key, 1, new SubagentStartEntry(subagent.Key, call?.AgentType, call?.Description ?? subagent.Title, linked));
+        var calls = new Dictionary<string, ToolCallEntry>(StringComparer.Ordinal);
         using (var reader = new StreamReader(file))
         {
             while (await reader.ReadLineAsync(cancellationToken) is { } line)
             {
                 foreach (var entry in session.Format.ReadConversationLine(line))
-                    yield return new ShownEntry(subagent.Key, 1, entry);
+                    yield return new ShownEntry(subagent.Key, 1, Linked(entry, calls, out _));
             }
         }
 

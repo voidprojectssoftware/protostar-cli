@@ -421,6 +421,23 @@ public sealed class SessionReaderTests
     }
 
     [Fact]
+    public async Task A_result_inside_a_subagent_that_mentions_an_agent_id_carries_no_id()
+    {
+        string[] inside =
+        [
+            """{"type":"assistant","isSidechain":true,"message":{"content":[{"type":"tool_use","id":"s0","name":"Bash","input":{"command":"grep agentId log.txt"}}]}}""",
+            """{"type":"user","isSidechain":true,"message":{"content":[{"type":"tool_result","tool_use_id":"s0","content":"log.txt:3: agentId: zz99"}]}}""",
+        ];
+        _api.Add(Session(SessionId), Conversation, (SubagentId, inside));
+
+        var shown = await ReadAll(full: true);
+
+        var result = Assert.Single(shown, s => s.TranscriptId == SubagentId && s.Entry is ToolResultEntry);
+        Assert.Null(((ToolResultEntry)result.Entry).AgentId);
+        Assert.False(SessionsJson.ShowRecord(result, "claude-code", full: true).AsObject().ContainsKey("agentId"));
+    }
+
+    [Fact]
     public async Task On_an_older_harness_the_agent_id_ending_a_subagent_calls_result_text_still_links_it()
     {
         string[] lines =
