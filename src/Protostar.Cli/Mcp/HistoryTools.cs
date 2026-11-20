@@ -196,7 +196,7 @@ internal sealed class HistoryTools
         switch (result.Outcome)
         {
             case MemoryReadOutcome.NotFound:
-                return Error(SessionsJson.NotFound, result.Detail ?? "Not found.", Projects(result.Candidates));
+                return Error(SessionsJson.NotFound, result.Detail ?? "Not found.", result.Candidates.Count > 0 ? Projects(result.Candidates) : null);
             case MemoryReadOutcome.Ambiguous:
                 return Error(AmbiguousProject, $"'{project}' matches more than one project with memory. Give its id.", Projects(result.Candidates));
             case MemoryReadOutcome.Failed:
