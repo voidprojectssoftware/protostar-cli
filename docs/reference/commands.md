@@ -8,6 +8,10 @@ title: Command reference
 Every `protostar` command and its options. Run `protostar --help` or
 `protostar <command> --help` for the same information at the terminal.
 
+Options go after the command they belong to: `protostar sessions list --json`,
+`protostar project show --dir ../other`. An option written before a subcommand
+(`protostar skills --global-only push`) is not applied to it.
+
 ## Global
 
 ```console
@@ -100,6 +104,8 @@ each skill you see one of:
   content was pushed in this run (two harnesses' global skills, say). The registry
   holds one skill per name in each scope, so this copy is not backed up; rename one
   of them to back up both.
+- **failed**: the upload did not complete (for example, the registry was
+  unreachable).
 
 A project skill (one in a project's `.claude/skills`) is backed up as that
 project's skill: protostar works out the project from the folder the skill's
@@ -107,8 +113,6 @@ project's skill: protostar works out the project from the folder the skill's
 global `deploy` and a project's `deploy`, or two projects' `deploy`, are separate
 skills in the registry with separate versions. The scope column shows which
 project the registry filed it under.
-- **failed**: the upload did not complete (for example, the registry was
-  unreachable).
 
 Every file in the skill's directory is uploaded, except version control and
 dependency folders (`.git`, `.hg`, `.svn`, `node_modules`, `__pycache__`, `.venv`),
@@ -207,6 +211,271 @@ conflict. Skills kept because of local changes do not count as failures.
 | `--global-only` | Only pull global skills. |
 | `--registry <URL>` | Registry to pull from. Defaults to `PROTOSTAR_REGISTRY_URL`, then the saved default, then `https://localhost:7443`. |
 | `--force` | Overwrite skills that have local changes. Never overrides a conflict. |
+
+### `protostar skills rename <OLD> <NEW>`
+
+Rename a skill in the registry. Its version history comes with it, and this
+machine's copies follow: the local folder is renamed, its `SKILL.md` gets the new
+name, and that change is pushed as a new version. You must be
+[signed in](../get-started/authenticate.md) first.
+
+```console
+$ protostar skills rename notes journal
+Renamed the global skill notes to journal in https://localhost:7579. Its version
+history came with it.
+Its SKILL.md now names it journal: pushed as v2.
+Local copy renamed here: ~/.claude/skills/notes -> ~/.claude/skills/journal
+Other machines still have it under the old name: there it shows as only on that
+machine, and the new name as not installed, until they pull it and remove the
+old folder.
+```
+
+`<OLD>` must be the registry skill's exact current name. When the current folder
+is in a project with a project skill of that name, that skill is meant;
+otherwise the global skill is. A name the registry does not have is an error
+(exit `1`).
+
+| Option | Description |
+|---|---|
+| `--project <DIR>` | The folder whose project skill is meant. Defaults to the current directory; with no project skill of that name there, the global skill is meant. |
+| `--global-only` | Only the global skill of that name, even when this folder's project has one. |
+| `--registry <URL>` | Registry to change. Defaults to `PROTOSTAR_REGISTRY_URL`, then the saved default, then `https://localhost:7443`. |
+
+### `protostar skills delete <NAME>`
+
+Delete a skill and every one of its versions from the registry. It cannot be
+undone. Local copies are never deleted: the command lists them, and afterwards
+`protostar skills remote` shows them as **only here (not backed up)**. A local copy
+is backed up again, as a new skill, once it differs from what was last pushed.
+
+The command says what it is about to delete and asks first. With no terminal to
+ask on (a script, a pipe) it refuses unless you pass `--yes`:
+
+```console
+$ protostar skills delete journal < /dev/null
+This deletes the global skill journal from https://localhost:7579, with all 2 of
+its versions. It cannot be undone.
+This machine has a copy at ~/.claude/skills/journal.
+Local copies are not deleted: only the registry's copy goes.
+Not deleted: confirmation is needed and there is no terminal to ask on. Pass
+--yes to delete without asking.
+```
+
+Which skill a name means works as for `rename`. The exit code is `0` when the
+skill was deleted or you answered no, and `1` when it was not found, the
+registry refused, or confirmation was needed and not possible.
+
+| Option | Description |
+|---|---|
+| `--project <DIR>` | The folder whose project skill is meant. Defaults to the current directory; with no project skill of that name there, the global skill is meant. |
+| `--global-only` | Only the global skill of that name, even when this folder's project has one. |
+| `--registry <URL>` | Registry to change. Defaults to `PROTOSTAR_REGISTRY_URL`, then the saved default, then `https://localhost:7443`. |
+| `-y`, `--yes` | Delete without asking. Needed when input is not a terminal. |
+
+## `protostar sessions`
+
+Back up your harness's session transcripts to the registry and see what is backed
+up. Each session is filed under the [project](../guides/projects.md) of the folder
+it ran in. `protostar sessions` on its own prints its help; use one of the commands
+below.
+
+These options are shared by all three commands:
+
+| Option | Description |
+|---|---|
+| `--registry <URL>` | Registry to use. Defaults to `PROTOSTAR_REGISTRY_URL`, then the saved default, then `https://localhost:7443`. |
+| `-H, --harness <ID>` | Only this harness id (for example `claude-code`). |
+| `--harness-home <DIR>` | Override the harness config root. |
+
+### `protostar sessions push`
+
+Back up every session transcript on this machine, newest first. Only what the
+registry does not have yet is sent, so a second push sends nothing. You must be
+[signed in](../get-started/authenticate.md) first.
+
+On a terminal a progress bar shows the bytes sent. When output goes to a file or a
+pipe, you get one line when the run starts and one each time another tenth is
+done. A run reaches 100% only when every transcript in it was backed up; a
+transcript that is skipped or fails is counted as not finished and its bytes never
+count as done.
+
+Ctrl+C stops cleanly between or during chunks. Nothing is lost, and the next push
+carries on from where this one stopped:
+
+```console
+$ protostar sessions push > push.log    # Ctrl+C part way
+$ cat push.log
+Backing up 2 transcripts (160 MB), newest first.
+10%: 24 MB of 160 MB, 0 of 2 transcripts done.
+20%: 40 MB of 160 MB, 0 of 2 transcripts done.
+30%: 56 MB of 160 MB, 1 of 2 transcripts done.
+╭──────────┬─────────┬───────┬────────────────────────────────╮
+│ Session  │ Kind    │  Sent │ Result                         │
+├──────────┼─────────┼───────┼────────────────────────────────┤
+│ 5f0c1d2e │ session │ 16 MB │ partly backed up, 104 MB to go │
+│ 6a1b2c3d │ session │ 40 MB │ backed up                      │
+╰──────────┴─────────┴───────┴────────────────────────────────╯
+5 transcripts: 1 backed up (56 MB sent), 3 already up to date, 1 not finished.
+Registry: https://localhost:7579.
+Stopped part way. Nothing is lost: run `protostar sessions push` again to carry
+on.
+```
+
+A transcript another protostar process is already uploading (a capture hook's
+background push, say) is skipped with that reason and goes next time.
+
+The exit code is `0` when everything is backed up, `130` when stopped with Ctrl+C,
+and `1` otherwise.
+
+| Option | Description |
+|---|---|
+| `--verify` | Ask the registry what it holds of every backed-up transcript, in batches, and back up again what it lost. A transcript the registry holds differently from this machine's record is left alone and reported. |
+
+`--verify` costs requests even when nothing changed, so plain pushes and the
+capture hooks never do it.
+
+:::note `--session`, for hooks
+The capture hooks run `protostar sessions push --session <PATH>` to back up one
+session (and its subagents) in the background, with no progress display; problems
+go to `~/.protostar/capture.log`. It is hidden from `--help` and cannot be combined
+with `--verify`. You should not need to run it yourself.
+:::
+
+### `protostar sessions status`
+
+Show what is and is not backed up on this machine. It works offline: it compares
+the transcripts on disk with what this machine last recorded as sent. A table
+lists the pending transcripts and why each is pending, followed by a summary:
+
+```console
+$ protostar sessions status
+5 transcripts on this machine (5 sessions, 0 subagents). All backed up. Last
+backup: 2 min ago.
+```
+
+The exit code is `0` when everything is backed up and `1` while anything is
+pending.
+
+| Option | Description |
+|---|---|
+| `-a, --all` | List every transcript, backed up ones too, not only the pending ones. |
+| `--verify` | Also ask the registry what it holds, to confirm the backups are really there (before wiping a machine, say). Changes nothing; it needs you to be signed in. |
+
+```console
+$ protostar sessions status --verify
+5 transcripts on this machine (5 sessions, 0 subagents). All backed up. Last
+backup: 2 min ago.
+Verified 5 transcripts against the registry: 5 confirmed, 0 missing, 0 short.
+```
+
+### `protostar sessions list`
+
+List the sessions the registry holds from every machine, newest activity first,
+plus this machine's sessions that are not fully backed up yet. Each row shows when
+it was last active, its title, project, machine, harness, number of prompts, size,
+backup state and a short id.
+
+```console
+$ protostar sessions list --project nomatch
+No sessions match --project nomatch. Leave the filter out to see every session.
+```
+
+When the registry cannot be reached, or you are not signed in, it still lists
+this machine's pending sessions, says why the rest are missing, and exits `1`.
+
+| Option | Description |
+|---|---|
+| `-p, --project <ID\|NAME>` | Only sessions in this project: its id, or text in its name (for example the repo name, `demo-app`). |
+| `--machine <ID>` | Only sessions from this machine id. |
+| `--since <DATE>` | Only sessions active on or after this date or time (for example `2026-11-12`, read in your local time zone). |
+| `-n, --limit <N>` | How many to show, from 1 to 200. Defaults to 25. |
+| `--json` | Print JSON instead of a table, for agents and scripts. |
+
+With `--json`, each row is the registry's record of the session. A row for a
+session not fully backed up has a `pending` object added, and a row the registry
+does not have at all (made from the file on this machine) has no title and zero
+counts. A registry error goes to standard error, so standard output stays valid
+JSON.
+
+```console
+$ protostar sessions list --json -n 1
+[{"harness":"claude-code","key":"00000000-0000-0000-0000-000000001113","kind":"session","title":"hello 2","firstPrompt":"hello 2","projectId":"84ae7ab4-363a-4328-b80c-81c5f6495764","project":"github.com/example/demo-app","workingDirectory":"/home/alice/src/demo-app","machineId":"e43c5bac-e1ac-4493-b2fb-21abbca63a1b","machineName":"vm-dev-01","sourcePath":"/home/alice/.claude/projects/-home-alice-src-demo-app/00000000-0000-0000-0000-000000001113.jsonl","userMessages":1,"assistantMessages":1,"length":2511,"subagentCount":0}]
+```
+
+## `protostar project`
+
+See which [project](../guides/projects.md) a folder belongs to, and link or unlink
+it. A project is what sessions and project skills are filed under, the same on
+every machine. With no subcommand, `protostar project` is `protostar project show`.
+
+These options are shared by all three commands:
+
+| Option | Description |
+|---|---|
+| `--registry <URL>` | Registry to ask. Defaults to `PROTOSTAR_REGISTRY_URL`, then the saved default, then `https://localhost:7443`. |
+| `-C, --dir <DIR>` | The folder to ask about. Defaults to the current directory. |
+
+### `protostar project show`
+
+Show the folder's project and how it was recognised:
+
+```console
+$ protostar project
+Folder         /home/alice/src/demo-app
+Project        github.com/example/demo-app
+Id             84ae7ab4-363a-4328-b80c-81c5f6495764
+Recognised by  the repo's root commit 720d3077c24b
+Git            root 720d3077c24b on refs/heads/main, origin
+               https://github.com/example/demo-app.git
+```
+
+A folder no backup has reported yet shows `none yet: the first backup from here
+creates it` as its id. When the registry suggests the folder may belong to
+another project, the suggestions are listed with the `protostar project link`
+command for each; nothing is linked until you run it.
+
+If the registry cannot be reached, or you are not signed in, it shows what can be
+worked out on this machine (the identity it would use and the git facts), says
+why, and exits `1`. Otherwise it exits `0`.
+
+| Option | Description |
+|---|---|
+| `--json` | Print JSON instead of text, for agents and scripts: the local `facts`, the registry's `project`, and a `registryError` when the registry could not answer. |
+
+### `protostar project link <PROJECT>`
+
+Link the folder, on this machine, to a project. `<PROJECT>` is the project's id,
+or its full name as `protostar project` or `protostar sessions list` shows it. The
+folder's sessions move with it, and any project skills that move too are listed
+under **Skills moved**:
+
+```console
+$ cd ~/notes
+$ protostar project link github.com/example/demo-app
+Linked this folder to github.com/example/demo-app. Its sessions moved with it.
+Folder         /home/alice/notes
+Project        github.com/example/demo-app
+Id             84ae7ab4-363a-4328-b80c-81c5f6495764
+Recognised by  a link you made from this folder (`protostar project unlink`
+               removes it)
+Skills moved   none
+```
+
+A project the registry does not know is an error (exit `1`).
+
+### `protostar project unlink`
+
+Remove the folder's link, so it is recognised the usual way again:
+
+```console
+$ protostar project unlink
+Unlinked this folder. It now belongs to notes.
+```
+
+In a copy of a repo that shares its project with other copies (a fork, or a
+second clone), with no link to remove, `unlink` gives this folder a project of its
+own instead. Run `protostar project unlink` again to rejoin. A folder that is not
+linked and is already its own project is left alone (`Nothing changed.`).
 
 ## `protostar auth`
 

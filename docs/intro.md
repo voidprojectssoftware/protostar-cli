@@ -55,6 +55,9 @@ Protostar is built incrementally. Here is what the CLI does right now:
 | Set up a machine in one step: sign in, hooks, skills, sessions | `protostar setup` | [Set up a machine](./get-started/set-up-a-machine.md) |
 | Connect protostar to your AI harness | `protostar install-hooks` | [Connect your harness](./get-started/connect-your-harness.md) |
 | Sign in to a registry | `protostar auth login` | [Authenticate](./get-started/authenticate.md) |
+| Back up skills, pull them on another machine, rename or delete them | `protostar skills push`, `pull`, `remote`, `rename`, `delete` | [Command reference](./reference/commands.md#protostar-skills) |
+| Back up session transcripts and list them from every machine | `protostar sessions push`, `status`, `list` | [Command reference](./reference/commands.md#protostar-sessions) |
+| See which project a folder belongs to, and fix it | `protostar project` | [Projects](./guides/projects.md) |
 | Follow the stable or edge release track | install `--channel` | [Choose a channel](./guides/choose-a-channel.md) |
 
 :::info Where the loop is today

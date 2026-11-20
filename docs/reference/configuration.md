@@ -65,6 +65,10 @@ When `install-hooks` decides which directory to write to, it checks, in order:
 |---|---|
 | `~/.protostar/credentials.json` | Your saved registry session (tokens). Owner-only permissions: `0600` on Unix, the per-user profile ACL on Windows. Override the directory with `PROTOSTAR_CONFIG_DIR`. |
 | `~/.protostar/config.json` | Your default registry, written by `setup` and `auth login`: `{ "registry": "https://registry.example" }`. Read leniently: a missing or malformed file means no default, and unknown fields are ignored and kept when protostar rewrites it. An invalid URL in `registry` is an error that names the file. Lives under `PROTOSTAR_CONFIG_DIR` when that is set. |
+| `~/.protostar/skill-ledger.json` | What protostar last backed up or pulled for each skill, per registry, so an unchanged skill is not uploaded again. |
+| `~/.protostar/sessions/` | How much of each session transcript has reached each registry (one file per transcript), so a push sends only what is new. |
+| `~/.protostar/machine.json` | This machine's id and name, which sessions are filed under. The id is what `sessions list --machine` takes. |
+| `~/.protostar/capture.log` | Problems from the capture hooks and their background pushes that you may need to act on. |
 | `<harness>/settings.json` | Your harness settings. `install-hooks` surgically adds or removes only its own `hooks` entries here and leaves the rest untouched. For Claude Code this is `~/.claude/settings.json`. |
 | The install directory | Where the `protostar` binary lives. Defaults to `%LOCALAPPDATA%\Programs\protostar` on Windows and `~/.local/bin` on Linux/macOS, added to `PATH`; override with `protostar install --dir`. |
 
