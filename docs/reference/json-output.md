@@ -16,13 +16,15 @@ codes. The output without `--json` is unchanged.
 | `protostar sessions list` | One JSON array of [session records](#sessions-list). |
 | `protostar sessions status` | One JSON array of [transcript records](#sessions-status). |
 | `protostar sessions push` | One JSON array of [backup records](#sessions-push). |
+| `protostar sessions show` | [JSON Lines](#sessions-show): one record per message, one per line, as the session downloads. |
 | `protostar status` | One JSON object; see [`protostar status`](commands.md#protostar-status). |
 
 ## The rules
 
 - **Standard output holds data and nothing else.** There are no colour codes,
   table borders, progress lines or messages on it, so it can be piped straight
-  into `jq` or a JSON parser. Each command prints its result on one line.
+  into `jq` or a JSON parser. Each command prints its result on one line, except
+  `sessions show`, which prints one record per line.
 - **Standard error holds at most one error object**, on one line, when the
   command could not do all it was asked (see [Errors](#errors)). Anything else a
   command has to say is left out under `--json`.
@@ -123,6 +125,43 @@ One record per transcript the push looked at. There is no progress display with
 | `message` | string | Why it was skipped or failed. |
 | `verified` | object | Only with `--verify`; as in `sessions status`. |
 
+## `sessions show`
+
+[JSON Lines](https://jsonlines.org/): one JSON object per line, one per message,
+in the order they happened, written as the transcript downloads. A session can be
+hundreds of megabytes, so it is never one giant array: read it line by line
+(`jq -c 'select(.type == "prompt")'` works on it as it is). The text is redacted
+by the registry: secrets appear as `[redacted:<type>]`.
+
+Without `--full` the records are prompts, replies and tool calls (without their
+input). `--full` adds each tool call's `input`, every tool result, and each
+subagent's messages between a `subagentStart` and a `subagentEnd` record, right
+after the result of the call that ran it.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `type` | string | `prompt`, `reply`, `toolCall`, `toolResult`, `subagentStart` or `subagentEnd`. |
+| `transcriptId` | string | The [id](#ids) of the transcript the message is in: the session's, or a subagent's for what ran inside it. |
+| `harness` | string | The harness. |
+| `at` | time | The message's timestamp. |
+| `text` | string | For `prompt`, `reply` and `toolResult`: the text. |
+| `tool` | string | For `toolCall`: the tool, for example `Bash`. |
+| `toolUseId` | string | For `toolCall` and `toolResult`: the call's id, which links a result to its call. |
+| `summary` | string | For `toolCall`: what it acted on, on one line (a command, path, pattern or description). |
+| `input` | object | For `toolCall`, only with `--full`: the call's full input. |
+| `agentType`, `description` | string | For a `toolCall` that starts a subagent, and for `subagentStart`. |
+| `isError` | boolean | For `toolResult`: the tool reported an error. |
+| `agentId` | string | For a `toolResult` of a call that ran a subagent: its agent id. |
+| `linked` | boolean | For `subagentStart`: matched to the call that ran it. An unmatched subagent comes after the session's own messages. |
+| `sidechain` | boolean | A subagent message written into the session's own file (older Claude Code). Only with `--full`. |
+
+Lines of the transcript that are not part of the conversation (system notes,
+summaries, titles, the model's thinking, and types protostar does not know) are
+skipped.
+
+If the download fails part way, the records already printed stand and a
+`registry_unreachable` error object follows on standard error, with exit code `1`.
+
 ## Errors
 
 When a command fails, standard error holds one object:
@@ -138,10 +177,12 @@ codes add fields of their own, listed below.
 |---|---|---|
 | `invalid_registry` | The registry URL (from `--registry`, the environment or the saved default) is not usable. | all |
 | `unknown_harness` | `--harness` names no harness that keeps sessions. | `sessions` |
-| `not_signed_in` | No sign-in is stored for the registry. Run `protostar auth login`. | `sessions list`, `push`, `status --verify` |
+| `not_signed_in` | No sign-in is stored for the registry. Run `protostar auth login`. | `sessions list`, `show`, `push`, `status --verify` |
 | `session_expired` | The sign-in expired and could not be refreshed. Run `protostar auth login`. | as above |
 | `registry_unreachable` | The registry did not answer, or refused or failed the request. | as above |
 | `registry_incompatible` | The registry speaks an API version this protostar does not. | as above |
+| `not_found` | No transcript has that id, and no session id starts with it. Run `protostar sessions list`. | `sessions show` |
+| `ambiguous_id` | More than one session id starts with the id given. The error adds `candidates`: up to 10 objects with `id`, `harness`, `title` and `lastActivityAt`. Give more of the id. | `sessions show` |
 | `incomplete` | The push ran, but some transcripts failed or were left part way; their records say which. | `sessions push` |
 | `interrupted` | Stopped with Ctrl+C. Nothing is lost; push again to carry on. | `sessions push` |
 

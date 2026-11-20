@@ -48,6 +48,12 @@ internal static class SessionsJson
     // a JSON parser, never into HTML, and "\u002B00:00" in every timestamp only makes it harder to read.
     private static readonly JsonSerializerOptions Output = new(TranscriptJson.Options) { Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping };
 
+    /// <summary>No transcript has the id given, and no session id starts with it.</summary>
+    public const string NotFound = "not_found";
+
+    /// <summary>More than one session id starts with the id given; the error's <c>candidates</c> lists them.</summary>
+    public const string AmbiguousId = "ambiguous_id";
+
     /// <summary>The error code for a failure that stopped a command early, or <c>null</c> for none.</summary>
     public static string? Code(SessionSyncFailure failure) => failure switch
     {
@@ -103,6 +109,70 @@ internal static class SessionsJson
             t.Transcript.Key, t.Transcript.Harness, Kind(t.Transcript), t.Transcript.ParentKey, t.Transcript.Path,
             t.Status, t.BytesUploaded, t.BytesPending, t.Rewritten, t.Message, t.Verified),
         TranscriptJson.Options)!;
+
+    /// <summary>A <c>sessions show</c> record: one message of the conversation, or where a subagent starts or ends.</summary>
+    /// <remarks>
+    /// <c>type</c> is <c>prompt</c>, <c>reply</c>, <c>toolCall</c>, <c>toolResult</c>, <c>subagentStart</c> or
+    /// <c>subagentEnd</c>; <c>transcriptId</c> is the session's id, or a subagent's for what ran inside it. A tool call's
+    /// full <c>input</c> is included only with <paramref name="full"/>, as are tool results and subagents.
+    /// </remarks>
+    public static JsonNode ShowRecord(ShownEntry shown, string harness, bool full)
+    {
+        var record = new JsonObject { ["type"] = null, ["transcriptId"] = shown.TranscriptId, ["harness"] = harness };
+        if (shown.Entry.At is { } at)
+            record["at"] = at;
+        if (shown.Entry.Sidechain)
+            record["sidechain"] = true;
+        switch (shown.Entry)
+        {
+            case PromptEntry prompt:
+                (record["type"], record["text"]) = ("prompt", prompt.Text);
+                break;
+            case ReplyEntry reply:
+                (record["type"], record["text"]) = ("reply", reply.Text);
+                break;
+            case ToolCallEntry call:
+                (record["type"], record["tool"], record["toolUseId"], record["summary"]) = ("toolCall", call.Name, call.Id, call.Summary);
+                if (call.Subagent is { } subagent)
+                {
+                    if (subagent.AgentType is { } type)
+                        record["agentType"] = type;
+                    if (subagent.Description is { } description)
+                        record["description"] = description;
+                }
+                if (full && call.Input.ValueKind != JsonValueKind.Undefined)
+                    record["input"] = JsonNode.Parse(call.Input.GetRawText());
+                break;
+            case ToolResultEntry result:
+                (record["type"], record["toolUseId"], record["text"], record["isError"]) = ("toolResult", result.ToolUseId, result.Text, result.IsError);
+                if (result.AgentId is { } agentId)
+                    record["agentId"] = agentId;
+                break;
+            case SubagentStartEntry start:
+                (record["type"], record["linked"]) = ("subagentStart", start.Linked);
+                if (start.AgentType is { } agentType)
+                    record["agentType"] = agentType;
+                if (start.Description is { } startDescription)
+                    record["description"] = startDescription;
+                break;
+            case SubagentEndEntry:
+                record["type"] = "subagentEnd";
+                break;
+        }
+
+        return record;
+    }
+
+    /// <summary>A candidate for an ambiguous id, as the <c>ambiguous_id</c> error lists it.</summary>
+    public static JsonNode Candidate(RemoteTranscript t)
+    {
+        var node = new JsonObject { ["id"] = t.Key, ["harness"] = t.Harness };
+        if (t.Title is { } title)
+            node["title"] = title;
+        if (t.LastActivityAt is { } at)
+            node["lastActivityAt"] = at;
+        return node;
+    }
 
     private static string Kind(LocalTranscript transcript) => transcript.Kind == TranscriptKind.Session ? "session" : "subagent";
 

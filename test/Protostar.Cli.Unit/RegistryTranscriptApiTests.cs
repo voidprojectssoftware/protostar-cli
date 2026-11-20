@@ -109,6 +109,68 @@ public sealed class RegistryTranscriptApiTests
         Assert.Contains("Update the registry", result.Error);
     }
 
+    [Fact]
+    public async Task Reading_a_transcript_asks_for_it_redacted_and_streams_the_lines()
+    {
+        var handler = new RecordingHandler("{\"type\":\"user\"}\n");
+        var api = new RegistryApi(handler);
+
+        var opened = await api.OpenRedactedContentAsync(Registry, "tok", Transcript.Harness, Transcript.Key, CancellationToken.None);
+
+        Assert.True(opened.Ok);
+        using (var reader = new StreamReader(opened.Value!))
+            Assert.Equal("{\"type\":\"user\"}", await reader.ReadLineAsync());
+        var uri = Assert.Single(handler.Requests);
+        Assert.Equal($"/v1/transcripts/claude-code/{Transcript.Key}/content", uri.AbsolutePath);
+        Assert.Equal("?redacted=true", uri.Query);
+    }
+
+    [Fact]
+    public async Task Reading_or_getting_a_transcript_the_registry_does_not_hold_says_it_is_unknown()
+    {
+        var api = Api(HttpStatusCode.NotFound, "No transcript with that harness and key.", UnknownTranscriptType);
+
+        var opened = await api.OpenRedactedContentAsync(Registry, "tok", Transcript.Harness, Transcript.Key, CancellationToken.None);
+        var got = await api.GetAsync(Registry, "tok", Transcript.Harness, Transcript.Key, CancellationToken.None);
+
+        Assert.True(opened.TranscriptUnknown);
+        Assert.True(got.TranscriptUnknown);
+    }
+
+    [Fact]
+    public async Task A_bare_404_is_not_taken_for_an_unknown_transcript()
+    {
+        // A proxy or a wrong base URL must not read as "no such session".
+        var api = new RegistryApi(new StatusHandler(HttpStatusCode.NotFound));
+
+        var got = await api.GetAsync(Registry, "tok", Transcript.Harness, Transcript.Key, CancellationToken.None);
+
+        Assert.False(got.Ok);
+        Assert.False(got.TranscriptUnknown);
+    }
+
+    [Fact]
+    public async Task Listing_a_page_before_a_time_sends_it_in_utc()
+    {
+        var handler = new RecordingHandler("[]");
+        var api = new RegistryApi(handler);
+
+        await api.ListAsync(Registry, "tok", new TranscriptListQuery(null, null, null, null, 200, DateTimeOffset.Parse("2026-11-19T04:00:00-06:00")), CancellationToken.None);
+
+        Assert.Contains("before=2026-11-19T10%3A00%3A00.0000000%2B00%3A00", Assert.Single(handler.Requests).Query);
+    }
+
+    private sealed class RecordingHandler(string body) : HttpMessageHandler
+    {
+        public List<Uri> Requests { get; } = [];
+
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            Requests.Add(request.RequestUri!);
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(body, Encoding.UTF8, "application/json") });
+        }
+    }
+
     private sealed class StatusHandler(HttpStatusCode status) : HttpMessageHandler
     {
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>

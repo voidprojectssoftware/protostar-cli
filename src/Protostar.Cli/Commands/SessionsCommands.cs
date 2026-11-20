@@ -183,3 +183,50 @@ internal sealed class SessionsListCommand : AsyncCommand<SessionsListCommand.Set
         return SessionsPresenter.RenderList(result, _catalog, query, settings.Json);
     }
 }
+
+/// <summary><c>protostar sessions show</c>: reads a backed-up session back as a conversation, from any machine.</summary>
+internal sealed class SessionsShowCommand : AsyncCommand<SessionsShowCommand.Settings>
+{
+    private readonly ISessionReader _reader;
+    private readonly IHarnessCatalog _catalog;
+
+    public SessionsShowCommand(ISessionReader reader, IHarnessCatalog catalog)
+    {
+        _reader = reader;
+        _catalog = catalog;
+    }
+
+    // Not LocalSessionsSettings: show reads only the registry, so a harness home would change nothing.
+    public sealed class Settings : SessionsSettings
+    {
+        [CommandArgument(0, "<ID>")]
+        [Description("The session's id from `protostar sessions list`, or enough of its start to name one session. A subagent's full id works too.")]
+        public string Id { get; init; } = "";
+
+        [CommandOption("-H|--harness <ID>")]
+        [Description("Only look in this harness's sessions.")]
+        public string? Harness { get; init; }
+
+        [CommandOption("--full")]
+        [Description("Also show each tool call's input and result, and each subagent's conversation where it ran.")]
+        public bool Full { get; init; }
+
+        [CommandOption("--json")]
+        [Description("Print one JSON record per message (JSON Lines) instead of the conversation, for agents and scripts.")]
+        public bool Json { get; init; }
+
+        public override ValidationResult Validate() =>
+            string.IsNullOrWhiteSpace(Id) ? ValidationResult.Error("Give a session id. Run `protostar sessions list` to see them.") : ValidationResult.Success();
+    }
+
+    protected override async Task<int> ExecuteAsync(CommandContext context, Settings settings, CancellationToken cancellation)
+    {
+        var id = settings.Id.Trim();
+        var opened = await _reader.OpenAsync(settings.Registry, settings.Harness, id, cancellation);
+        if (SessionShowPresenter.RenderOpen(opened, id, _catalog, settings.Json) is { } exit)
+            return exit;
+
+        var session = opened.Session!;
+        return await SessionShowPresenter.RenderAsync(session, _reader.ReadAsync(session, settings.Full, cancellation), settings.Full, settings.Json);
+    }
+}

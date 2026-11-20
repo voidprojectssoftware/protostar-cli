@@ -42,11 +42,31 @@ internal interface ITranscriptApi
 
     /// <summary><c>GET /v1/transcripts</c>.</summary>
     Task<ApiResult<IReadOnlyList<RemoteTranscript>>> ListAsync(Uri registry, string accessToken, TranscriptListQuery query, CancellationToken cancellationToken);
+
+    /// <summary><c>GET /v1/transcripts/{harness}/{key}</c>: one transcript's record and, for a session, its subagents'.</summary>
+    /// <remarks>A transcript the registry does not hold comes back with <see cref="ApiResult{T}.TranscriptUnknown"/> set.</remarks>
+    Task<ApiResult<TranscriptDetail>> GetAsync(Uri registry, string accessToken, string harness, string key, CancellationToken cancellationToken);
+
+    /// <summary><c>GET /v1/transcripts/{harness}/{key}/content?redacted=true</c>: the transcript's lines with secrets redacted, as a stream.</summary>
+    /// <remarks>
+    /// <para>
+    /// The stream reads straight from the response as it arrives, so a transcript of any size is never held in memory;
+    /// disposing it ends the response. Reading it can still fail part way with an <see cref="IOException"/> or
+    /// <see cref="HttpRequestException"/> if the connection drops.
+    /// </para>
+    /// <para>
+    /// Always redacted (registry#72): this is for reading a transcript as a person or an agent should. Backups and
+    /// verification compare the stored bytes and never use it. A registry from before redaction ignores the parameter
+    /// and sends the stored lines.
+    /// </para>
+    /// </remarks>
+    Task<ApiResult<Stream>> OpenRedactedContentAsync(Uri registry, string accessToken, string harness, string key, CancellationToken cancellationToken);
 }
 
 /// <summary>A value, or why the registry did not return one.</summary>
 /// <param name="MachineUnknown">The registry refused because it has no record of the machine the request named.</param>
-internal sealed record ApiResult<T>(T? Value, string? Error, bool MachineUnknown = false)
+/// <param name="TranscriptUnknown">The registry answered that it holds no transcript with that harness and key.</param>
+internal sealed record ApiResult<T>(T? Value, string? Error, bool MachineUnknown = false, bool TranscriptUnknown = false)
 {
     public bool Ok => Error is null;
 
@@ -55,6 +75,8 @@ internal sealed record ApiResult<T>(T? Value, string? Error, bool MachineUnknown
     public static ApiResult<T> Fail(string error) => new(default, error);
 
     public static ApiResult<T> UnknownMachine(string error) => new(default, error, MachineUnknown: true);
+
+    public static ApiResult<T> UnknownTranscript(string error) => new(default, error, TranscriptUnknown: true);
 }
 
 /// <summary>Where a transcript's stored content ends in the registry.</summary>
@@ -91,7 +113,14 @@ internal enum AppendStatus
 internal sealed record AppendResult(AppendStatus Status, TranscriptPosition? Position, string? Message);
 
 /// <summary>Filters for listing transcripts.</summary>
-internal sealed record TranscriptListQuery(string? Project, Guid? Machine, string? Harness, DateTimeOffset? Since, int Limit);
+/// <param name="Before">Only transcripts last active before this time, to page: the previous page's last <c>lastActivityAt</c>.</param>
+internal sealed record TranscriptListQuery(string? Project, Guid? Machine, string? Harness, DateTimeOffset? Since, int Limit, DateTimeOffset? Before = null);
+
+/// <summary>A transcript as the registry describes it on its own: its record and, for a session, its subagents'.</summary>
+/// <param name="Subagents">The session's subagents, earliest first; empty for a subagent.</param>
+internal sealed record TranscriptDetail(
+    [property: JsonPropertyName("transcript")] RemoteTranscript Transcript,
+    [property: JsonPropertyName("subagents")] IReadOnlyList<RemoteTranscript> Subagents);
 
 /// <summary>A transcript as the registry lists it.</summary>
 internal sealed record RemoteTranscript
