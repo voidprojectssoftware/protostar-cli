@@ -1,5 +1,36 @@
 # Changelog
 
+## [0.3.0](https://github.com/voidprojectssoftware/protostar-cli/compare/v0.2.0...v0.3.0) (2026-11-20)
+
+
+### Features
+
+* **cli:** commands check the registry's capabilities before using a feature ([#110](https://github.com/voidprojectssoftware/protostar-cli/issues/110), [#114](https://github.com/voidprojectssoftware/protostar-cli/issues/114)) ([#118](https://github.com/voidprojectssoftware/protostar-cli/issues/118)) ([7dda89e](https://github.com/voidprojectssoftware/protostar-cli/commit/7dda89ea6d66f9d0a0815ce944485f16ec3d7ea6))
+* **cli:** memory changed on two machines comes together ([#47](https://github.com/voidprojectssoftware/protostar-cli/issues/47)) ([#107](https://github.com/voidprojectssoftware/protostar-cli/issues/107)) ([7a03399](https://github.com/voidprojectssoftware/protostar-cli/commit/7a033994596c7e32150e90882805d220b4ec543a))
+* **cli:** memory pull brings a project's memory to every machine ([#46](https://github.com/voidprojectssoftware/protostar-cli/issues/46)) ([#106](https://github.com/voidprojectssoftware/protostar-cli/issues/106)) ([0a509b7](https://github.com/voidprojectssoftware/protostar-cli/commit/0a509b76c42bce5f5e072477ab9f74a01653e27a))
+* **cli:** memory push and status back up agent memory ([#45](https://github.com/voidprojectssoftware/protostar-cli/issues/45)) ([#105](https://github.com/voidprojectssoftware/protostar-cli/issues/105)) ([65128a4](https://github.com/voidprojectssoftware/protostar-cli/commit/65128a42e3691207e74c2ea9dbcac27f3b516e6a))
+* **cli:** protostar status shows whether background sync is working ([#30](https://github.com/voidprojectssoftware/protostar-cli/issues/30)) ([#108](https://github.com/voidprojectssoftware/protostar-cli/issues/108)) ([2fdb025](https://github.com/voidprojectssoftware/protostar-cli/commit/2fdb0256386b55a0338e5643308f674ea0da0080))
+* **mcp:** protostar mcp serves history and memory to agents as read-only tools ([#13](https://github.com/voidprojectssoftware/protostar-cli/issues/13)) ([#117](https://github.com/voidprojectssoftware/protostar-cli/issues/117)) ([cd96a58](https://github.com/voidprojectssoftware/protostar-cli/commit/cd96a58fa0313f11b2015c4e9d432cd8f3f41896))
+* **search:** protostar search over sessions and memory ([#20](https://github.com/voidprojectssoftware/protostar-cli/issues/20)) ([#113](https://github.com/voidprojectssoftware/protostar-cli/issues/113)) ([4eb7027](https://github.com/voidprojectssoftware/protostar-cli/commit/4eb702749b0603ff054423b5d47d9f505c59c8d0))
+* **sessions:** sessions show lists the skills a session used ([#115](https://github.com/voidprojectssoftware/protostar-cli/issues/115)) ([#120](https://github.com/voidprojectssoftware/protostar-cli/issues/120)) ([47b3305](https://github.com/voidprojectssoftware/protostar-cli/commit/47b33052cafd48f7909a87d1c17fcfd9f6afb3d3))
+* **sessions:** sessions show reads a backed-up session as a conversation ([#19](https://github.com/voidprojectssoftware/protostar-cli/issues/19)) ([#111](https://github.com/voidprojectssoftware/protostar-cli/issues/111)) ([e60e84e](https://github.com/voidprojectssoftware/protostar-cli/commit/e60e84e295c944df721c2a5fda731ba8ecee1ad6))
+* **sessions:** structured --json results and error codes for agents ([#21](https://github.com/voidprojectssoftware/protostar-cli/issues/21)) ([#109](https://github.com/voidprojectssoftware/protostar-cli/issues/109)) ([b154fd9](https://github.com/voidprojectssoftware/protostar-cli/commit/b154fd987c92a4d1631a3a016e451c411d2b8e56))
+
+
+### Bug Fixes
+
+* **cli:** refuse an option the command does not declare ([#89](https://github.com/voidprojectssoftware/protostar-cli/issues/89)) ([#100](https://github.com/voidprojectssoftware/protostar-cli/issues/100)) ([570c80f](https://github.com/voidprojectssoftware/protostar-cli/commit/570c80ff08169301d5a4de07e7a3f1470af0abe3))
+* **sessions:** link subagents only through their call, and harden show and the capture hook ([#121](https://github.com/voidprojectssoftware/protostar-cli/issues/121), [#122](https://github.com/voidprojectssoftware/protostar-cli/issues/122)) ([#123](https://github.com/voidprojectssoftware/protostar-cli/issues/123)) ([b1c88bf](https://github.com/voidprojectssoftware/protostar-cli/commit/b1c88bfccc339273cef08f4c8f274770901fd9c3))
+* **setup:** name every skill that needs a decision and never say already set up while one does ([#92](https://github.com/voidprojectssoftware/protostar-cli/issues/92)) ([#103](https://github.com/voidprojectssoftware/protostar-cli/issues/103)) ([e7e0b53](https://github.com/voidprojectssoftware/protostar-cli/commit/e7e0b5367248ab3d910e0fd0ddb6c273843c260d))
+* **skills:** after project unlink, remote, pull and push agree whose a pulled project skill is ([#95](https://github.com/voidprojectssoftware/protostar-cli/issues/95)) ([#104](https://github.com/voidprojectssoftware/protostar-cli/issues/104)) ([eebec76](https://github.com/voidprojectssoftware/protostar-cli/commit/eebec76d21f572fd9505dbecfaf7ca095f5c9c91))
+* **skills:** push --as refuses a new name already taken in its scope, here or in the registry ([#94](https://github.com/voidprojectssoftware/protostar-cli/issues/94)) ([#102](https://github.com/voidprojectssoftware/protostar-cli/issues/102)) ([b9500da](https://github.com/voidprojectssoftware/protostar-cli/commit/b9500da3cef17522cf9f4b886fc4bf366c769af7))
+* **skills:** push and setup never undo a delete or rename made in the registry, and pull follows a rename ([#58](https://github.com/voidprojectssoftware/protostar-cli/issues/58)) ([#99](https://github.com/voidprojectssoftware/protostar-cli/issues/99)) ([e0df6f1](https://github.com/voidprojectssoftware/protostar-cli/commit/e0df6f13ba689dd20e2504527b48368eca4b9344))
+
+
+### Performance Improvements
+
+* **sessions:** draw sessions show text without per-line Spectre rendering ([#112](https://github.com/voidprojectssoftware/protostar-cli/issues/112)) ([#119](https://github.com/voidprojectssoftware/protostar-cli/issues/119)) ([39530f7](https://github.com/voidprojectssoftware/protostar-cli/commit/39530f72615306b541286260168e54b629959a01))
+
 ## [0.2.0](https://github.com/voidprojectssoftware/protostar-cli/compare/v0.1.0...v0.2.0) (2026-11-20)
 
 
