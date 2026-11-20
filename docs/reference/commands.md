@@ -47,6 +47,63 @@ failed.
 
 See [Set up a machine](../get-started/set-up-a-machine.md).
 
+## `protostar status`
+
+Answer "is this machine syncing?" in one place: the registry in use and where it
+came from, whether you are signed in, whether each harness has the capture hooks,
+when the hooks last backed up skills, sessions and memory in the background, the
+failures since then with the newest error, sessions whose backup failed and wait
+for a retry, and the session bytes not backed up yet.
+
+It works offline. Everything comes from this machine except one quick check that
+the stored sign-in is still good, which gives up after 3 seconds and is skipped
+with `--offline`. With no stored sign-in the registry is not contacted at all.
+
+Exits `0` when the machine is syncing and `1` when something needs attention: not
+signed in, the sign-in refused, the registry not answering, no harness or hooks
+missing, the newest background backup of a kind failed, or sessions waiting to be
+retried. Pending bytes alone are not a problem, since a live session always has
+some until its next push.
+
+```console
+$ protostar status
+Registry  https://registry.example (from ~/.protostar/config.json (saved by setup or auth login))
+Sign-in   signed in as octocat
+Hooks     claude-code: installed (~/.claude/settings.json)
+Skills    last backed up 3 min ago (2026-11-20 10:40)
+Sessions  2 failures since the last backup 1 h ago (2026-11-20 09:12); newest 3 min ago (2026-11-20 10:40): session not backed up: the registry could not be reached. ...
+Memory    last backed up 1 h ago (2026-11-20 09:12)
+Pending   130 B in 1 transcript (goes with the next hook, or run `protostar sessions push`)
+
+Needs attention:
+  - Session backups are failing: the registry could not be reached. They resume on their own once it can.
+```
+
+| Option | Description |
+|---|---|
+| `--registry <URL>` | Registry base URL. Defaults to `$PROTOSTAR_REGISTRY_URL`, then the saved default, then the built-in dev default. |
+| `--harness-home <DIR>` | Override the harness config root. |
+| `--offline` | Do not ask the registry whether the sign-in is still good. |
+| `--json` | Print one JSON object instead of the report. |
+
+With `--json`, standard output holds one object: `ok` (boolean), `registry`,
+`registrySource` (`flag`, `environment`, `configFile`, `default`), `signIn`
+(`state`: `signedOut`, `signedIn`, `notChecked`, `rejected`, `unreachable`; and
+`login`), `hooks` (`harness`, `settingsPath`, `installed`, `error`), `backups` (one
+per `kind`: `skills`, `sessions`, `memory`, with `failing`, `lastSuccessAt`,
+`lastFailureAt`, `failuresSinceSuccess`, `lastReason`, `lastError`),
+`failedSessions` (`id`, `harness`, `path`, `failedAt`), `pending` (`bytes`,
+`transcripts`) and `problems`, the stable reasons for a non-zero exit:
+`notSignedIn`, `sessionRejected`, `registryUnreachable`, `noHarness`,
+`hooksMissing`, `skillsFailing`, `sessionsFailing`, `memoryFailing`,
+`sessionsAwaitingRetry`. Names are camelCase and absent values are left out. An
+unusable registry URL prints `{"error":{"code":"invalid_registry","message":...}}`
+to standard error and exits `1`.
+
+The backup history comes from `~/.protostar/capture-records.jsonl`, which the
+hooks append to (see [`capture`](#protostar-capture)). Records for another
+registry are ignored.
+
 ## `protostar install`
 
 Install protostar to a per-user directory and add it to `PATH`.
@@ -807,6 +864,18 @@ The hook never blocks or fails your session: it gives up after 15 seconds and
 always exits `0`. It writes one line to the session transcript, and problems you
 may need to act on (not signed in, registry unreachable, skill refused) are also
 appended to `~/.protostar/capture.log`, by the hook or by the background push.
+
+Each skill backup and each background push also appends one JSON line to
+`~/.protostar/capture-records.jsonl`, which [`status`](#protostar-status) reads:
+when it finished (`at`), the `kind` (`skills`, `sessions`, `memory`), whether it
+worked (`ok`), the `registry`, how many `items` it handled, the session `bytes`
+sent, and for a failure the `reason` (`notSignedIn`, `sessionExpired`,
+`registryUnreachable`, `refused`, `other`) and the `error` message. Records hold no
+transcript or memory content. A run that tried nothing (a throttled `Stop`, a
+project with no memory, an ignored event) writes none. Writing a record is best
+effort and takes no lock; at 256 KiB the file is renamed to
+`capture-records.1.jsonl`, replacing the previous one, so the two stay under about
+512 KiB.
 
 | Option | Description |
 |---|---|

@@ -392,7 +392,7 @@ internal static class SessionsPresenter
     // Keeps the end, where a path's file name is.
     private static string TruncateStart(string text, int max) => text.Length <= max ? text : "..." + text[^(max - 3)..];
 
-    private static string Ago(DateTimeOffset when)
+    internal static string Ago(DateTimeOffset when)
     {
         var span = DateTimeOffset.UtcNow - when;
         return span.TotalMinutes < 1 ? "just now"

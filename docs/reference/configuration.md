@@ -69,6 +69,7 @@ When `install-hooks` decides which directory to write to, it checks, in order:
 | `~/.protostar/sessions/` | How much of each session transcript has reached each registry (one file per transcript), so a push sends only what is new. |
 | `~/.protostar/machine.json` | This machine's id and name, which sessions are filed under. The id is what `sessions list --machine` takes. |
 | `~/.protostar/capture.log` | Problems from the capture hooks and their background pushes that you may need to act on. |
+| `~/.protostar/capture-records.jsonl` | One JSON line per background backup (kind, outcome, counts, error message; never content), read by `protostar status`. Rotated at 256 KiB to `capture-records.1.jsonl`. |
 | `<harness>/settings.json` | Your harness settings. `install-hooks` surgically adds or removes only its own `hooks` entries here and leaves the rest untouched. For Claude Code this is `~/.claude/settings.json`. |
 | The install directory | Where the `protostar` binary lives. Defaults to `%LOCALAPPDATA%\Programs\protostar` on Windows and `~/.local/bin` on Linux/macOS, added to `PATH`; override with `protostar install --dir`. |
 

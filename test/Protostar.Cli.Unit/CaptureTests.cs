@@ -113,7 +113,7 @@ public sealed class CaptureServiceTests
         var output = new StringWriter();
         var log = new List<string>();
 
-        var exit = CapturePresenter.Render("PostToolUse", result, output, log.Add);
+        var exit = CapturePresenter.Render("PostToolUse", result, output, log.Add, _ => { });
 
         Assert.Equal(0, exit);
         Assert.Contains(expected, output.ToString());
@@ -145,8 +145,8 @@ public sealed class CaptureServiceTests
         var output = new StringWriter();
         var log = new List<string>();
 
-        CapturePresenter.Render("PostToolUse", Stale(remembered: false), output, log.Add);
-        CapturePresenter.Render("PostToolUse", Stale(remembered: true), output, log.Add);
+        CapturePresenter.Render("PostToolUse", Stale(remembered: false), output, log.Add, _ => { });
+        CapturePresenter.Render("PostToolUse", Stale(remembered: true), output, log.Add, _ => { });
 
         Assert.Contains("skills remote", Assert.Single(log));
         Assert.Equal(2, output.ToString().Split('\n', StringSplitOptions.RemoveEmptyEntries).Count(l => l.Contains("not backed up: Changed here and in the registry.")));
@@ -159,8 +159,8 @@ public sealed class CaptureServiceTests
         var unknown = new CaptureResult(CaptureAction.SkillBackedUp, "alpha", SkillPushRunResult.Fail(SkillPushRunFailure.SkillNotFound, "alpha"), null);
         var log = new List<string>();
 
-        CapturePresenter.Render("PostToolUse", notLoggedIn, TextWriter.Null, log.Add);
-        CapturePresenter.Render("PostToolUse", unknown, TextWriter.Null, log.Add);
+        CapturePresenter.Render("PostToolUse", notLoggedIn, TextWriter.Null, log.Add, _ => { });
+        CapturePresenter.Render("PostToolUse", unknown, TextWriter.Null, log.Add, _ => { });
 
         Assert.Contains("not signed in", Assert.Single(log));
     }

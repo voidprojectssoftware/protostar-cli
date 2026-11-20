@@ -39,6 +39,6 @@ internal sealed class CaptureCommand : AsyncCommand<CaptureCommand.Settings>
         timeout.CancelAfter(Timeout);
 
         var result = await _capture.HandleAsync(hook, payload, timeout.Token);
-        return CapturePresenter.Render(hook, result, Console.Out, CaptureLog.Append);
+        return CapturePresenter.Render(hook, result, Console.Out, CaptureLog.Append, CaptureRecords.Append);
     }
 }

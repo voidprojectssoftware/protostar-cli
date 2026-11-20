@@ -47,7 +47,9 @@ unreachable fires no more hooks, so its failed backup is remembered, and the nex
 hook backup of any session that reaches the registry retries it (up to three such
 sessions each time, oldest first). `protostar sessions status` shows these as
 "failed to back up, will retry". Problems you may need to act on, such as not
-being signed in, are written to `~/.protostar/capture.log`.
+being signed in, are written to `~/.protostar/capture.log`. Run `protostar status` to
+see whether backups are working, when each kind last succeeded, and what to do
+if they are not.
 
 ## Install the hooks
 
