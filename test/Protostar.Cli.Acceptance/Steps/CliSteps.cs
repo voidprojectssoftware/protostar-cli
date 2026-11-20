@@ -61,6 +61,7 @@ public sealed partial class CliSteps : IDisposable
             {
                 "{installDir}" => Sandbox.InstallDir,
                 "{harnessHome}" => _harness.ConfigDir,
+                "{protostar}" => CliRunner.BinaryPath,
                 _ => token,
             })
             .ToList();
@@ -104,13 +105,52 @@ public sealed partial class CliSteps : IDisposable
         Assert.Equal(expected, count);
     }
 
+    // Every protostar-managed hook command in the harness settings, as event name and the exact command line.
+    private List<(string Event, string Command)> InstalledHookCommands() =>
+        (JsonNode.Parse(_harness.ReadSettings())?["hooks"]?.AsObject() ?? [])
+            .SelectMany(entry => (entry.Value?.AsArray() ?? [])
+                .SelectMany(group => group?["hooks"]?.AsArray() ?? [])
+                .Select(hook => hook?["command"]?.GetValue<string>() ?? string.Empty)
+                .Where(command => command.Contains("capture --hook"))
+                .Select(command => (entry.Key, command)))
+            .ToList();
+
+    [Then("every installed hook command runs through the shell and names its own event")]
+    public async Task ThenEveryInstalledHookCommandNamesItsEvent()
+    {
+        var hooks = InstalledHookCommands();
+        Assert.Equal(["PostToolUse", "SessionEnd", "SessionStart", "Stop"], hooks.Select(h => h.Event).Order());
+
+        foreach (var (hookEvent, command) in hooks)
+        {
+            var result = await CliRunner.RunShellAsync(command, "{}", _harness.ConfigDir);
+            var output = AnsiEscape().Replace(result.StandardOutput + result.StandardError, string.Empty);
+            Assert.True(result.ExitCode == 0, $"`{command}` exited {result.ExitCode}: {output}");
+            // "unknown" would mean --hook was dropped; the event name proves it reached the capture command.
+            Assert.Contains($"protostar capture ({hookEvent})", output);
+        }
+    }
+
     [Then("the exit code is {int}")]
     public void ThenTheExitCodeIs(int expected) =>
         Assert.Equal(expected, Result.ExitCode);
 
+    [Then("the exit code is not {int}")]
+    public void ThenTheExitCodeIsNot(int unexpected) =>
+        Assert.NotEqual(unexpected, Result.ExitCode);
+
     [Then("the output contains {string}")]
     public void ThenTheOutputContains(string text) =>
         Assert.Contains(text, Output);
+
+    // Spectre wraps an error at the console width (80 columns when redirected), so a long suggested command line
+    // arrives across several lines; joining them lets a scenario assert on the line as typed.
+    [Then("the output, with line breaks joined, contains {string}")]
+    public void ThenTheJoinedOutputContains(string text) =>
+        Assert.Contains(text, WhitespaceRun().Replace(Output, " "));
+
+    [GeneratedRegex(@"\s+")]
+    private static partial Regex WhitespaceRun();
 
     [Then("the output matches {string}")]
     public void ThenTheOutputMatches(string pattern) =>

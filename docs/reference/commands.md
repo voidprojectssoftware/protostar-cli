@@ -10,7 +10,10 @@ Every `protostar` command and its options. Run `protostar --help` or
 
 Options go after the command they belong to: `protostar sessions list --json`,
 `protostar project show --dir ../other`. An option written before a subcommand
-(`protostar skills --global-only push`) is not applied to it.
+(`protostar skills --global-only push`) is refused, and the error gives the
+command line with the option moved after it. A command with no subcommand keeps
+its options where they are: `protostar skills --global-only` and
+`protostar project --dir ../other` work.
 
 ## Global
 
