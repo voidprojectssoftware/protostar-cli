@@ -7,7 +7,8 @@ title: JSON output for agents and scripts
 
 The `protostar sessions` commands, `protostar search` and `protostar status` take `--json`. With it
 they print structured records instead of tables, so a coding agent or a script can
-act on the result without parsing text meant for people. This page is the
+act on the result without parsing text meant for people. `protostar mcp` returns
+the same records to agents as [MCP tools](#the-mcp-tools). This page is the
 contract: what goes where, the field names and types, the error codes and the exit
 codes. The output without `--json` is unchanged.
 
@@ -206,8 +207,10 @@ codes add fields of their own, listed below.
 | `session_expired` | The sign-in expired and could not be refreshed. Run `protostar auth login`. | as above |
 | `registry_unreachable` | The registry did not answer, or refused or failed the request. | as above |
 | `registry_incompatible` | The registry speaks an API version this protostar does not, or (for `search`) is too old to offer the feature. | as above |
-| `not_found` | No transcript has that id, and no session id starts with it. Run `protostar sessions list`. | `sessions show` |
-| `ambiguous_id` | More than one session id starts with the id given. The error adds `candidates`: up to 10 objects with `id`, `harness`, `title` and `lastActivityAt`. Give more of the id. | `sessions show` |
+| `not_found` | No transcript has that id, and no session id starts with it. Run `protostar sessions list`. For `get_memory`, no project with memory matches (the error adds `projects`, those that have memory), or it has no file at that path. | `sessions show`; MCP `get_session`, `get_memory` |
+| `ambiguous_id` | More than one session id starts with the id given. The error adds `candidates`: up to 10 objects with `id`, `harness`, `title` and `lastActivityAt`. Give more of the id. | `sessions show`; MCP `get_session` |
+| `invalid_argument` | A tool argument is out of range or malformed, such as `limit` 500. | MCP tools |
+| `ambiguous_project` | The project name matches more than one project with memory. The error adds `projects`: objects with `projectId`, `project` and `files`. Give the id. | MCP `get_memory` |
 | `incomplete` | The push ran, but some transcripts failed or were left part way; their records say which. | `sessions push` |
 | `interrupted` | Stopped with Ctrl+C. Nothing is lost; push again to carry on. | `sessions push` |
 
@@ -225,3 +228,18 @@ standard error with exit code `255`, whether or not `--json` is given.
 
 Check the error object, not only the exit code, to tell a failure from pending
 work.
+
+## The MCP tools
+
+`protostar mcp` serves the same records to agents as MCP tools (see
+[Let your agents search your history](../guides/agents-search-history.md)). Each
+result is one JSON object in the tool result's text: `search` gives `{"hits":[...]}`
+of [search hits](#search), `list_sessions` gives `{"sessions":[...]}` of
+[session records](#sessions-list), `get_session` gives `session` (a session
+record), `offset`, `messages` ([`sessions show` records](#sessions-show), each
+with `index`, and `truncated: true` on one with a field cut at 4,000 characters)
+and `nextOffset` when there are more, and `get_memory` gives `projectId`,
+`project`, `files` (each with `path`, `version`, `machineId`, `machineName`,
+`deletedEverywhere` when set, `content`, and `truncated` when cut) and `omitted`
+(paths that did not fit). A failed call is a tool error whose text is the
+[error object](#errors).
