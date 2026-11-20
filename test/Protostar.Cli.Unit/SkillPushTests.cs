@@ -37,12 +37,16 @@ public sealed class SkillPushServiceTests : IDisposable
     private static SkillPushRequest Request(params string[] names) => new(names, null, null, null, Registry);
 
     private readonly FakeLedger _ledger = new();
+
+    // Registry skills the ledger records were synced from, listed by every registry Build makes.
+    private readonly List<RegistrySkill> _inRegistry = [];
     private readonly FakeFacts _facts = new();
 
     private (ISkillPushService Sut, FakeRegistryApi Api) Build(
         IEnumerable<DiscoveredSkill> skills, StoredToken? session = null, FakeRegistryApi? api = null)
     {
         api ??= new FakeRegistryApi();
+        api.Skills.AddRange(_inRegistry.Where(r => !api.Skills.Contains(r)));
         var sut = new SkillPushService(new FakeSkillService(skills.ToList()), new FakeTokens(session), api, _ledger, _facts, new FakeMachine());
         return (sut, api);
     }
@@ -61,17 +65,179 @@ public sealed class SkillPushServiceTests : IDisposable
     }
 
     [Fact]
-    public async Task Unchanged_by_the_ledger_needs_no_session()
+    public async Task The_hook_takes_the_ledgers_word_for_an_unchanged_skill_with_no_session_and_no_request()
     {
         var skill = Skill("alpha");
         var (seed, _) = Build([skill], Session());
         await seed.PushAsync(Request(), CancellationToken.None);
         var (sut, api) = Build([skill], session: null);
 
-        var result = await sut.PushAsync(Request(), CancellationToken.None);
+        var result = await sut.PushAsync(Request() with { FromHook = true }, CancellationToken.None);
 
         Assert.Equal(SkillPushRunFailure.None, result.Failure);
+        Assert.Equal(SkillPushStatus.Unchanged, Assert.Single(result.Entries).Outcome.Status);
         Assert.Empty(api.Pushed);
+        Assert.Equal(0, api.ListCalls);
+        Assert.Equal(0, api.MetaCalls);
+    }
+
+    [Fact]
+    public async Task The_command_confirms_unchanged_skills_with_one_list_request_and_nothing_else()
+    {
+        var alpha = Skill("alpha");
+        var beta = Skill("beta");
+        var (seed, api) = Build([alpha, beta], Session());
+        await seed.PushAsync(Request(), CancellationToken.None);
+        var (sut, _) = Build([alpha, beta], Session(), api);
+        var metaBefore = api.MetaCalls;
+
+        var result = await sut.PushAsync(Request(), CancellationToken.None);
+
+        Assert.All(result.Entries, e => Assert.Equal(SkillPushStatus.Unchanged, e.Outcome.Status));
+        Assert.Equal(1, api.ListCalls);
+        Assert.Equal(metaBefore, api.MetaCalls);
+        Assert.Equal(2, api.Pushed.Count);
+    }
+
+    [Fact]
+    public async Task A_skill_deleted_from_the_registry_elsewhere_is_backed_up_again_as_new_and_says_why()
+    {
+        var skill = Skill("tidy");
+        var (seed, api) = Build([skill], Session());
+        await seed.PushAsync(Request(), CancellationToken.None);
+        await api.DeleteSkillAsync(RegistryUri, "t", "tidy", null, CancellationToken.None);
+        api.Bases.Clear();
+
+        var result = await seed.PushAsync(Request(), CancellationToken.None);
+
+        var outcome = Assert.Single(result.Entries).Outcome;
+        Assert.Equal(SkillPushStatus.Created, outcome.Status);
+        Assert.Equal("'tidy' was renamed or deleted in the registry; backed it up again as 'tidy'.", outcome.Message);
+        Assert.Equal([0], api.Bases);
+        Assert.True(result.Succeeded);
+    }
+
+    [Fact]
+    public async Task A_skill_renamed_in_the_registry_elsewhere_is_pushed_back_under_its_name_here()
+    {
+        var skill = Skill("tidy");
+        Synced(skill, 2);
+        var (sut, api) = Build([skill], Session());
+        await api.RenameSkillAsync(RegistryUri, "t", "tidy", null, "neat", CancellationToken.None);
+
+        var result = await sut.PushAsync(Request(), CancellationToken.None);
+
+        var outcome = Assert.Single(result.Entries).Outcome;
+        Assert.Equal(SkillPushStatus.Created, outcome.Status);
+        Assert.Contains("renamed or deleted", outcome.Message);
+        Assert.Equal("tidy", Assert.Single(api.Pushed).Name);
+        Assert.Equal([0], api.Bases);
+    }
+
+    [Fact]
+    public async Task An_edited_copy_of_a_deleted_skill_is_pushed_as_new_rather_than_on_its_old_base()
+    {
+        var skill = Skill("tidy");
+        Synced(skill, 3);
+        Edit(skill, "edited");
+        var (sut, api) = Build([skill], Session());
+        api.Skills.Clear();
+
+        var result = await sut.PushAsync(Request(), CancellationToken.None);
+
+        Assert.Contains("renamed or deleted", Assert.Single(result.Entries).Outcome.Message);
+        Assert.Equal([0], api.Bases);
+    }
+
+    [Fact]
+    public async Task Another_projects_skill_of_the_same_name_does_not_count_as_this_one()
+    {
+        var project = Skill("deploy", SkillScope.Project);
+        var mine = Guid.NewGuid();
+        Synced(project, 1, mine);
+        var (sut, api) = Build([project], Session());
+        api.Skills.Clear();
+        api.Skills.Add(new RegistrySkill("deploy", null, 1, "", DateTimeOffset.UnixEpoch, null));
+
+        var result = await sut.PushAsync(Request(), CancellationToken.None);
+
+        Assert.Contains("renamed or deleted", Assert.Single(result.Entries).Outcome.Message);
+    }
+
+    [Fact]
+    public async Task A_skill_still_in_its_project_is_unchanged_while_the_same_name_elsewhere_is_ignored()
+    {
+        var project = Skill("deploy", SkillScope.Project);
+        var mine = Guid.NewGuid();
+        Synced(project, 1, mine);
+        var (sut, api) = Build([project], Session());
+        api.Skills.Add(new RegistrySkill("deploy", null, 7, "", DateTimeOffset.UnixEpoch, Guid.NewGuid()));
+
+        var result = await sut.PushAsync(Request(), CancellationToken.None);
+
+        Assert.Equal(SkillPushStatus.Unchanged, Assert.Single(result.Entries).Outcome.Status);
+        Assert.Empty(api.Pushed);
+    }
+
+    [Fact]
+    public async Task A_skill_a_link_moved_to_another_project_is_followed_there_not_pushed_again()
+    {
+        var project = Skill("deploy", SkillScope.Project);
+        var from = Guid.NewGuid();
+        var to = Guid.NewGuid();
+        Synced(project, 1, from);
+        var (sut, api) = Build([project], Session());
+        api.Skills.Clear();
+        api.Skills.Add(new RegistrySkill("deploy", null, 1, "", DateTimeOffset.UnixEpoch, to));
+        var files = SkillFileReader.Read(project.Path);
+        api.Contents[FakeRegistryApi.Key("deploy", to)] = new RegistrySkillContent(
+            "deploy", 1, "", files.Select(f => new RegistrySkillFile(f.RelativePath, "", f.Content)).ToList());
+
+        var result = await sut.PushAsync(Request(), CancellationToken.None);
+
+        Assert.Equal(SkillPushStatus.Unchanged, Assert.Single(result.Entries).Outcome.Status);
+        Assert.Empty(api.Pushed);
+        Assert.Equal(to, _ledger.Get(RegistryUri, project.Path)!.ProjectId);
+    }
+
+    [Fact]
+    public async Task The_hook_does_not_check_the_list_so_an_unchanged_deleted_skill_costs_it_nothing()
+    {
+        var skill = Skill("tidy");
+        Synced(skill, 2);
+        var (sut, api) = Build([skill], Session());
+        api.Skills.Clear();
+
+        var result = await sut.PushAsync(Request() with { FromHook = true }, CancellationToken.None);
+
+        Assert.Equal(SkillPushStatus.Unchanged, Assert.Single(result.Entries).Outcome.Status);
+        Assert.Equal(0, api.ListCalls);
+        Assert.Equal(0, api.MetaCalls);
+    }
+
+    [Fact]
+    public async Task A_list_that_fails_stops_the_run_with_its_reason()
+    {
+        var skill = Skill("tidy");
+        Synced(skill, 2);
+        var (sut, _) = Build([skill], Session(), new FakeRegistryApi { ListError = "boom" });
+
+        var result = await sut.PushAsync(Request(), CancellationToken.None);
+
+        Assert.Equal(SkillPushRunFailure.ListFailed, result.Failure);
+        Assert.Equal("boom", result.Detail);
+    }
+
+    [Fact]
+    public async Task A_list_that_fails_because_the_registry_is_down_says_so()
+    {
+        var skill = Skill("tidy");
+        Synced(skill, 2);
+        var (sut, _) = Build([skill], Session(), new FakeRegistryApi { ListError = "boom", Meta = null });
+
+        var result = await sut.PushAsync(Request(), CancellationToken.None);
+
+        Assert.Equal(SkillPushRunFailure.RegistryUnreachable, result.Failure);
     }
 
     [Fact]
@@ -254,15 +420,15 @@ public sealed class SkillPushServiceTests : IDisposable
     public async Task Same_name_conflict_is_detected_even_when_the_first_copy_is_unchanged_by_the_ledger()
     {
         var first = Skill("alpha", SkillScope.Global, "one-alpha");
-        var (seed, _) = Build([first], Session());
+        var (seed, api) = Build([first], Session());
         await seed.PushAsync(Request(), CancellationToken.None);
         var second = Skill("alpha", SkillScope.Global, "two-alpha");
         File.WriteAllText(Path.Combine(second.Path, "SKILL.md"), "different");
-        var (sut, api) = Build([first, second], session: null);
+        var (sut, _) = Build([first, second], Session(), api);
 
         var result = await sut.PushAsync(Request(), CancellationToken.None);
 
-        Assert.Empty(api.Pushed);
+        Assert.Single(api.Pushed);
         Assert.Equal(SkillPushStatus.Unchanged, result.Entries[0].Outcome.Status);
         Assert.Equal(SkillPushStatus.Conflict, result.Entries[1].Outcome.Status);
     }
@@ -393,8 +559,11 @@ public sealed class SkillPushServiceTests : IDisposable
             : new SkillPushOutcome(SkillPushStatus.Stale, current, "stale"),
     };
 
-    private void Synced(DiscoveredSkill skill, int? version, Guid? projectId = null) =>
+    private void Synced(DiscoveredSkill skill, int? version, Guid? projectId = null)
+    {
         _ledger.Record(RegistryUri, skill.Path, new SkillLedgerEntry(SkillFileReader.Hash(SkillFileReader.Read(skill.Path)), version, skill.Name, projectId));
+        _inRegistry.Add(new RegistrySkill(skill.Name, null, version ?? 1, "", DateTimeOffset.UnixEpoch, projectId));
+    }
 
     private static void Edit(DiscoveredSkill skill, string body) =>
         File.WriteAllText(Path.Combine(skill.Path, "SKILL.md"), $"---\nname: {skill.Name}\n---\n{body}");
@@ -576,6 +745,7 @@ public sealed class SkillPushServiceTests : IDisposable
     {
         var skill = Skill("alpha");
         _ledger.Record(RegistryUri, skill.Path, new SkillLedgerEntry("old", 2, "alpha", null, "refused", 3));
+        _inRegistry.Add(new RegistrySkill("alpha", null, 3, "", DateTimeOffset.UnixEpoch));
         var (sut, _) = Build([skill], Session(), AtVersion(2));
 
         await sut.PushAsync(Request(), CancellationToken.None);
@@ -731,10 +901,15 @@ public sealed class SkillPushServiceTests : IDisposable
         {
             Pushed.Add((name, accessToken, files, project));
             Bases.Add(baseVersion);
-            if (Answer is { } answer)
-                return Task.FromResult(answer(name, baseVersion));
             var projectId = project is null ? (Guid?)null : ProjectIdOf(project.Facts);
-            return Task.FromResult(Outcomes.GetValueOrDefault(name) ?? new SkillPushOutcome(SkillPushStatus.Created, 1, null, projectId));
+            var outcome = Answer is { } answer
+                ? answer(name, baseVersion)
+                : Outcomes.GetValueOrDefault(name) ?? new SkillPushOutcome(SkillPushStatus.Created, 1, null, projectId);
+
+            // Like the registry: a skill it stored is in its list from then on.
+            if (outcome.Succeeded && !Skills.Any(s => s.Name == name && s.ProjectId == outcome.ProjectId))
+                Skills.Add(new RegistrySkill(name, null, outcome.Version ?? 1, "", DateTimeOffset.UnixEpoch, outcome.ProjectId));
+            return Task.FromResult(outcome);
         }
 
         /// <summary>A stable project id for a folder: by root commit for git, else by folder, as the registry keys them.</summary>
@@ -749,8 +924,13 @@ public sealed class SkillPushServiceTests : IDisposable
         public Dictionary<string, RegistrySkillContent> Contents { get; } = new(StringComparer.Ordinal);
         public List<string> Downloaded { get; } = [];
 
-        public Task<RegistrySkillList> ListSkillsAsync(Uri registry, string accessToken, CancellationToken cancellationToken) =>
-            Task.FromResult(ListError is null ? new RegistrySkillList(Skills, null) : new RegistrySkillList(null, ListError));
+        public int ListCalls { get; private set; }
+
+        public Task<RegistrySkillList> ListSkillsAsync(Uri registry, string accessToken, CancellationToken cancellationToken)
+        {
+            ListCalls++;
+            return Task.FromResult(ListError is null ? new RegistrySkillList(Skills.ToList(), null) : new RegistrySkillList(null, ListError));
+        }
 
         /// <summary>Earlier versions, served when a download names a version: keyed <c>&lt;key&gt;@&lt;version&gt;</c>.</summary>
         public Dictionary<string, RegistrySkillContent> History { get; } = new(StringComparer.Ordinal);

@@ -29,6 +29,11 @@ internal interface ISkillPushService
     /// <c>skills remote</c> shows the copy as changed here and in the registry, <c>skills pull</c> does not overwrite
     /// it, and the capture hook does not send the same content again.
     /// </para>
+    /// <para>
+    /// Except from the hook, a run that has skills the ledger says are synced asks the registry for its skill list once,
+    /// and a skill whose registry skill (the name and project it last synced as) is no longer listed, because another
+    /// machine deleted or renamed it, is pushed again as a new skill with a message saying so.
+    /// </para>
     /// </remarks>
     Task<SkillPushRunResult> PushAsync(SkillPushRequest request, CancellationToken cancellationToken);
 }
@@ -47,7 +52,8 @@ internal interface ISkillPushService
 /// Push the one selected skill as a new registry skill of this name, and rename the local copy to match (keep both).
 /// </param>
 /// <param name="FromHook">
-/// The capture hook is pushing: a copy whose exact content the registry already refused as stale is reported from
+/// The capture hook is pushing: the ledger is trusted without checking the registry's list, so an unchanged skill
+/// costs no network call, and a copy whose exact content the registry already refused as stale is reported from
 /// the ledger without asking again, so a refused skill costs nothing on every later use.
 /// </param>
 internal sealed record SkillPushRequest(
@@ -92,6 +98,9 @@ internal enum SkillPushRunFailure
 
     /// <summary><c>--as</c> needs exactly one local skill to push under the new name; see the detail.</summary>
     InvalidAs,
+
+    /// <summary>The registry answered, but would not list the skills needed to confirm what the ledger says; see the detail.</summary>
+    ListFailed,
 }
 
 /// <summary>One skill and what happened to it.</summary>
