@@ -45,6 +45,25 @@ public static class CliRunner
     }
 
     /// <summary>
+    /// Runs the binary with a standard input that is never written to and never closed, as a harness that holds the
+    /// hook's stdin open would, and says how long it ran.
+    /// </summary>
+    /// <param name="killAfter">How long to wait before killing it, so a hang fails the scenario instead of the run.</param>
+    public static async Task<(BufferedCommandResult Result, TimeSpan Elapsed)> RunWithOpenStdinAsync(IEnumerable<string> args, TimeSpan killAfter)
+    {
+        using var kill = new CancellationTokenSource(killAfter);
+        var started = System.Diagnostics.Stopwatch.StartNew();
+        var result = await CliWrap.Cli.Wrap(BinaryPath)
+            .WithArguments(args)
+            .WithEnvironmentVariables(env => env.Set("PROTOSTAR_CONFIG_DIR", LazyConfigDir.Value).Build())
+            // CliWrap stops feeding stdin once the process exits, which cancels this.
+            .WithStandardInputPipe(PipeSource.Create(async (_, cancellationToken) => await Task.Delay(Timeout.Infinite, cancellationToken)))
+            .WithValidation(CommandResultValidation.None)
+            .ExecuteBufferedAsync(kill.Token);
+        return (result, started.Elapsed);
+    }
+
+    /// <summary>
     /// Runs a whole command line through the platform shell, the way a harness runs an installed hook: the line is
     /// handed over exactly as written, quoting included, with <paramref name="stdin"/> piped in.
     /// </summary>

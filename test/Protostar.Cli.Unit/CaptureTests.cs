@@ -121,6 +121,19 @@ public sealed class CaptureServiceTests
     }
 
     [Fact]
+    public void A_hook_whose_input_never_ended_writes_and_logs_one_line_and_exits_zero()
+    {
+        var output = new StringWriter();
+        var log = new List<string>();
+
+        var exit = CapturePresenter.RenderUnread("Stop", TimeSpan.FromSeconds(15), output, log.Add);
+
+        Assert.Equal(0, exit);
+        Assert.Equal("protostar capture (Stop): the hook's input did not end within 15 seconds, so nothing was backed up." + Environment.NewLine, output.ToString());
+        Assert.EndsWith(output.ToString().TrimEnd(), Assert.Single(log));
+    }
+
+    [Fact]
     public void Presenter_names_each_scope_when_a_global_and_a_project_skill_share_the_used_name()
     {
         var push = new SkillPushRunResult(SkillPushRunFailure.None, null, new Uri("https://registry.test"),

@@ -19,6 +19,7 @@ public sealed partial class CliSteps : IDisposable
     private readonly StubRegistry _registry;
     private Sandbox? _sandbox;
     private BufferedCommandResult? _result;
+    private TimeSpan _elapsed;
 
     // Reqnroll resolves one HarnessSandbox and one StubRegistry per scenario and injects them here.
     public CliSteps(HarnessSandbox harness, StubRegistry registry)
@@ -204,6 +205,17 @@ public sealed partial class CliSteps : IDisposable
             Assert.Contains($"protostar capture ({hookEvent})", output);
         }
     }
+
+    [When("I run protostar with {string} and a standard input that never closes")]
+    public async Task WhenIRunWithOpenStdin(string argLine)
+    {
+        (_result, _elapsed) = await CliRunner.RunWithOpenStdinAsync(SubstituteArgs(argLine), TimeSpan.FromSeconds(60));
+        Console.WriteLine($"Exited {_result.ExitCode} after {_elapsed.TotalSeconds:0.0} s.");
+    }
+
+    [Then("it finished within {int} seconds")]
+    public void ThenItFinishedWithin(int seconds) =>
+        Assert.True(_elapsed < TimeSpan.FromSeconds(seconds), $"It ran for {_elapsed.TotalSeconds:0.0} s.");
 
     [Then("the exit code is {int}")]
     public void ThenTheExitCodeIs(int expected) =>

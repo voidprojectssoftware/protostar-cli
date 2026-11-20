@@ -31,6 +31,19 @@ internal static class CapturePresenter
         return 0;
     }
 
+    /// <summary>Writes and logs the line for a hook whose input never finished arriving, and returns 0.</summary>
+    /// <remarks>
+    /// Logged, since a harness that holds stdin open is worth knowing about, but not recorded: with no payload it is not
+    /// known whether the event was a skill use or a session to back up, so neither kind is marked as failing.
+    /// </remarks>
+    public static int RenderUnread(string hookEvent, TimeSpan waited, TextWriter output, Action<string> log)
+    {
+        var line = $"protostar capture ({hookEvent}): the hook's input did not end within {waited.TotalSeconds:0} seconds, so nothing was backed up.";
+        output.WriteLine(line);
+        log($"{DateTimeOffset.UtcNow:O} {line}");
+        return 0;
+    }
+
     // A skill backup's outcome, or a failure to start the session backup. Nothing for an ignored event, a session
     // handed off (its push keeps its own record), or a skill that is not local, since none of them backed anything up.
     internal static CaptureRecord? Record(CaptureResult result, string line)
