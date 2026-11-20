@@ -684,6 +684,18 @@ public sealed class RegistryApiTests
     }
 
     [Fact]
+    public async Task Listing_sessions_since_a_local_time_sends_it_in_utc()
+    {
+        var handler = new StubHandler(_ => Json(HttpStatusCode.OK, "[]"));
+        using var api = new RegistryApi(handler);
+        var since = new DateTimeOffset(2026, 11, 1, 0, 0, 0, TimeSpan.FromHours(-6));
+
+        await api.ListAsync(Registry, "tok", new TranscriptListQuery(null, null, null, since, 25), CancellationToken.None);
+
+        Assert.Equal("since=2026-11-01T06:00:00.0000000+00:00", Uri.UnescapeDataString(handler.Uri!.Query.Split('&')[1]));
+    }
+
+    [Fact]
     public async Task Downloading_a_project_skill_names_its_project()
     {
         var projectId = Guid.NewGuid();

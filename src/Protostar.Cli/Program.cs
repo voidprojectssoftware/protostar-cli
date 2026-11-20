@@ -97,7 +97,9 @@ app.Configure(config =>
             .WithDescription("List sessions backed up from every machine.");
     });
 
-    config.AddBranch<ProjectSettings>("project", project =>
+    // Not AddBranch<ProjectSettings>: branch settings bind only before the subcommand, so `project link x --dir y`
+    // silently acted on the current folder. Like the other branches, each command's settings carry the options.
+    config.AddBranch("project", project =>
     {
         project.SetDescription("See which project this folder belongs to, the same on every machine, and link or unlink it.");
         project.SetDefaultCommand<ProjectShowCommand>();

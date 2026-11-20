@@ -35,7 +35,7 @@ internal static class SessionsPresenter
                 {
                     task.MaxValue = Math.Max(1, p.BytesTotal);
                     task.Value = p.BytesDone;
-                    task.Description = $"Backing up sessions: {p.TranscriptsDone} of {p.TranscriptsTotal} transcripts";
+                    task.Description = $"Backing up sessions: {Finished(p)}";
                 }));
             });
         return result!;
@@ -65,17 +65,23 @@ internal static class SessionsPresenter
                 return;
             }
 
-            var tenths = p.BytesTotal > 0 ? (int)(10 * p.BytesDone / p.BytesTotal) : 10 * p.TranscriptsDone / p.TranscriptsTotal;
-            // The last bytes can land before the last transcript is finished with; 100% waits for that.
-            if (p.TranscriptsDone < p.TranscriptsTotal)
+            var backedUp = p.TranscriptsDone - p.TranscriptsUnfinished;
+            var tenths = p.BytesTotal > 0 ? (int)(10 * p.BytesDone / p.BytesTotal) : 10 * backedUp / p.TranscriptsTotal;
+            // The last bytes can land before the last transcript is finished with, and a skipped or failed transcript
+            // is finished with but not backed up: 100% waits until every transcript is both.
+            if (backedUp < p.TranscriptsTotal)
                 tenths = Math.Min(tenths, 9);
             if (tenths <= _tenths)
                 return;
             _tenths = tenths;
-            AnsiConsole.WriteLine(
-                $"{tenths * 10}%: {Bytes(p.BytesDone)} of {Bytes(p.BytesTotal)}, {p.TranscriptsDone} of {p.TranscriptsTotal} transcripts done.");
+            AnsiConsole.WriteLine($"{tenths * 10}%: {Bytes(p.BytesDone)} of {Bytes(p.BytesTotal)}, {Finished(p)}.");
         }
     }
+
+    // "3 of 5 transcripts done", plus how many of those were not backed up, so a failure never reads as done.
+    private static string Finished(SessionSyncProgress p) =>
+        $"{p.TranscriptsDone - p.TranscriptsUnfinished} of {p.TranscriptsTotal} transcripts done" +
+        (p.TranscriptsUnfinished > 0 ? $", {p.TranscriptsUnfinished} not finished" : "");
 
     /// <summary>Renders a sync run and returns the exit code: 0 when everything is backed up, 130 when stopped by Ctrl+C, otherwise 1.</summary>
     public static int RenderSync(SessionSyncResult result, IHarnessCatalog catalog)
@@ -212,7 +218,7 @@ internal static class SessionsPresenter
     /// object added for bytes not backed up yet (a row made from the file has no title and zero counts, and says
     /// <c>fromFile</c>), and the failure goes to standard error.
     /// </remarks>
-    public static int RenderList(SessionListResult result, IHarnessCatalog catalog, bool json)
+    public static int RenderList(SessionListResult result, IHarnessCatalog catalog, TranscriptListQuery query, bool json)
     {
         var partial = result.Failure is not (SessionSyncFailure.None or SessionSyncFailure.InvalidRegistry or SessionSyncFailure.UnknownHarness);
         if (!partial && Failure(result.Failure, result.Detail, result.Registry, catalog) is { } exit)
@@ -227,9 +233,13 @@ internal static class SessionsPresenter
             return partial ? 1 : 0;
         }
 
+        // With a filter, an empty list says nothing about whether anything is backed up, only that nothing matched.
+        var filters = Filters(query);
         if (result.Sessions.Count == 0 && !partial)
         {
-            AnsiConsole.MarkupLine("[grey]No sessions backed up yet. Run `protostar sessions push`.[/]");
+            AnsiConsole.MarkupLine(filters is null
+                ? "[grey]No sessions backed up yet. Run `protostar sessions push`.[/]"
+                : $"[grey]No sessions match {Markup.Escape(filters)}. Leave the filter out to see every session.[/]");
             return 0;
         }
 
@@ -279,9 +289,26 @@ internal static class SessionsPresenter
         AnsiConsole.MarkupLine(
             $"[red]{Markup.Escape(FailureMessage(result.Failure, result.Detail, result.Registry, catalog)!)}[/] " +
             (result.Sessions.Count == 0
-                ? "[grey]No pending sessions on this machine to show.[/]"
+                ? filters is null
+                    ? "[grey]No pending sessions on this machine to show.[/]"
+                    : $"[grey]No pending sessions on this machine match {Markup.Escape(filters)}.[/]"
                 : "[grey]Showing only sessions on this machine that are not backed up yet.[/]"));
         return 1;
+    }
+
+    // The filters given, as the options that set them ("--project foo, --since 2026-11-01"), or null for none.
+    private static string? Filters(TranscriptListQuery query)
+    {
+        var given = new List<string>();
+        if (query.Project is { } project)
+            given.Add($"--project {project}");
+        if (query.Machine is { } machine)
+            given.Add($"--machine {machine}");
+        if (query.Harness is { } harness)
+            given.Add($"--harness {harness}");
+        if (query.Since is { } since)
+            given.Add($"--since {since:yyyy-MM-dd HH:mm}");
+        return given.Count == 0 ? null : string.Join(", ", given);
     }
 
     private static JsonNode ToJson(ListedSession row)
