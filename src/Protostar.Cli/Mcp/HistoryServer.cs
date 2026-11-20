@@ -15,8 +15,8 @@ internal static class HistoryServer
 {
     private const string Instructions =
         "Read-only access to the developer's backed-up coding sessions and agent memory, from every project and machine. " +
-        "Use search to find a past session or memory by what it says, get_session to read how the work was done, list_sessions to browse, " +
-        "and get_memory to read a project's memory. Secrets are redacted.";
+        "Use search to find a past session or memory by what it says, get_session to read how the work was done, get_session_skills to see " +
+        "the skills it used, list_sessions to browse, and get_memory to read a project's memory. Secrets are redacted.";
 
     /// <summary>Serves until standard input closes or <paramref name="cancellationToken"/> fires, and returns the exit code.</summary>
     public static async Task<int> RunAsync(HistoryTools tools, CancellationToken cancellationToken)

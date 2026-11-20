@@ -158,6 +158,18 @@ internal sealed partial class RegistryApi : ITranscriptApi
         }
     }
 
+    /// <inheritdoc />
+    public async Task<ApiResult<IReadOnlyList<SessionSkill>>> GetSkillsAsync(Uri registry, string accessToken, string harness, string key, CancellationToken cancellationToken)
+    {
+        using var request = Request(HttpMethod.Get, registry, $"{TranscriptPath(harness, key)}/skills", accessToken);
+        return await SendAsync<IReadOnlyList<SessionSkill>>(
+            request,
+            async response => (await response.Content.ReadFromJsonAsync<SkillsBody>(TranscriptJson.Options, cancellationToken))?.Skills ?? [],
+            cancellationToken);
+    }
+
+    private sealed record SkillsBody(IReadOnlyList<SessionSkill>? Skills);
+
     // The response body, which ends the response when disposed.
     private sealed class ResponseStream(Stream body, HttpResponseMessage response) : Stream
     {

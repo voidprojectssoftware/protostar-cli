@@ -49,11 +49,11 @@ public sealed class McpServerTests
     }
 
     [Fact]
-    public void The_server_serves_exactly_four_tools_and_every_one_is_read_only()
+    public void The_server_serves_exactly_five_tools_and_every_one_is_read_only()
     {
         var tools = HistoryServer.Tools(Sut()).Select(t => t.ProtocolTool).ToList();
 
-        Assert.Equal(["search", "list_sessions", "get_session", "get_memory"], tools.Select(t => t.Name));
+        Assert.Equal(["search", "list_sessions", "get_session", "get_session_skills", "get_memory"], tools.Select(t => t.Name));
         Assert.All(tools, t =>
         {
             Assert.True(t.Annotations!.ReadOnlyHint);
@@ -105,6 +105,7 @@ public sealed class McpServerTests
         Assert.Equal(SessionsJson.NotSignedIn, ErrorCode(await tools.ListSessionsAsync()));
         Assert.Equal(SessionsJson.NotSignedIn, ErrorCode(await tools.GetSessionAsync(SessionId)));
         Assert.Equal(SessionsJson.NotSignedIn, ErrorCode(await tools.GetMemoryAsync("demo")));
+        Assert.Equal(SessionsJson.NotSignedIn, ErrorCode(await tools.GetSessionSkillsAsync(SessionId)));
     }
 
     [Fact]
@@ -113,6 +114,40 @@ public sealed class McpServerTests
         _registry.Down = true;
 
         Assert.Equal(SessionsJson.RegistryUnreachable, ErrorCode(await Sut().ListSessionsAsync()));
+    }
+
+    [Fact]
+    public async Task get_session_skills_finds_the_session_by_prefix_and_lists_its_skills_with_inferred_versions()
+    {
+        var result = await Sut().GetSessionSkillsAsync(SessionId[..8]);
+
+        Assert.NotEqual(true, result.IsError);
+        Assert.Contains(_registry.Asked, u => u.AbsolutePath == $"/v1/transcripts/claude-code/{SessionId}/skills");
+        Assert.Equal(SessionId, Body(result)["session"]!["id"]!.GetValue<string>());
+        var skills = Body(result)["skills"]!.AsArray();
+        Assert.Equal(["aspire", "plugin:review"], skills.Select(s => s!["name"]!.GetValue<string>()));
+        Assert.Equal(3, skills[0]!["version"]!.GetValue<int>());
+        Assert.True(skills[0]!["versionInferred"]!.GetValue<bool>());
+        Assert.Equal(2, skills[0]!["uses"]!.GetValue<int>());
+        Assert.Null(skills[1]!["version"]);
+    }
+
+    [Fact]
+    public async Task get_session_skills_on_a_registry_without_session_skills_says_to_update_it()
+    {
+        _registry.Capabilities = ["sessions", "redacted-read", "search"];
+
+        var result = await Sut().GetSessionSkillsAsync(SessionId);
+
+        Assert.Equal(SessionsJson.RegistryIncompatible, ErrorCode(result));
+        Assert.Contains("Update the registry", Body(result)["error"]!["message"]!.GetValue<string>());
+        Assert.DoesNotContain(_registry.Asked, u => u.AbsolutePath.StartsWith("/v1/transcripts", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task get_session_skills_for_an_unknown_id_is_not_found()
+    {
+        Assert.Equal(SessionsJson.NotFound, ErrorCode(await Sut().GetSessionSkillsAsync("00000000")));
     }
 
     [Fact]
@@ -208,7 +243,7 @@ public sealed class McpServerTests
     private sealed class FakeRegistry : HttpMessageHandler
     {
         public List<Uri> Asked { get; } = [];
-        public string[]? Capabilities { get; set; } = ["sessions", "redacted-read", "memory", "memory-content", "search", "memory-redacted-read"];
+        public string[]? Capabilities { get; set; } = ["sessions", "session-skills", "redacted-read", "memory", "memory-content", "search", "memory-redacted-read"];
         public bool Down { get; set; }
 
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
@@ -235,6 +270,17 @@ public sealed class McpServerTests
                         """{"type":"assistant","message":{"content":[{"type":"text","text":"Added."}]}}""" + "\n",
                         Encoding.UTF8, "application/x-ndjson"),
                 },
+                $"/v1/transcripts/claude-code/{SessionId}/skills" => Json(new JsonObject
+                {
+                    ["harness"] = "claude-code", ["key"] = SessionId,
+                    ["skills"] = new JsonArray(
+                        new JsonObject
+                        {
+                            ["name"] = "aspire", ["uses"] = 2, ["firstUsedAt"] = "2026-11-19T10:00:00Z", ["lastUsedAt"] = "2026-11-19T10:05:00Z",
+                            ["skillId"] = Guid.NewGuid(), ["version"] = 3, ["versionInferred"] = true, ["deleted"] = false,
+                        },
+                        new JsonObject { ["name"] = "plugin:review", ["uses"] = 1, ["versionInferred"] = false, ["deleted"] = false }),
+                }),
                 "/v1/memory" => Json(new JsonArray(
                     new JsonObject { ["projectId"] = ProjectId, ["projectName"] = "github.com/example/demo", ["files"] = 1 },
                     new JsonObject { ["projectId"] = Guid.NewGuid(), ["projectName"] = "github.com/example/homelab", ["files"] = 2 })),
@@ -248,6 +294,9 @@ public sealed class McpServerTests
                         ["path"] = "MEMORY.md", ["version"] = 1, ["content"] = Convert.ToBase64String(Encoding.UTF8.GetBytes("token [redacted:github-token]\n")),
                     }),
                 }),
+                var path when path.StartsWith("/v1/transcripts/", StringComparison.Ordinal) => Json(
+                    new JsonObject { ["type"] = "https://protostar.dev/problems/unknown-transcript", ["title"] = "No such transcript.", ["status"] = 404 },
+                    HttpStatusCode.NotFound, "application/problem+json"),
                 _ => new HttpResponseMessage(HttpStatusCode.NotFound),
             });
         }

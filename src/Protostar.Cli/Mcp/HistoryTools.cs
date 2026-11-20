@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using System.Text;
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using ModelContextProtocol.Protocol;
 using ModelContextProtocol.Server;
@@ -147,18 +148,8 @@ internal sealed class HistoryTools
 
         id = id.Trim();
         var opened = await _history.OpenSessionAsync(_registry, id, cancellationToken);
-        switch (opened.Outcome)
-        {
-            case SessionOpenOutcome.NotFound:
-                return Error(SessionsJson.NotFound, $"No backed-up session matches '{id}'. Use search or list_sessions to find its id.");
-            case SessionOpenOutcome.Ambiguous:
-                return Error(
-                    SessionsJson.AmbiguousId,
-                    $"'{id}' matches more than one session. Give more of the id.",
-                    new JsonObject { ["candidates"] = new JsonArray([.. opened.Candidates.Select(SessionsJson.Candidate)]) });
-            case SessionOpenOutcome.Failed:
-                return Failure(opened.Failure, opened.Detail, opened.Registry)!;
-        }
+        if (Unopened(opened, id) is { } failed)
+            return failed;
 
         var session = opened.Session!;
         try
@@ -178,6 +169,29 @@ internal sealed class HistoryTools
         {
             return Error(SessionsJson.RegistryUnreachable, ex.Message);
         }
+    }
+
+    [McpServerTool(Name = "get_session_skills", Title = "Skills a session used", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false)]
+    [Description("List the skills a backed-up session used (its subagents' included), earliest first used first, so the same approach can be " +
+        "repeated with the same skills: name, uses, firstUsedAt, lastUsedAt, and the registry skill it matched (skillId) with the version " +
+        "inferred from when versions were pushed (version, versionInferred). deleted: true for a skill since deleted from the registry.")]
+    public async Task<CallToolResult> GetSessionSkillsAsync(
+        [Description("The session's id, or enough of its start to name one session.")] string id,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(id))
+            return Invalid("id is required: a session id from search or list_sessions.");
+
+        id = id.Trim();
+        var result = await _history.GetSessionSkillsAsync(_registry, id, cancellationToken);
+        if (Unopened(result.Session, id) is { } failed)
+            return failed;
+
+        return Ok(new JsonObject
+        {
+            ["session"] = SessionsJson.ListRecord(new ListedSession(result.Session.Session!.Detail.Transcript, null)),
+            ["skills"] = new JsonArray([.. result.Skills.Select(s => JsonSerializer.SerializeToNode(s, TranscriptJson.Options))]),
+        });
     }
 
     [McpServerTool(Name = "get_memory", Title = "Read memory", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false)]
@@ -305,6 +319,18 @@ internal sealed class HistoryTools
 
         return record;
     }
+
+    // The tool error for a session lookup that found no one session, or null when it found one.
+    private CallToolResult? Unopened(SessionOpenResult opened, string id) => opened.Outcome switch
+    {
+        SessionOpenOutcome.Found => null,
+        SessionOpenOutcome.NotFound => Error(SessionsJson.NotFound, $"No backed-up session matches '{id}'. Use search or list_sessions to find its id."),
+        SessionOpenOutcome.Ambiguous => Error(
+            SessionsJson.AmbiguousId,
+            $"'{id}' matches more than one session. Give more of the id.",
+            new JsonObject { ["candidates"] = new JsonArray([.. opened.Candidates.Select(SessionsJson.Candidate)]) }),
+        _ => Failure(opened.Failure, opened.Detail, opened.Registry)!,
+    };
 
     private CallToolResult? Failure(SessionSyncFailure failure, string? detail, Uri? registry) =>
         SessionsPresenter.FailureMessage(failure, detail, registry, _catalog) is { } message

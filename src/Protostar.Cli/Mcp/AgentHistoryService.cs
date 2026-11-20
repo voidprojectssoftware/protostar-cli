@@ -18,11 +18,20 @@ internal interface IAgentHistoryService
     /// </remarks>
     Task<SessionOpenResult> OpenSessionAsync(string? registry, string id, CancellationToken cancellationToken);
 
+    /// <summary>Finds a session by id or id prefix and lists the skills it and its subagents used, with the versions the registry infers.</summary>
+    /// <remarks>A registry that does not list the <c>session-skills</c> capability is refused, saying it needs updating.</remarks>
+    Task<SessionSkillsResult> GetSessionSkillsAsync(string? registry, string id, CancellationToken cancellationToken);
+
     /// <summary>A project's memory files, or the one at <paramref name="path"/>, with secrets redacted by the registry.</summary>
     /// <param name="project">The project's id, or text in its name, matched against the projects that have memory.</param>
     /// <remarks>Refused on a registry that does not list <c>memory-redacted-read</c>, for the same reason as <see cref="OpenSessionAsync"/>.</remarks>
     Task<MemoryReadResult> GetMemoryAsync(string? registry, string project, string? path, CancellationToken cancellationToken);
 }
+
+/// <summary>The skills a session used, or why they could not be listed.</summary>
+/// <param name="Session">The lookup of the session; its outcome says whether it was found, and why not.</param>
+/// <param name="Skills">The skills, earliest first used first; empty unless the session was found and listed.</param>
+internal sealed record SessionSkillsResult(SessionOpenResult Session, IReadOnlyList<SessionSkill> Skills);
 
 /// <summary>Whether <see cref="IAgentHistoryService.GetMemoryAsync"/> found what it was asked for.</summary>
 internal enum MemoryReadOutcome
@@ -64,6 +73,9 @@ internal sealed class AgentHistoryService : IAgentHistoryService
     /// <summary>The capability that makes a memory download honour <c>redacted=true</c>.</summary>
     internal const string MemoryRedactedRead = "memory-redacted-read";
 
+    /// <summary>The capability that serves the skills a session used (registry#14).</summary>
+    internal const string SessionSkills = "session-skills";
+
     private readonly IAccessTokenProvider _tokens;
     private readonly IRegistryApi _meta;
     private readonly ITranscriptApi _transcripts;
@@ -99,6 +111,24 @@ internal sealed class AgentHistoryService : IAgentHistoryService
         return connection.Failure != SessionSyncFailure.None
             ? SessionOpenResult.Fail(connection.Failure, connection.Detail, connection.Registry)
             : await _reader.OpenAsync(registry, null, id, cancellationToken);
+    }
+
+    /// <inheritdoc />
+    public async Task<SessionSkillsResult> GetSessionSkillsAsync(string? registry, string id, CancellationToken cancellationToken)
+    {
+        var connection = await ConnectAsync(registry, SessionSkills, cancellationToken);
+        if (connection.Failure != SessionSyncFailure.None)
+            return new SessionSkillsResult(SessionOpenResult.Fail(connection.Failure, connection.Detail, connection.Registry), []);
+
+        var opened = await _reader.OpenAsync(registry, null, id, cancellationToken);
+        if (opened.Outcome != SessionOpenOutcome.Found)
+            return new SessionSkillsResult(opened, []);
+
+        var transcript = opened.Session!.Detail.Transcript;
+        var skills = await _transcripts.GetSkillsAsync(connection.Registry!, connection.Token!, transcript.Harness, transcript.Key, cancellationToken);
+        return skills.Ok
+            ? new SessionSkillsResult(opened, skills.Value!)
+            : new SessionSkillsResult(SessionOpenResult.Fail(SessionSyncFailure.RegistryUnreachable, skills.Error, connection.Registry), []);
     }
 
     /// <inheritdoc />
@@ -160,12 +190,17 @@ internal sealed class AgentHistoryService : IAgentHistoryService
             return new Connection(SessionSyncFailure.RegistryUnreachable, null, registry, null);
         if (ApiCompatibility.Check(meta) is { } incompatible)
             return new Connection(SessionSyncFailure.Incompatible, incompatible, registry, null);
-        // A registry too old to list capabilities is refused too: it cannot be shown to redact.
+        // A registry too old to list capabilities is refused too: it cannot be shown to redact, and predates session skills.
         if (capability is not null && meta.Capabilities?.Contains(capability, StringComparer.Ordinal) != true)
-            return new Connection(SessionSyncFailure.Incompatible, $"This registry cannot serve {Feature(capability)} with secrets redacted. Update the registry.", registry, null);
+            return new Connection(SessionSyncFailure.Incompatible, Refusal(capability), registry, null);
 
         return new Connection(SessionSyncFailure.None, null, registry, stored.AccessToken);
     }
 
-    private static string Feature(string capability) => capability == MemoryRedactedRead ? "memory" : "sessions";
+    private static string Refusal(string capability) => capability switch
+    {
+        SessionSkills => "This registry cannot list the skills a session used. Update the registry.",
+        MemoryRedactedRead => "This registry cannot serve memory with secrets redacted. Update the registry.",
+        _ => "This registry cannot serve sessions with secrets redacted. Update the registry.",
+    };
 }

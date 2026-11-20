@@ -61,6 +61,39 @@ internal interface ITranscriptApi
     /// </para>
     /// </remarks>
     Task<ApiResult<Stream>> OpenRedactedContentAsync(Uri registry, string accessToken, string harness, string key, CancellationToken cancellationToken);
+
+    /// <summary><c>GET /v1/transcripts/{harness}/{key}/skills</c>: the skills the transcript (and, for a session, its subagents) used.</summary>
+    /// <remarks>
+    /// Callers check the <c>session-skills</c> capability first (registry#14). A transcript the registry does not hold
+    /// comes back with <see cref="ApiResult{T}.TranscriptUnknown"/> set.
+    /// </remarks>
+    Task<ApiResult<IReadOnlyList<SessionSkill>>> GetSkillsAsync(Uri registry, string accessToken, string harness, string key, CancellationToken cancellationToken);
+}
+
+/// <summary>One skill a session used, as the registry reports it.</summary>
+/// <remarks>A transcript records only the name, so the registry infers the version from push times; only names, counts and times are kept.</remarks>
+internal sealed record SessionSkill
+{
+    /// <summary>The name as invoked; a plugin skill keeps its <c>plugin:skill</c> form.</summary>
+    [JsonPropertyName("name")] public string Name { get; init; } = "";
+
+    /// <summary>How many times it was invoked.</summary>
+    [JsonPropertyName("uses")] public int Uses { get; init; }
+
+    [JsonPropertyName("firstUsedAt")] public DateTimeOffset? FirstUsedAt { get; init; }
+    [JsonPropertyName("lastUsedAt")] public DateTimeOffset? LastUsedAt { get; init; }
+
+    /// <summary>The registry skill it matched; <c>null</c> when it matched none or was deleted.</summary>
+    [JsonPropertyName("skillId")] public Guid? SkillId { get; init; }
+
+    /// <summary>The version inferred to have been used; <c>null</c> when none had been pushed by then.</summary>
+    [JsonPropertyName("version")] public int? Version { get; init; }
+
+    /// <summary>True when <see cref="Version"/> is set: inferred from push times, never read from the transcript.</summary>
+    [JsonPropertyName("versionInferred")] public bool VersionInferred { get; init; }
+
+    /// <summary>True when the skill has since been deleted from the registry.</summary>
+    [JsonPropertyName("deleted")] public bool Deleted { get; init; }
 }
 
 /// <summary>A value, or why the registry did not return one.</summary>
