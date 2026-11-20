@@ -22,6 +22,13 @@ internal interface ISkillPushService
     /// discovery order is pushed; a later one is skipped when its content is identical, and reported as
     /// <see cref="SkillPushStatus.Conflict"/> when it differs, since pushing both would make them overwrite
     /// each other.
+    /// <para>
+    /// Each push names the version its copy was last synced from (from the ledger), so the registry refuses an edit
+    /// made from an older version than its current one instead of stacking it on top. Such a skill comes back as
+    /// <see cref="SkillPushStatus.Stale"/>, is never retried, and the refusal is recorded in the ledger so
+    /// <c>skills remote</c> shows the copy as changed here and in the registry, <c>skills pull</c> does not overwrite
+    /// it, and the capture hook does not send the same content again.
+    /// </para>
     /// </remarks>
     Task<SkillPushRunResult> PushAsync(SkillPushRequest request, CancellationToken cancellationToken);
 }
@@ -32,14 +39,26 @@ internal interface ISkillPushService
 /// <param name="HarnessHome">Override the harness config root.</param>
 /// <param name="ProjectStart">Where the project-scope walk-up starts; <c>null</c> skips project skills.</param>
 /// <param name="Registry">The <c>--registry</c> option; <c>null</c> falls back to the environment, the saved default, then the built-in one.</param>
-/// <param name="Force">Upload even when the local ledger says the registry already has this content.</param>
+/// <param name="Force">
+/// Upload even when the local ledger says the registry already has this content, and replace the registry's current
+/// version when it is newer than the one this copy was based on (keep mine). The replaced version stays in history.
+/// </param>
+/// <param name="As">
+/// Push the one selected skill as a new registry skill of this name, and rename the local copy to match (keep both).
+/// </param>
+/// <param name="FromHook">
+/// The capture hook is pushing: a copy whose exact content the registry already refused as stale is reported from
+/// the ledger without asking again, so a refused skill costs nothing on every later use.
+/// </param>
 internal sealed record SkillPushRequest(
     IReadOnlyList<string> Names,
     string? HarnessId,
     string? HarnessHome,
     string? ProjectStart,
     string? Registry,
-    bool Force = false);
+    bool Force = false,
+    string? As = null,
+    bool FromHook = false);
 
 /// <summary>Why a push run stopped before uploading anything.</summary>
 internal enum SkillPushRunFailure
@@ -70,6 +89,9 @@ internal enum SkillPushRunFailure
 
     /// <summary>The registry does not speak this CLI's API major.</summary>
     Incompatible,
+
+    /// <summary><c>--as</c> needs exactly one local skill to push under the new name; see the detail.</summary>
+    InvalidAs,
 }
 
 /// <summary>One skill and what happened to it.</summary>

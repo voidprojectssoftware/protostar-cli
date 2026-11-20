@@ -27,9 +27,15 @@ internal interface ISkillLedger
     void Forget(Uri registry, string skillPath);
 }
 
-/// <summary>What was last pushed or pulled for one skill.</summary>
-/// <param name="ContentHash">The lowercase hex SHA-256 from <see cref="SkillFileReader.Hash"/>.</param>
-/// <param name="Version">The registry's version number for that content.</param>
+/// <summary>What was last pushed or pulled for one skill, and any push the registry refused since.</summary>
+/// <param name="ContentHash">
+/// The lowercase hex SHA-256 from <see cref="SkillFileReader.Hash"/>; empty in a record made only to remember a
+/// refusal for a copy that never synced.
+/// </param>
+/// <param name="Version">
+/// The registry's version number for that content, which the next push names as its base; 0 for a copy that never
+/// synced a version; <c>null</c> in records written before versions were kept, which push with no base.
+/// </param>
 /// <param name="Name">
 /// The registry skill name that content was synced as, exactly; <c>null</c> in records written before
 /// names were kept. A pull trusts a record only for the registry skill it names, so a folder synced as
@@ -40,4 +46,11 @@ internal interface ISkillLedger
 /// written before project skills, when every skill was pushed as global. A record speaks only for the registry
 /// skill with this name and this project.
 /// </param>
-internal sealed record SkillLedgerEntry(string ContentHash, int? Version, string? Name = null, Guid? ProjectId = null);
+/// <param name="RefusedHash">
+/// The content of this copy the registry last refused as stale (<see cref="Registry.SkillPushStatus.Stale"/>): it was
+/// changed here and in the registry since <paramref name="Version"/>. <c>null</c> when no push was refused since the
+/// last sync. The capture hook does not send that same content again.
+/// </param>
+/// <param name="RefusedVersion">The registry's current version when it refused <paramref name="RefusedHash"/>.</param>
+internal sealed record SkillLedgerEntry(
+    string ContentHash, int? Version, string? Name = null, Guid? ProjectId = null, string? RefusedHash = null, int? RefusedVersion = null);

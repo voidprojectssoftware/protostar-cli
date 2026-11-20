@@ -23,7 +23,8 @@ internal interface ISkillPullService
     /// <summary>Installs or updates the requested registry skills on this machine.</summary>
     /// <remarks>
     /// A skill with local changes is never overwritten unless <see cref="SkillPullRequest.Force"/> is set;
-    /// it is reported as <see cref="SkillPullStatus.LocalChanges"/> instead. A
+    /// it is reported as <see cref="SkillPullStatus.LocalChanges"/> (or <see cref="SkillPullStatus.ChangedBoth"/>
+    /// when the registry moved on too) instead. A
     /// <see cref="SkillPullStatus.Conflict"/> is never written, even with <c>Force</c>: that flag means
     /// "overwrite my edits to this skill", not "overwrite an unrelated folder". After a pull the ledger
     /// records the installed content, so the capture hook does not push it straight back.
@@ -36,7 +37,13 @@ internal interface ISkillPullService
 /// <param name="HarnessHome">Override the harness config root.</param>
 /// <param name="Registry">The <c>--registry</c> option; <c>null</c> falls back to the environment, the saved default, then the built-in one.</param>
 /// <param name="ProjectStart">The folder whose project's skills are compared; <c>null</c> compares global skills only.</param>
-internal sealed record SkillRemoteRequest(string? HarnessId, string? HarnessHome, string? Registry, string? ProjectStart = null);
+/// <param name="Names">Registry skill names to compare, matched as a pull matches them; <c>null</c> or empty compares every skill.</param>
+/// <param name="Version">
+/// Compare with this version of the one named skill instead of its current version: what <c>skills pull NAME --version N</c>
+/// would do. Needs exactly one name.
+/// </param>
+internal sealed record SkillRemoteRequest(
+    string? HarnessId, string? HarnessHome, string? Registry, string? ProjectStart = null, IReadOnlyList<string>? Names = null, int? Version = null);
 
 /// <summary>What to pull and where.</summary>
 /// <param name="Names">
@@ -47,13 +54,19 @@ internal sealed record SkillRemoteRequest(string? HarnessId, string? HarnessHome
 /// <param name="Registry">The <c>--registry</c> option; <c>null</c> falls back to the environment, the saved default, then the built-in one.</param>
 /// <param name="Force">Overwrite skills that have local changes.</param>
 /// <param name="ProjectStart">The folder whose project's skills are installed; <c>null</c> pulls global skills only.</param>
+/// <param name="Version">
+/// Install this earlier (or any) version of the one named skill instead of its current version, to recover work. Needs
+/// exactly one name, and keeps every rule of an ordinary pull: local changes are kept unless forced, and conflicts and
+/// other projects' skills are never written.
+/// </param>
 internal sealed record SkillPullRequest(
     IReadOnlyList<string> Names,
     string? HarnessId,
     string? HarnessHome,
     string? Registry,
     bool Force = false,
-    string? ProjectStart = null);
+    string? ProjectStart = null,
+    int? Version = null);
 
 /// <summary>Why a remote listing or pull stopped before doing anything.</summary>
 internal enum SkillPullRunFailure
@@ -90,6 +103,12 @@ internal enum SkillPullRunFailure
 
     /// <summary>A requested skill name is not in the registry.</summary>
     SkillNotFound,
+
+    /// <summary><c>--version</c> was given without exactly one skill name, or is not a version number; see the detail.</summary>
+    InvalidVersion,
+
+    /// <summary>The requested version of the named skill could not be fetched (it does not exist, say); see the detail.</summary>
+    VersionNotFound,
 }
 
 /// <summary>How a skill on this machine compares with the registry.</summary>
@@ -106,6 +125,13 @@ internal enum SkillSyncState
 
     /// <summary>Installed here and differs from the registry in a way this machine made (or cannot rule out).</summary>
     LocalChanges,
+
+    /// <summary>
+    /// Changed here and in the registry: edited here since the version it last synced, while the registry moved past
+    /// that version (another machine pushed), or the registry refused this exact content as stale. Never overwritten
+    /// without <c>--force</c>; the user picks which to keep.
+    /// </summary>
+    ChangedBoth,
 
     /// <summary>Installed here but not in the registry.</summary>
     LocalOnly,
@@ -143,11 +169,13 @@ internal sealed record SkillComparison(
     string? Project = null);
 
 /// <summary>The result of comparing the registry with this machine.</summary>
+/// <param name="Version">The version asked for with <c>--version</c>; <c>null</c> when comparing with current versions.</param>
 internal sealed record SkillRemoteResult(
     SkillPullRunFailure Failure,
     string? Detail,
     Uri? Registry,
-    IReadOnlyList<SkillComparison> Skills)
+    IReadOnlyList<SkillComparison> Skills,
+    int? Version = null)
 {
     public static SkillRemoteResult Fail(SkillPullRunFailure failure, string? detail, Uri? registry = null) =>
         new(failure, detail, registry, []);
@@ -167,6 +195,9 @@ internal enum SkillPullStatus
 
     /// <summary>Left alone because it has local changes; rerun with <c>--force</c> to overwrite them.</summary>
     LocalChanges,
+
+    /// <summary>Left alone because it changed here and in the registry (<see cref="SkillSyncState.ChangedBoth"/>); <c>--force</c> keeps the registry's.</summary>
+    ChangedBoth,
 
     /// <summary>The download or the write failed; see the message.</summary>
     Failed,
@@ -189,11 +220,13 @@ internal enum SkillPullStatus
 internal sealed record SkillPullEntry(IHarness Harness, string Name, SkillPullStatus Status, int Version, string Path, string? Message, string? Project = null);
 
 /// <summary>The result of a pull run.</summary>
+/// <param name="Version">The version asked for with <c>--version</c>; <c>null</c> for current versions.</param>
 internal sealed record SkillPullRunResult(
     SkillPullRunFailure Failure,
     string? Detail,
     Uri? Registry,
-    IReadOnlyList<SkillPullEntry> Entries)
+    IReadOnlyList<SkillPullEntry> Entries,
+    int? Version = null)
 {
     /// <summary>
     /// True when the run went ahead and no skill failed or conflicted. Skills left alone for local changes

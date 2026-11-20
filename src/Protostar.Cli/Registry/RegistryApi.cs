@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
@@ -53,10 +54,13 @@ internal sealed partial class RegistryApi : IRegistryApi, IDisposable
         string name,
         IReadOnlyList<SkillUploadFile> files,
         SkillProject? project,
+        int? baseVersion,
         CancellationToken cancellationToken)
     {
         using var content = new MultipartFormDataContent();
         content.Add(new StringContent(name), "name");
+        if (baseVersion is { } based)
+            content.Add(new StringContent(based.ToString(CultureInfo.InvariantCulture)), "baseVersion");
         if (project is not null)
             content.Add(new StringContent(JsonSerializer.Serialize(new { machineId = project.MachineId, facts = project.Facts }, TranscriptJson.Options)), "project");
         foreach (var file in files)
@@ -161,8 +165,9 @@ internal sealed partial class RegistryApi : IRegistryApi, IDisposable
         }
     }
 
-    // 201 is a new version and 200 an unchanged push, both carrying the push body. Any 4xx is the
-    // registry refusing this skill (its problem title says why); anything else is a failure to retry.
+    // 201 is a new version and 200 an unchanged push, both carrying the push body. A 409 of the stale problem type
+    // is a push based on an older version than the registry's. Any other 4xx is the registry refusing this skill
+    // (its problem title says why); anything else is a failure to retry.
     private static async Task<SkillPushOutcome> ToOutcomeAsync(HttpResponseMessage response, CancellationToken cancellationToken)
     {
         var status = response.StatusCode;
@@ -178,6 +183,9 @@ internal sealed partial class RegistryApi : IRegistryApi, IDisposable
 
         if (status == HttpStatusCode.Unauthorized)
             return new SkillPushOutcome(SkillPushStatus.Failed, null, reason ?? "The registry rejected the session. Run `protostar auth login`.");
+
+        if (status == HttpStatusCode.Conflict && problem?.Type == StaleSkillVersionType && problem.CurrentVersion is { } current)
+            return new SkillPushOutcome(SkillPushStatus.Stale, current, reason, problem.ProjectId);
 
         if ((int)status is >= 400 and < 500)
             return new SkillPushOutcome(SkillPushStatus.Refused, null, reason ?? $"Refused by the registry ({(int)status}).");
@@ -199,6 +207,9 @@ internal sealed partial class RegistryApi : IRegistryApi, IDisposable
             return default;
         }
     }
+
+    // The registry's problem type for a push based on an older version than its current one.
+    private const string StaleSkillVersionType = "https://protostar.dev/problems/stale-skill-version";
 
     public void Dispose() => _http.Dispose();
 
@@ -248,7 +259,10 @@ internal sealed partial class RegistryApi : IRegistryApi, IDisposable
 
     private sealed record ProblemResponse
     {
+        [JsonPropertyName("type")] public string? Type { get; init; }
         [JsonPropertyName("title")] public string? Title { get; init; }
         [JsonPropertyName("detail")] public string? Detail { get; init; }
+        [JsonPropertyName("currentVersion")] public int? CurrentVersion { get; init; }
+        [JsonPropertyName("projectId")] public Guid? ProjectId { get; init; }
     }
 }

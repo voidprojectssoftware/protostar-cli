@@ -24,6 +24,14 @@ internal sealed class SkillsRemoteCommand : AsyncCommand<SkillsRemoteCommand.Set
 
     public sealed class Settings : CommandSettings
     {
+        [CommandArgument(0, "[NAME]")]
+        [Description("Registry skill name(s) to compare. Omit to compare every skill.")]
+        public string[] Names { get; init; } = [];
+
+        [CommandOption("--version <N>")]
+        [Description("Compare the one named skill with its version N instead of its current version: what `skills pull NAME --version N` would do.")]
+        public int? Version { get; init; }
+
         [CommandOption("-H|--harness <ID>")]
         [Description("Only compare with this harness id.")]
         public string? Harness { get; init; }
@@ -47,7 +55,7 @@ internal sealed class SkillsRemoteCommand : AsyncCommand<SkillsRemoteCommand.Set
 
     protected override async Task<int> ExecuteAsync(CommandContext context, Settings settings, CancellationToken cancellation)
     {
-        var result = await _pull.CompareAsync(new SkillRemoteRequest(settings.Harness, settings.HarnessHome, settings.Registry, ProjectStart(settings)), cancellation);
+        var result = await _pull.CompareAsync(new SkillRemoteRequest(settings.Harness, settings.HarnessHome, settings.Registry, ProjectStart(settings), settings.Names, settings.Version), cancellation);
         return SkillPullPresenter.RenderRemote(result, _catalog);
     }
 

@@ -106,6 +106,11 @@ each skill you see one of:
   of them to back up both.
 - **failed**: the upload did not complete (for example, the registry was
   unreachable).
+- **changed here and in the registry**: the registry refused the push because the
+  skill changed there (pushed from another machine) after this copy was last pushed
+  or pulled here. Nothing was overwritten on either side. Choose what to keep; the
+  three ways out are printed below the table and listed under
+  [Changed here and in the registry](#changed-here-and-in-the-registry).
 
 A project skill (one in a project's `.claude/skills`) is backed up as that
 project's skill: protostar works out the project from the folder the skill's
@@ -126,12 +131,36 @@ Takes the same options as `protostar skills`, plus:
 | Option | Description |
 |---|---|
 | `--registry <URL>` | Registry to back up to. Defaults to `PROTOSTAR_REGISTRY_URL`, then the saved default, then `https://localhost:7443`. |
-| `--force` | Upload every selected skill even if it has not changed since its last backup. |
+| `--force` | Upload every selected skill even if it has not changed since its last backup. When the registry has a newer version than the one this copy was based on, replace it (keep yours): the output names the version replaced, which stays in the registry's history. |
+| `--as <NEW-NAME>` | Push the one named skill as a new registry skill called `NEW-NAME`, and rename the copy here to match (its `SKILL.md` name, and its folder when the folder has the old name). Refused, with nothing changed, when the registry already has a different skill of that name. |
 
 protostar remembers what it last backed up to each registry in
 `~/.protostar/skill-ledger.json`, so a skill that has not changed is reported as
 unchanged without contacting the registry. Use `--force` if the registry has lost
 something the ledger says it has.
+
+Each push tells the registry which version this copy was last pushed or pulled as.
+When that is no longer the registry's latest version, the registry refuses the push
+instead of stacking it on top, and the skill shows as **changed here and in the
+registry**. A copy protostar has no record of is pushed as "based on no version", so
+it can create a skill but never silently replace one. A registry from before this
+check ignores it, and a CLI from before it sends nothing to check, so both keep the
+old behaviour (the later push wins) until upgraded.
+
+#### Changed here and in the registry
+
+A skill is in this state when it was edited on this machine and the registry also
+moved past the version this machine last had. `skills push` reports it,
+`skills remote` shows it, and `skills pull` leaves the copy alone. Pick one:
+
+| To keep | Run | What happens |
+|---|---|---|
+| Yours | `protostar skills push NAME --force` | Your copy becomes the next version. The registry's version it replaces stays in history. |
+| Theirs | `protostar skills pull NAME --force` | The registry's version overwrites your copy here. |
+| Both | `protostar skills push NAME --as NEW-NAME`, then `protostar skills pull NAME` | Your copy is pushed as the new skill `NEW-NAME` and renamed here; the pull installs the registry's `NAME` beside it. |
+
+Any version replaced this way, or lost before this check existed, can be fetched
+again with `protostar skills pull NAME --version N`.
 
 ### `protostar skills remote`
 
@@ -146,6 +175,11 @@ written. Each skill shows its latest registry version and one of:
 - **local changes**: this machine's copy differs from the registry and may hold
   work done here (or protostar has no record of it). `pull` will not overwrite it
   without `--force`.
+- **changed here and in the registry (this copy is based on vN)**: edited here
+  since vN while the registry moved past vN, or a push of exactly this content was
+  refused for that reason. `pull` will not overwrite it without `--force`; the ways
+  to keep yours, theirs or both are printed below the table (see
+  [Changed here and in the registry](#changed-here-and-in-the-registry)).
 - **only here (not backed up)**: the skill is on this machine but not in the
   registry. Back it up with `protostar skills push`.
 - **conflict**: the skill cannot be pulled safely, and the reason is shown. Either
@@ -164,8 +198,15 @@ is in their project, and then with that checkout's own project skills folder
 (`<repo top level>/.claude/skills`; in a git worktree, the worktree's own top
 level). A Project column appears when any project skill is listed.
 
+Pass skill names to compare only those. With one name and `--version N`, the
+comparison is with that skill's version N instead of its latest: **matches vN**,
+**can be replaced with vN** (this copy is unedited, so `pull --version N` would
+replace it), or one of the protected states above, which `pull --version N` would
+leave alone.
+
 | Option | Description |
 |---|---|
+| `--version <N>` | Compare the one named skill with its version N: what `skills pull NAME --version N` would do. |
 | `-H, --harness <ID>` | Only compare with this harness. |
 | `--harness-home <DIR>` | Override the harness config root. |
 | `--project <DIR>` | The folder whose project skills to compare. Defaults to the current directory. |
@@ -201,7 +242,16 @@ The registry does not store file permissions. An updated file keeps its existing
 permissions, and a new file that starts with `#!` is made executable for you.
 
 The exit code is `0` unless a skill failed to download or write, or was skipped as a
-conflict. Skills kept because of local changes do not count as failures.
+conflict. Skills kept because of local changes, or because they changed here and in
+the registry, do not count as failures.
+
+With one name and `--version N`, version N is installed instead of the latest, to
+recover earlier work (including work overwritten before protostar checked for
+concurrent edits). Every rule above still applies: a copy with local changes is
+kept unless you pass `--force`, and a conflict or another project's skill is never
+written. The ledger then records the copy as version N, so a plain `skills pull`
+would replace it with the latest again; run `protostar skills push NAME --force` to
+make it the latest instead.
 
 | Option | Description |
 |---|---|
@@ -210,7 +260,8 @@ conflict. Skills kept because of local changes do not count as failures.
 | `--project <DIR>` | The folder whose project skills to install. Defaults to the current directory. |
 | `--global-only` | Only pull global skills. |
 | `--registry <URL>` | Registry to pull from. Defaults to `PROTOSTAR_REGISTRY_URL`, then the saved default, then `https://localhost:7443`. |
-| `--force` | Overwrite skills that have local changes. Never overrides a conflict. |
+| `--force` | Overwrite skills that have local changes, including ones changed here and in the registry. Never overrides a conflict. |
+| `--version <N>` | Install version N of the one named skill instead of its latest. |
 
 ### `protostar skills rename <OLD> <NEW>`
 
@@ -514,7 +565,10 @@ is documented here only for completeness. You should not need to run it by hand.
 When Claude Code uses one of your skills, `capture` backs that skill up to the
 registry if it changed since its last backup, the same way
 [`skills push`](#protostar-skills-push-name) does for one skill. An unchanged skill
-costs no network call. Plugin skills (`plugin:name`) are not backed up.
+costs no network call. Plugin skills (`plugin:name`) are not backed up. When the
+registry refuses the backup because the skill also changed there, the refusal is
+logged once and remembered: later uses of the same content are not sent again, and
+`skills remote` shows the skill as changed here and in the registry.
 
 On `Stop` (after each reply) and `SessionEnd`, `capture` starts a background
 `protostar sessions push` for that session and returns at once, without waiting for

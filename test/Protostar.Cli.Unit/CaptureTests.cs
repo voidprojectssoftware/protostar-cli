@@ -37,6 +37,7 @@ public sealed class CaptureServiceTests
         Assert.Equal(["alpha"], request.Names);
         Assert.Equal(Cwd, request.ProjectStart);
         Assert.False(request.Force);
+        Assert.True(request.FromHook);
     }
 
     [Fact]
@@ -135,6 +136,23 @@ public sealed class CaptureServiceTests
     }
 
     [Fact]
+    public void Presenter_logs_a_stale_refusal_once_and_not_when_it_is_remembered()
+    {
+        CaptureResult Stale(bool remembered) => new(CaptureAction.SkillBackedUp, "alpha", new SkillPushRunResult(
+            SkillPushRunFailure.None, null, new Uri("https://registry.test"),
+            [new SkillPushEntry(new DiscoveredSkill { Name = "alpha", Scope = SkillScope.Global, Path = "/s/alpha" },
+                new SkillPushOutcome(SkillPushStatus.Stale, 2, "Changed here and in the registry.", Remembered: remembered))]), null);
+        var output = new StringWriter();
+        var log = new List<string>();
+
+        CapturePresenter.Render("PostToolUse", Stale(remembered: false), output, log.Add);
+        CapturePresenter.Render("PostToolUse", Stale(remembered: true), output, log.Add);
+
+        Assert.Contains("skills remote", Assert.Single(log));
+        Assert.Equal(2, output.ToString().Split('\n', StringSplitOptions.RemoveEmptyEntries).Count(l => l.Contains("not backed up: Changed here and in the registry.")));
+    }
+
+    [Fact]
     public void Presenter_logs_not_logged_in_but_not_an_unknown_skill()
     {
         var notLoggedIn = new CaptureResult(CaptureAction.SkillBackedUp, "alpha", SkillPushRunResult.Fail(SkillPushRunFailure.NotLoggedIn, null), null);
@@ -189,6 +207,25 @@ public sealed class SkillLedgerTests : IDisposable
         Assert.Equal(new SkillLedgerEntry("abc", 2), ledger.Get(a, "/skills/alpha/"));
         Assert.Null(ledger.Get(b, "/skills/alpha"));
         Assert.Null(ledger.Get(a, "/skills/beta"));
+    }
+
+    [Fact]
+    public void A_refusal_survives_a_new_instance_and_older_records_read_without_one()
+    {
+        var registry = new Uri("https://a.test");
+        // A record as an earlier CLI wrote it, with no refusal fields; keyed by full path as the ledger keys them.
+        var old = Path.GetFullPath("/skills/old");
+        File.WriteAllText(Path.Combine(_dir, "skill-ledger.json"), System.Text.Json.JsonSerializer.Serialize(
+            new Dictionary<string, Dictionary<string, object?>>
+            {
+                ["https://a.test"] = new() { [old] = new { ContentHash = "abc", Version = 2, Name = "old", ProjectId = (Guid?)null } },
+            }));
+        new SkillLedger().Record(registry, "/skills/alpha", new SkillLedgerEntry("abc", 1, "alpha", null, "def", 3));
+
+        var ledger = new SkillLedger();
+
+        Assert.Equal(new SkillLedgerEntry("abc", 1, "alpha", null, "def", 3), ledger.Get(registry, "/skills/alpha"));
+        Assert.Equal(new SkillLedgerEntry("abc", 2, "old"), ledger.Get(registry, "/skills/old"));
     }
 
     [Fact]

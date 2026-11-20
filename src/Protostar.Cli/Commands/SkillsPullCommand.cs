@@ -50,13 +50,17 @@ internal sealed class SkillsPullCommand : AsyncCommand<SkillsPullCommand.Setting
         public string? Registry { get; init; }
 
         [CommandOption("--force")]
-        [Description("Overwrite skills that have local changes.")]
+        [Description("Overwrite skills that have local changes, including ones changed here and in the registry (keep theirs).")]
         public bool Force { get; init; }
+
+        [CommandOption("--version <N>")]
+        [Description("Install version N of the one named skill instead of its current version, to recover earlier work. Local changes are still kept unless --force.")]
+        public int? Version { get; init; }
     }
 
     protected override async Task<int> ExecuteAsync(CommandContext context, Settings settings, CancellationToken cancellation)
     {
-        var request = new SkillPullRequest(settings.Names, settings.Harness, settings.HarnessHome, settings.Registry, settings.Force, ProjectStart(settings));
+        var request = new SkillPullRequest(settings.Names, settings.Harness, settings.HarnessHome, settings.Registry, settings.Force, ProjectStart(settings), settings.Version);
         var result = await _pull.PullAsync(request, cancellation);
         return SkillPullPresenter.RenderPull(result, _catalog);
     }

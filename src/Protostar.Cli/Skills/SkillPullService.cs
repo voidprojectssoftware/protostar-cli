@@ -17,7 +17,15 @@ namespace Protostar.Cli.Skills;
 /// its files hash to the registry's content hash. Otherwise the ledger decides: if the local files still
 /// match what was last pushed or pulled as this same registry skill, nobody edited them here and the
 /// registry simply moved on (an update is available); if they do not, or there is no such record, the
-/// difference may be local work and is protected.
+/// difference may be local work and is protected. When the copy was edited here since the version it last
+/// synced and the registry has moved past that version too, or the registry refused this exact content as stale,
+/// it is changed on both sides (<see cref="SkillSyncState.ChangedBoth"/>): protected the same way, and shown so
+/// the user can choose which to keep.
+/// </para>
+/// <para>
+/// <c>--version N</c> compares with, and pulls, version N of one named skill instead of its current version, so
+/// work lost to an overwrite can be recovered. Every rule above still holds: only a copy that is unedited since
+/// it last synced (or already equals version N) is replaced without <c>--force</c>.
 /// </para>
 /// <para>
 /// Two cases are conflicts that are never written, even with <c>--force</c>. A registry skill with no local
@@ -70,24 +78,40 @@ internal sealed class SkillPullService : ISkillPullService
     /// <inheritdoc />
     public async Task<SkillRemoteResult> CompareAsync(SkillRemoteRequest request, CancellationToken cancellationToken)
     {
+        var names = request.Names ?? [];
+        if (VersionProblem(names, request.Version) is { } versionProblem)
+            return SkillRemoteResult.Fail(SkillPullRunFailure.InvalidVersion, versionProblem);
+
         var context = await OpenAsync(request.HarnessId, request.HarnessHome, request.Registry, request.ProjectStart, cancellationToken);
         if (context.Failure != SkillPullRunFailure.None)
             return SkillRemoteResult.Fail(context.Failure, context.Detail, context.Registry);
+
+        var selected = Select(context.Skills, names, out var missing);
+        if (missing is not null)
+            return SkillRemoteResult.Fail(SkillPullRunFailure.SkillNotFound, missing, context.Registry);
+
+        var pinned = await PinAsync(context, selected, request.Version, cancellationToken);
+        if (pinned.Error is { } pinError)
+            return SkillRemoteResult.Fail(SkillPullRunFailure.VersionNotFound, pinError, context.Registry);
 
         var comparisons = new List<SkillComparison>();
         foreach (var target in context.Targets)
         {
             var inScope = InScope(target, context.Skills);
-            var matches = MatchAll(target, inScope, inScope, out var leftovers);
+            var matches = MatchAll(target, InScope(target, selected), inScope, out var leftovers);
             foreach (var match in matches)
-                comparisons.Add(await CompareAsync(target, match, context, cancellationToken));
+                comparisons.Add(await CompareAsync(target, match, context, pinned.Of(match.Remote), cancellationToken));
 
-            foreach (var leftover in leftovers)
-                comparisons.Add(new SkillComparison(target.Harness, leftover.Name, SkillSyncState.LocalOnly, null, leftover.Path, null, Project: target.ProjectName));
+            // Local skills no registry skill claims are only listed when every skill is.
+            if (names.Count == 0)
+            {
+                foreach (var leftover in leftovers)
+                    comparisons.Add(new SkillComparison(target.Harness, leftover.Name, SkillSyncState.LocalOnly, null, leftover.Path, null, Project: target.ProjectName));
+            }
 
             if (target.Scope == SkillScope.Global)
             {
-                foreach (var remote in Elsewhere(context, context.Skills))
+                foreach (var remote in Elsewhere(context, selected))
                     comparisons.Add(new SkillComparison(target.Harness, remote.Name, SkillSyncState.OtherProject, remote, null, null, ElsewhereNote(target, context.Here, remote), remote.ProjectName));
             }
         }
@@ -98,12 +122,15 @@ internal sealed class SkillPullService : ISkillPullService
             .ThenBy(c => c.Project is not null)
             .ThenBy(c => c.Project, StringComparer.OrdinalIgnoreCase)
             .ToList();
-        return new SkillRemoteResult(SkillPullRunFailure.None, null, context.Registry, ordered);
+        return new SkillRemoteResult(SkillPullRunFailure.None, null, context.Registry, ordered, request.Version);
     }
 
     /// <inheritdoc />
     public async Task<SkillPullRunResult> PullAsync(SkillPullRequest request, CancellationToken cancellationToken)
     {
+        if (VersionProblem(request.Names, request.Version) is { } versionProblem)
+            return SkillPullRunResult.Fail(SkillPullRunFailure.InvalidVersion, versionProblem);
+
         var context = await OpenAsync(request.HarnessId, request.HarnessHome, request.Registry, request.ProjectStart, cancellationToken);
         if (context.Failure != SkillPullRunFailure.None)
             return SkillPullRunResult.Fail(context.Failure, context.Detail, context.Registry);
@@ -113,13 +140,18 @@ internal sealed class SkillPullService : ISkillPullService
         if (missing is not null)
             return SkillPullRunResult.Fail(SkillPullRunFailure.SkillNotFound, missing, registry);
 
+        var pinned = await PinAsync(context, selected, request.Version, cancellationToken);
+        if (pinned.Error is { } pinError)
+            return SkillPullRunResult.Fail(SkillPullRunFailure.VersionNotFound, pinError, registry);
+
         var entries = new List<SkillPullEntry>();
         foreach (var target in context.Targets)
         {
             foreach (var match in MatchAll(target, InScope(target, selected), InScope(target, context.Skills), out _))
             {
-                var comparison = await CompareAsync(target, match, context, cancellationToken);
-                entries.Add(await PullOneAsync(target, comparison, registry, context.AccessToken!, request.Force, cancellationToken));
+                var version = pinned.Of(match.Remote);
+                var comparison = await CompareAsync(target, match, context, version, cancellationToken);
+                entries.Add(await PullOneAsync(target, comparison, registry, context.AccessToken!, request.Force, version?.Content, match.Remote.Version, cancellationToken));
             }
 
             if (target.Scope == SkillScope.Global)
@@ -139,11 +171,47 @@ internal sealed class SkillPullService : ISkillPullService
             .ThenBy(e => e.Project, StringComparer.OrdinalIgnoreCase)
             .ToList();
 
-        return new SkillPullRunResult(SkillPullRunFailure.None, null, registry, entries);
+        return new SkillPullRunResult(SkillPullRunFailure.None, null, registry, entries, request.Version);
+    }
+
+    // Why --version cannot be used as asked: it picks one version of one skill.
+    private static string? VersionProblem(IReadOnlyList<string> names, int? version) => version switch
+    {
+        null => null,
+        < 1 => $"--version takes a version number (1 or more), not {version}.",
+        _ when names.Count != 1 => "--version picks a version of one skill: name exactly one skill.",
+        _ => null,
+    };
+
+    // With --version, fetches that version of each selected skill this folder can pull (global skills, and this
+    // folder's project's), so it can be compared and installed in place of the current version. Other projects'
+    // skills are only listed, so they are not fetched.
+    private async Task<Pinned> PinAsync(Context context, IReadOnlyList<RegistrySkill> selected, int? version, CancellationToken cancellationToken)
+    {
+        var pinned = new Dictionary<RegistrySkill, PinnedVersion>();
+        if (version is not { } wanted)
+            return new Pinned(pinned, null);
+
+        foreach (var remote in selected.Where(s => s.ProjectId is null || context.Targets.Any(t => t.ProjectId == s.ProjectId)))
+        {
+            var download = await _registry.GetSkillFilesAsync(context.Registry!, context.AccessToken!, remote.Name, remote.ProjectId, wanted, cancellationToken);
+            if (download.Content is not { } content || content.Version != wanted)
+                return new Pinned(pinned, download.Error ?? $"The registry did not send version {wanted} of '{remote.Name}'.");
+            pinned[remote] = new PinnedVersion(remote with { Version = wanted, ContentHash = content.ContentHash }, content);
+        }
+
+        return new Pinned(pinned, null);
     }
 
     private async Task<SkillPullEntry> PullOneAsync(
-        Target target, SkillComparison comparison, Uri registry, string accessToken, bool force, CancellationToken cancellationToken)
+        Target target,
+        SkillComparison comparison,
+        Uri registry,
+        string accessToken,
+        bool force,
+        RegistrySkillContent? pinned,
+        int currentVersion,
+        CancellationToken cancellationToken)
     {
         var remote = comparison.Remote!;
         var harness = target.Harness;
@@ -165,6 +233,9 @@ internal sealed class SkillPullService : ISkillPullService
         if (comparison.State == SkillSyncState.LocalChanges && !force)
             return new SkillPullEntry(harness, remote.Name, SkillPullStatus.LocalChanges, remote.Version, comparison.LocalPath!, null, project);
 
+        if (comparison.State == SkillSyncState.ChangedBoth && !force)
+            return new SkillPullEntry(harness, remote.Name, SkillPullStatus.ChangedBoth, remote.Version, comparison.LocalPath!, null, project);
+
         string path;
         if (comparison.LocalPath is { } existing)
         {
@@ -180,7 +251,9 @@ internal sealed class SkillPullService : ISkillPullService
                 $"'{remote.Name}' cannot be used as a folder name on this machine.", project);
         }
 
-        var download = await _registry.GetSkillFilesAsync(registry, accessToken, remote.Name, remote.ProjectId, null, cancellationToken);
+        var download = pinned is null
+            ? await _registry.GetSkillFilesAsync(registry, accessToken, remote.Name, remote.ProjectId, null, cancellationToken)
+            : new RegistrySkillDownload(pinned, null);
         if (download.Content is not { } content)
             return new SkillPullEntry(harness, remote.Name, SkillPullStatus.Failed, remote.Version, path, download.Error, project);
 
@@ -197,7 +270,13 @@ internal sealed class SkillPullService : ISkillPullService
         _ledger.Record(registry, path, new SkillLedgerEntry(SkillFileReader.Hash(written), content.Version, remote.Name, remote.ProjectId));
 
         var status = comparison.LocalPath is null ? SkillPullStatus.Installed : SkillPullStatus.Updated;
-        var note = comparison.State == SkillSyncState.LocalChanges ? "Local changes were overwritten (--force)." : null;
+        var note = comparison.State is SkillSyncState.LocalChanges or SkillSyncState.ChangedBoth ? "Local changes were overwritten (--force)." : null;
+        if (content.Version < currentVersion)
+        {
+            // Recorded as synced at the pinned version: honest, and it makes a later `push --force` a deliberate replace.
+            note = (note is null ? "" : note + " ") +
+                $"A plain `protostar skills pull` would replace it with the current version; `protostar skills push {remote.Name} --force` makes it current.";
+        }
         return new SkillPullEntry(harness, remote.Name, status, content.Version, path, note, project);
     }
 
@@ -225,10 +304,11 @@ internal sealed class SkillPullService : ISkillPullService
         return $"{whose}, not this folder's; {go}.";
     }
 
-    private async Task<SkillComparison> CompareAsync(Target target, Match match, Context context, CancellationToken cancellationToken)
+    private async Task<SkillComparison> CompareAsync(Target target, Match match, Context context, PinnedVersion? pinned, CancellationToken cancellationToken)
     {
         var registry = context.Registry!;
-        var (remote, installed, conflict, conflictPath) = match;
+        var (current, installed, conflict, conflictPath) = match;
+        var remote = pinned?.Skill ?? current;
         var harness = target.Harness;
         if (conflict is not null)
             return new SkillComparison(harness, remote.Name, SkillSyncState.Conflict, remote, conflictPath, null, conflict, target.ProjectName);
@@ -241,7 +321,7 @@ internal sealed class SkillPullService : ISkillPullService
         // registry's; one from before projects were kept was synced as a global skill. A record of the same skill
         // under the project it was in before a link moved it follows it first.
         var recorded = await MovedSkillLedger.FollowAsync(
-            _registry, _ledger, registry, context.AccessToken!, installed.Path, _ledger.Get(registry, installed.Path), remote, context.Skills, cancellationToken);
+            _registry, _ledger, registry, context.AccessToken!, installed.Path, _ledger.Get(registry, installed.Path), current, context.Skills, cancellationToken);
         if (recorded is not null &&
             (!string.Equals(recorded.Name ?? installed.Name, remote.Name, StringComparison.Ordinal) || recorded.ProjectId != remote.ProjectId))
         {
@@ -259,19 +339,37 @@ internal sealed class SkillPullService : ISkillPullService
             return new SkillComparison(harness, installed.Name, SkillSyncState.LocalChanges, remote, installed.Path, recorded?.Version, Project: target.ProjectName);
         }
 
-        var state = Classify(files, remote, recorded);
+        var state = Classify(files, current, recorded);
+        if (pinned is not null)
+        {
+            // Against an earlier version: already there, or safe to replace only when nothing here is unsaved work.
+            state = string.Equals(SkillFileReader.RegistryHash(files), pinned.Skill.ContentHash, StringComparison.OrdinalIgnoreCase) ? SkillSyncState.UpToDate
+                : state is SkillSyncState.UpToDate or SkillSyncState.UpdateAvailable ? SkillSyncState.UpdateAvailable
+                : state;
+        }
+
         return new SkillComparison(harness, installed.Name, state, remote, installed.Path, recorded?.Version, Project: target.ProjectName);
     }
 
     /// <summary>Decides how local <paramref name="files"/> compare with <paramref name="remote"/>, given the last recorded sync.</summary>
+    /// <remarks>
+    /// Changed on both sides when the registry refused this exact content as stale, or when the copy differs from what
+    /// it last synced and the registry has a newer version than that. A record from before versions were kept cannot
+    /// show the registry moved, so such a copy stays <see cref="SkillSyncState.LocalChanges"/>, which is protected alike.
+    /// </remarks>
     internal static SkillSyncState Classify(IReadOnlyList<SkillUploadFile> files, RegistrySkill remote, SkillLedgerEntry? recorded)
     {
         if (string.Equals(SkillFileReader.RegistryHash(files), remote.ContentHash, StringComparison.OrdinalIgnoreCase))
             return SkillSyncState.UpToDate;
+        if (recorded is null)
+            return SkillSyncState.LocalChanges;
 
-        return recorded is not null && recorded.ContentHash == SkillFileReader.Hash(files) && (recorded.Version ?? 0) < remote.Version
-            ? SkillSyncState.UpdateAvailable
-            : SkillSyncState.LocalChanges;
+        var hash = SkillFileReader.Hash(files);
+        if (recorded.RefusedHash == hash)
+            return SkillSyncState.ChangedBoth;
+        if (recorded.ContentHash == hash)
+            return (recorded.Version ?? 0) < remote.Version ? SkillSyncState.UpdateAvailable : SkillSyncState.LocalChanges;
+        return recorded.Version is { } synced && synced < remote.Version ? SkillSyncState.ChangedBoth : SkillSyncState.LocalChanges;
     }
 
     private void RecordInstalled(Uri registry, string path, RegistrySkill remote)
@@ -491,6 +589,15 @@ internal sealed class SkillPullService : ISkillPullService
             Path.TrimEndingDirectorySeparator(Path.GetFullPath(a)),
             Path.TrimEndingDirectorySeparator(Path.GetFullPath(b)),
             OperatingSystem.IsWindows() || OperatingSystem.IsMacOS() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
+
+    // The versions fetched for --version, by the registry skill (current version) they stand in for, or why one could not be.
+    private sealed record Pinned(IReadOnlyDictionary<RegistrySkill, PinnedVersion> Versions, string? Error)
+    {
+        public PinnedVersion? Of(RegistrySkill remote) => Versions.GetValueOrDefault(remote);
+    }
+
+    // One fetched version: the registry skill as it was at that version, and its files.
+    private sealed record PinnedVersion(RegistrySkill Skill, RegistrySkillContent Content);
 
     // A registry skill and what it lines up with here: the installed copy, or why it is a conflict and where.
     private sealed record Match(RegistrySkill Remote, DiscoveredSkill? Installed, string? Conflict, string? ConflictPath);

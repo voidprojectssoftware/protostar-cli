@@ -27,10 +27,15 @@ internal interface IRegistryApi
     /// <param name="name">The skill's name, used by the registry only when its SKILL.md declares none.</param>
     /// <param name="files">Every file in the skill, with paths relative to the skill's root.</param>
     /// <param name="project">The project folder a project skill lives in; <c>null</c> for a global skill.</param>
+    /// <param name="baseVersion">
+    /// The registry version this copy was last synced from, 0 when it never synced one, or <c>null</c> to send none.
+    /// </param>
     /// <param name="cancellationToken">Cancels the upload.</param>
     /// <remarks>
     /// A registry from before project skills ignores <paramref name="project"/> and files the skill as global,
-    /// so the registry must be upgraded before a CLI that sends it.
+    /// so the registry must be upgraded before a CLI that sends it. With a base the registry refuses a push that
+    /// is not based on its current version, answering <see cref="SkillPushStatus.Stale"/> with the current version
+    /// in <see cref="SkillPushOutcome.Version"/>; a registry from before that rule ignores the base.
     /// </remarks>
     Task<SkillPushOutcome> PushSkillAsync(
         Uri registry,
@@ -38,6 +43,7 @@ internal interface IRegistryApi
         string name,
         IReadOnlyList<SkillUploadFile> files,
         SkillProject? project,
+        int? baseVersion,
         CancellationToken cancellationToken);
 
     /// <summary>
@@ -144,17 +150,31 @@ internal enum SkillPushStatus
     /// </summary>
     Conflict,
 
+    /// <summary>
+    /// The registry refused the push as stale: the skill changed in the registry (from another machine) after this
+    /// copy last synced, and changed here too. Nothing was stored; <see cref="SkillPushOutcome.Version"/> is the
+    /// registry's current version.
+    /// </summary>
+    Stale,
+
     /// <summary>The upload could not complete (unreachable registry, unreadable files, server error).</summary>
     Failed,
 }
 
 /// <summary>The outcome of sending one skill to the registry.</summary>
 /// <param name="Status">What happened.</param>
-/// <param name="Version">The registry's current version number after the push; <c>null</c> unless created or unchanged.</param>
-/// <param name="Message">Why a skill was refused, skipped, or failed; <c>null</c> on success.</param>
+/// <param name="Version">
+/// The registry's current version number after the push; <c>null</c> unless created, unchanged or stale.
+/// </param>
+/// <param name="Message">Why a skill was refused, skipped, stale or failed, or a note on a success (such as what it replaced); <c>null</c> otherwise.</param>
 /// <param name="ProjectId">The project the registry filed a project skill under; <c>null</c> for a global skill.</param>
 /// <param name="ProjectName">That project's display name; <c>null</c> for a global skill.</param>
-internal sealed record SkillPushOutcome(SkillPushStatus Status, int? Version, string? Message, Guid? ProjectId = null, string? ProjectName = null)
+/// <param name="Remembered">
+/// True for a <see cref="SkillPushStatus.Stale"/> answered from the ledger without asking the registry, because the
+/// registry already refused this exact content; the capture hook does not log it again.
+/// </param>
+internal sealed record SkillPushOutcome(
+    SkillPushStatus Status, int? Version, string? Message, Guid? ProjectId = null, string? ProjectName = null, bool Remembered = false)
 {
     /// <summary>True when the skill is now safely in the registry.</summary>
     public bool Succeeded => Status is SkillPushStatus.Created or SkillPushStatus.Unchanged;
