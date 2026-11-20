@@ -15,7 +15,8 @@ internal interface ISessionSkills
     /// <remarks>
     /// Optional decoration for <c>sessions show</c>, so it never fails: a registry that lists capabilities without
     /// <c>session-skills</c> is not asked, and one that lists none is asked anyway, with any refusal (a 404 on an older
-    /// registry) or failure giving <c>null</c>.
+    /// registry) or failure giving <c>null</c>. Local skills that cannot be read leave
+    /// <see cref="UsedSkill.InstalledHere"/> unknown rather than failing.
     /// </remarks>
     Task<IReadOnlyList<UsedSkill>?> GetAsync(OpenedSession session, string? harnessHome, string workingDirectory, CancellationToken cancellationToken);
 }
@@ -23,7 +24,7 @@ internal interface ISessionSkills
 /// <summary>One skill a session used, as the registry reports it, and whether a skill of that name is installed here.</summary>
 /// <param name="InstalledHere">
 /// <c>null</c> when it was not looked for: a plugin skill (its name is <c>plugin:skill</c>), which comes from a plugin
-/// rather than a skill folder, or a harness protostar cannot list skills for.
+/// rather than a skill folder, a harness protostar cannot list skills for, or skills on this machine that could not be read.
 /// </param>
 internal sealed record UsedSkill(SessionSkill Skill, bool? InstalledHere)
 {
@@ -78,24 +79,28 @@ internal sealed class SessionSkills : ISessionSkills
 
         var transcript = session.Detail.Transcript;
         var asked = _api.GetSkillsAsync(session.Registry, session.AccessToken, transcript.Harness, transcript.Key, cancellationToken);
-        var local = _skills.Discover(transcript.Harness, harnessHome, workingDirectory);
+        var local = ReadLocal(() => _skills.Discover(transcript.Harness, harnessHome, workingDirectory));
         var listed = await asked;
         if (!listed.Ok)
             return null;
 
+        // Skills that cannot be read here leave every mark unknown: installedHere is left out rather than guessed.
+        if (local is not { Failure: SkillQueryFailure.None })
+            return [.. listed.Value!.Select(skill => new UsedSkill(skill, null))];
+
         var personal = local.Skills.Where(s => s.Scope == SkillScope.Global).Select(s => s.Name).ToHashSet(StringComparer.Ordinal);
         var here = local.Skills.Where(s => s.Scope == SkillScope.Project).DistinctBy(s => s.Name, StringComparer.Ordinal).ToDictionary(s => s.Name, s => s.ProjectRoot!, StringComparer.Ordinal);
-        bool? inSessionProject = null;
+        Task<bool?>? inSessionProject = null;
         var used = new List<UsedSkill>();
         foreach (var skill in listed.Value!)
         {
             bool? installed;
-            if (local.Failure != SkillQueryFailure.None || UsedSkill.IsPluginName(skill.Name))
+            if (UsedSkill.IsPluginName(skill.Name))
                 installed = null;
             else if (personal.Contains(skill.Name))
                 installed = true;
             else if (here.TryGetValue(skill.Name, out var projectRoot))
-                installed = inSessionProject ??= await IsSessionProjectAsync(session, projectRoot, cancellationToken);
+                installed = await (inSessionProject ??= IsSessionProjectAsync(session, projectRoot, cancellationToken));
             else
                 installed = false;
             used.Add(new UsedSkill(skill, installed));
@@ -104,12 +109,30 @@ internal sealed class SessionSkills : ISessionSkills
         return used;
     }
 
-    // Whether the project folder is the session's project, as the registry files it. A folder it cannot resolve is not.
-    private async Task<bool> IsSessionProjectAsync(OpenedSession session, string projectRoot, CancellationToken cancellationToken)
+    // A read of this machine's files, or null when it fails. The skills block is optional decoration that must never
+    // fail `sessions show`, and a folder can be unreadable in more ways than one (permissions, a broken link, a file
+    // removed mid-read), so any failure counts as "unknown" rather than a named few.
+    private static T? ReadLocal<T>(Func<T> read)
+        where T : class
+    {
+        try
+        {
+            return read();
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            return null;
+        }
+    }
+
+    // Whether the project folder is the session's project, as the registry files it. A folder the registry cannot
+    // resolve is not; one that cannot be read here is unknown (null).
+    private async Task<bool?> IsSessionProjectAsync(OpenedSession session, string projectRoot, CancellationToken cancellationToken)
     {
         if (session.Detail.Transcript.ProjectId is not { } sessionProject)
             return false;
-        var facts = _facts.Resolve(Path.GetFullPath(projectRoot));
+        if (ReadLocal(() => _facts.Resolve(Path.GetFullPath(projectRoot))) is not { } facts)
+            return null;
         var resolved = await _projects.ResolveProjectAsync(session.Registry, session.AccessToken, _machine.Get().Id, facts, cancellationToken);
         return resolved.Ok && resolved.Value!.ProjectId == sessionProject;
     }

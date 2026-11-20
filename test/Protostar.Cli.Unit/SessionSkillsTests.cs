@@ -23,10 +23,13 @@ public sealed class SessionSkillsTests
     private readonly FakeRegistry _registry = new();
     private readonly List<DiscoveredSkill> _local = [];
 
+    private ISkillService? _skills;
+    private IProjectFactsResolver _facts = new NotGit();
+
     private SessionSkills Sut()
     {
         var api = new RegistryApi(_registry);
-        return new SessionSkills(new RegistryCapabilities(api), api, new LocalSkills(_local), new NotGit(), api, new FakeMachine());
+        return new SessionSkills(new RegistryCapabilities(api), api, _skills ?? new LocalSkills(_local), _facts, api, new FakeMachine());
     }
 
     private static OpenedSession Session(Guid? project = null) => new(
@@ -68,6 +71,56 @@ public sealed class SessionSkillsTests
         Assert.Equal([true, true], same!.Select(u => u.InstalledHere));
         Assert.Equal([false, false], other!.Select(u => u.InstalledHere));
         Assert.Equal(2, _registry.Asked.Count(u => u.AbsolutePath == "/v1/projects/resolve"));
+    }
+
+    [Fact]
+    public async Task Local_skills_that_cannot_be_read_leave_installed_here_unknown_rather_than_failing()
+    {
+        Used("code-review", "b-fac:orchestrated-delivery");
+        _skills = new UnreadableSkills();
+
+        var used = await Sut().GetAsync(Session(), null, "/work", CancellationToken.None);
+
+        Assert.Equal(["code-review", "b-fac:orchestrated-delivery"], used!.Select(u => u.Skill.Name));
+        Assert.All(used!, u => Assert.Null(u.InstalledHere));
+    }
+
+    [Fact]
+    public async Task A_project_folder_that_cannot_be_read_leaves_its_skills_unknown_rather_than_failing()
+    {
+        Used("deploy");
+        Installed("deploy", SkillScope.Project);
+        _facts = new UnreadableFolder();
+
+        var used = await Sut().GetAsync(Session(), null, "/repo", CancellationToken.None);
+
+        Assert.Null(Assert.Single(used!).InstalledHere);
+    }
+
+    [Fact]
+    public async Task A_real_skills_folder_without_read_permission_leaves_installed_here_unknown()
+    {
+        // Unix permissions; on Windows the fake above covers the same path.
+        if (OperatingSystem.IsWindows() || Environment.UserName == "root")
+            return;
+        var home = Directory.CreateTempSubdirectory("protostar-unreadable-");
+        var skills = Directory.CreateDirectory(Path.Combine(home.FullName, "skills"));
+        Directory.CreateDirectory(Path.Combine(skills.FullName, "code-review"));
+        File.SetUnixFileMode(skills.FullName, UnixFileMode.None);
+        try
+        {
+            Used("code-review");
+            _skills = new SkillService(new HarnessCatalog([Harness]));
+
+            var used = await Sut().GetAsync(Session(), home.FullName, home.FullName, CancellationToken.None);
+
+            Assert.Null(Assert.Single(used!).InstalledHere);
+        }
+        finally
+        {
+            File.SetUnixFileMode(skills.FullName, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+            home.Delete(recursive: true);
+        }
     }
 
     [Fact]
@@ -195,6 +248,17 @@ public sealed class SessionSkillsTests
     private sealed class LocalSkills(List<DiscoveredSkill> skills) : ISkillService
     {
         public SkillDiscoveryResult Discover(string? harnessId, string? harnessHome, string? projectStart) => new(skills, SkillQueryFailure.None, null);
+    }
+
+    private sealed class UnreadableSkills : ISkillService
+    {
+        public SkillDiscoveryResult Discover(string? harnessId, string? harnessHome, string? projectStart) =>
+            throw new UnauthorizedAccessException("Access to the path '/home/u/.claude/skills' is denied.");
+    }
+
+    private sealed class UnreadableFolder : IProjectFactsResolver
+    {
+        public ProjectFacts Resolve(string workingDirectory) => throw new IOException("Permission denied: .git");
     }
 
     private sealed class NotGit : IProjectFactsResolver

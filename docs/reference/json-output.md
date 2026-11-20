@@ -186,7 +186,7 @@ versions were pushed) and `deleted` (since deleted from the registry). It adds:
 
 | Field | Type | Meaning |
 |---|---|---|
-| `installedHere` | boolean | A skill of that name is installed on this machine: a personal skill, or a project skill of the folder the command ran in when that folder is the session's project. Absent for a plugin's skill, which is not looked for. |
+| `installedHere` | boolean | A skill of that name is installed on this machine: a personal skill, or a project skill of the folder the command ran in when that folder is the session's project. Absent for a plugin's skill, which is not looked for, and when the skills on this machine (or the folder's project) could not be read. |
 
 ## `search`
 
