@@ -141,13 +141,16 @@ public sealed class SessionReaderTests
         """{"type":"assistant","isSidechain":true,"message":{"content":[{"type":"text","text":"A demo."}]}}""",
     ];
 
-    // A registry from before the capability list (registry#15), which cannot look a prefix up.
+    // A registry from before the capability list (registry#15), which cannot say it redacts what it serves.
     private static RegistryMeta BeforeCapabilities => new() { ApiMajors = [1] };
+
+    // A registry that serves sessions redacted but cannot look a prefix up.
+    private static RegistryMeta WithoutPrefixLookup => new() { ApiMajors = [1], Capabilities = [RegistryCapability.Sessions, RegistryCapability.RedactedRead] };
 
     [Fact]
     public async Task A_whole_id_is_looked_up_directly_on_a_registry_without_prefix_lookup()
     {
-        _meta.Meta = BeforeCapabilities;
+        _meta.Meta = WithoutPrefixLookup;
         _api.Add(Session(SessionId), Conversation);
 
         var opened = await Open(SessionId);
@@ -223,6 +226,23 @@ public sealed class SessionReaderTests
         Assert.Equal((0, 0), (_api.Lists, _api.Gets));
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_registry_that_does_not_list_redacted_read_is_refused_before_anything_is_asked(bool listsCapabilities)
+    {
+        // Lenient for sessions, strict for redaction: a registry too old to list it might ignore redacted=true (#122).
+        _meta.Meta = listsCapabilities ? new RegistryMeta { ApiMajors = [1], Capabilities = [RegistryCapability.Sessions] } : BeforeCapabilities;
+        _api.Add(Session(SessionId), Conversation);
+
+        var opened = await Open(SessionId);
+
+        Assert.Equal((SessionOpenOutcome.Failed, SessionSyncFailure.Incompatible), (opened.Outcome, opened.Failure));
+        Assert.Equal("This registry is too old for serving sessions with secrets redacted. Update the registry.", opened.Detail);
+        Assert.Equal((0, 0), (_api.Lists, _api.Gets));
+        Assert.Empty(_api.Downloads);
+    }
+
     [Fact]
     public async Task An_unambiguous_prefix_opens_its_session_ignoring_case()
     {
@@ -251,7 +271,7 @@ public sealed class SessionReaderTests
     [Fact]
     public async Task A_prefix_is_matched_on_every_page_of_the_list_on_a_registry_without_prefix_lookup()
     {
-        _meta.Meta = BeforeCapabilities;
+        _meta.Meta = WithoutPrefixLookup;
         for (var i = 0; i < 250; i++)
             _api.Add(Session($"{i:x8}-0000-4000-8000-000000000000", minute: 1000 - i), []);
         _api.Add(Session(SessionId, minute: 0), Conversation);
@@ -268,6 +288,31 @@ public sealed class SessionReaderTests
         _api.Add(Session(SessionId), Conversation);
 
         Assert.Equal(SessionOpenOutcome.NotFound, (await Open("deadbeef")).Outcome);
+    }
+
+    [Fact]
+    public async Task A_prefix_the_registry_refuses_falls_back_to_the_whole_key()
+    {
+        _api.RefusePrefixes = true;
+        _api.Add(Session(SessionId), Conversation);
+
+        var opened = await Open(SessionId);
+
+        Assert.Equal(SessionOpenOutcome.Found, opened.Outcome);
+        Assert.Equal([SessionId], _api.Prefixes);
+        Assert.Equal(SessionId, opened.Session!.Detail.Transcript.Key);
+    }
+
+    [Fact]
+    public async Task A_prefix_the_registry_refuses_that_is_no_whole_key_is_not_found_not_unreachable()
+    {
+        _api.RefusePrefixes = true;
+        _api.Add(Session(SessionId), Conversation);
+
+        var opened = await Open("7d3c9a52");
+
+        Assert.Equal((SessionOpenOutcome.NotFound, SessionSyncFailure.None), (opened.Outcome, opened.Failure));
+        Assert.Equal(1, _api.Gets);
     }
 
     [Fact]
@@ -328,6 +373,107 @@ public sealed class SessionReaderTests
 
         Assert.Equal(["start:", "prompt", "reply", "end"], shown.TakeLast(4).Select(Describe));
         Assert.False(((SubagentStartEntry)shown[^4].Entry).Linked);
+    }
+
+    // #121: a Bash result that merely prints a subagent's id, then the Task call that really ran it.
+    private static readonly string[] MentionThenTask =
+    [
+        """{"type":"user","message":{"content":"Find the agent ids in the logs, then summarise"}}""",
+        """{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t0","name":"Bash","input":{"command":"grep agentId log.txt"}}]}}""",
+        """{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t0","content":"log.txt:3: agentId: a1b2"}]},"toolUseResult":{"stdout":"log.txt:3: agentId: a1b2"}}""",
+        """{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"Task","input":{"description":"Summarise","subagent_type":"general-purpose"}}]}}""",
+        """{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1","content":"A demo."}]},"toolUseResult":{"agentId":"a1b2"}}""",
+    ];
+
+    [Fact]
+    public async Task A_result_that_only_mentions_an_agent_id_neither_takes_the_subagent_nor_carries_the_id()
+    {
+        _api.Add(Session(SessionId), MentionThenTask, (SubagentId, SubagentLines));
+
+        var shown = await ReadAll(full: true);
+
+        Assert.Equal(
+            ["prompt", "call:Bash", "result", "call:Task", "result", "start:general-purpose", "prompt", "reply", "end"],
+            shown.Select(Describe));
+        var bash = (ToolResultEntry)shown[2].Entry;
+        Assert.Null(bash.AgentId);
+        Assert.False(SessionsJson.ShowRecord(shown[2], "claude-code", full: true).AsObject().ContainsKey("agentId"));
+        Assert.Equal("a1b2", ((ToolResultEntry)shown[4].Entry).AgentId);
+        var start = (SubagentStartEntry)shown[5].Entry;
+        Assert.Equal(("general-purpose", "Summarise", true), (start.AgentType, start.Description, start.Linked));
+    }
+
+    [Fact]
+    public async Task A_structured_agent_id_on_a_result_of_a_call_that_ran_no_subagent_links_nothing()
+    {
+        string[] lines =
+        [
+            """{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t0","name":"Bash","input":{"command":"true"}}]}}""",
+            """{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t0","content":"ok"}]},"toolUseResult":{"agentId":"a1b2"}}""",
+        ];
+        _api.Add(Session(SessionId), lines, (SubagentId, SubagentLines));
+
+        var shown = await ReadAll(full: true);
+
+        Assert.Equal(["call:Bash", "result", "start:", "prompt", "reply", "end"], shown.Select(Describe));
+        Assert.Null(((ToolResultEntry)shown[1].Entry).AgentId);
+        Assert.False(((SubagentStartEntry)shown[2].Entry).Linked);
+    }
+
+    [Fact]
+    public async Task A_result_inside_a_subagent_that_mentions_an_agent_id_carries_no_id()
+    {
+        string[] inside =
+        [
+            """{"type":"assistant","isSidechain":true,"message":{"content":[{"type":"tool_use","id":"s0","name":"Bash","input":{"command":"grep agentId log.txt"}}]}}""",
+            """{"type":"user","isSidechain":true,"message":{"content":[{"type":"tool_result","tool_use_id":"s0","content":"log.txt:3: agentId: zz99"}]}}""",
+        ];
+        _api.Add(Session(SessionId), Conversation, (SubagentId, inside));
+
+        var shown = await ReadAll(full: true);
+
+        var result = Assert.Single(shown, s => s.TranscriptId == SubagentId && s.Entry is ToolResultEntry);
+        Assert.Null(((ToolResultEntry)result.Entry).AgentId);
+        Assert.False(SessionsJson.ShowRecord(result, "claude-code", full: true).AsObject().ContainsKey("agentId"));
+    }
+
+    [Fact]
+    public async Task On_an_older_harness_the_agent_id_ending_a_subagent_calls_result_text_still_links_it()
+    {
+        string[] lines =
+        [
+            """{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"Task","input":{"description":"Summarise","subagent_type":"general-purpose"}}]}}""",
+            """{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1","content":"Found agentId: zz99 in a log.\nagentId: a1b2 (for resuming)"}]}}""",
+        ];
+        _api.Add(Session(SessionId), lines, (SubagentId, SubagentLines));
+
+        var shown = await ReadAll(full: true);
+
+        Assert.Equal(["call:Task", "result", "start:general-purpose", "prompt", "reply", "end"], shown.Select(Describe));
+        Assert.Equal("a1b2", ((ToolResultEntry)shown[1].Entry).AgentId);
+        Assert.True(((SubagentStartEntry)shown[2].Entry).Linked);
+    }
+
+    [Fact]
+    public async Task The_conversation_drawn_from_a_mention_then_the_real_call_nests_the_subagent_under_the_call()
+    {
+        _api.Add(Session(SessionId), MentionThenTask, (SubagentId, SubagentLines));
+        var reader = Sut();
+        var opened = await reader.OpenAsync(Registry, null, SessionId, CancellationToken.None);
+        var output = new StringWriter();
+        var console = Spectre.Console.AnsiConsole.Create(new Spectre.Console.AnsiConsoleSettings { Out = new Spectre.Console.AnsiConsoleOutput(new StringWriter()) });
+
+        var exit = await SessionShowPresenter.RenderAsync(
+            opened.Session!, reader.ReadAsync(opened.Session!, full: true, CancellationToken.None), full: true, json: false,
+            new ConversationWriter(console, output, plain: true));
+
+        Assert.Equal(0, exit);
+        var text = output.ToString();
+        var bash = text.IndexOf("▸ Bash", StringComparison.Ordinal);
+        var task = text.IndexOf("▸ Task", StringComparison.Ordinal);
+        var subagent = text.IndexOf("┌ Subagent general-purpose: Summarise", StringComparison.Ordinal);
+        Assert.True(bash >= 0 && bash < task && task < subagent, text);
+        Assert.DoesNotContain("not linked", text);
     }
 
     [Fact]
@@ -393,6 +539,9 @@ public sealed class SessionReaderTests
         public List<string> Prefixes { get; } = [];
         public List<int> Limits { get; } = [];
         public string? GetError { get; set; }
+
+        /// <summary>Refuse every <c>keyPrefix</c> with 400, as a registry with stricter rules for a prefix would.</summary>
+        public bool RefusePrefixes { get; set; }
         public int? CutOffAfterBytes { get; set; }
 
         /// <summary>The key of every content download, in order; each one asked for redacted content (the only kind there is).</summary>
@@ -425,6 +574,8 @@ public sealed class SessionReaderTests
             {
                 Prefixes.Add(prefix);
                 Limits.Add(query.Limit);
+                if (RefusePrefixes)
+                    return Task.FromResult(ApiResult<IReadOnlyList<RemoteTranscript>>.RefusedRequest("keyPrefix is not valid."));
             }
 
             // Sessions only, as the registry lists them by default.

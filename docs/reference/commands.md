@@ -758,7 +758,10 @@ Assistant 04:00
 ```
 
 Secrets the registry recognises (tokens, keys, passwords) are shown as
-`[redacted:<type>]`. The backup itself keeps the original bytes.
+`[redacted:<type>]`. The backup itself keeps the original bytes. A registry that
+does not list the `redacted-read` capability, including one too old to list
+capabilities at all, is refused rather than trusted to redact (see
+[troubleshooting](troubleshooting.md#registry-too-old)).
 
 **Skills used** lists the skills the session ran (its subagents' too), with how
 many times. The version is the registry's guess, marked `?`: the newest version
@@ -1039,8 +1042,10 @@ first, and clears each mark once that session is fully backed up. Sessions that
 were never backed up but never failed are left to `protostar sessions push`.
 Other hook events are acknowledged and ignored for now.
 
-The hook never blocks or fails your session: it gives up after 15 seconds and
-always exits `0`. It writes one line to the session transcript, and problems you
+The hook never blocks or fails your session: it gives up after 15 seconds,
+counted from when it starts reading the event from the harness, and always exits
+`0`. A harness that never finishes sending the event gets a logged line saying so
+and nothing backed up. It writes one line to the session transcript, and problems you
 may need to act on (not signed in, registry unreachable, skill refused) are also
 appended to `~/.protostar/capture.log`, by the hook or by the background push.
 

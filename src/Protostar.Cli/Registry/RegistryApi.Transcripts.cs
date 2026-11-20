@@ -225,6 +225,8 @@ internal sealed partial class RegistryApi : ITranscriptApi
                 return ApiResult<T>.UnknownTranscript(problem!.Title ?? "No such transcript.");
             if (response.StatusCode == HttpStatusCode.NotFound && problem?.Type is UnknownProjectType or UnknownMemoryFileType)
                 return ApiResult<T>.UnknownMemory(problem.Title ?? "No such project or memory file.");
+            if (response.StatusCode == HttpStatusCode.BadRequest)
+                return ApiResult<T>.RefusedRequest(problem?.Title ?? Describe(response.StatusCode));
             return ApiResult<T>.Fail(problem?.Title ?? Describe(response.StatusCode));
         }
         catch (Exception ex) when (ex is HttpRequestException or JsonException or TaskCanceledException && !cancellationToken.IsCancellationRequested)

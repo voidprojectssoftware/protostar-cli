@@ -30,15 +30,30 @@ internal sealed class CaptureCommand : AsyncCommand<CaptureCommand.Settings>
 
     protected override async Task<int> ExecuteAsync(CommandContext context, Settings settings, CancellationToken cancellation)
     {
-        // Only read stdin when it is actually piped (a real hook invocation). Guards against blocking
-        // if a user runs this by hand in a terminal.
-        var payload = Console.IsInputRedirected ? await Console.In.ReadToEndAsync(cancellation) : string.Empty;
         var hook = settings.Hook ?? "unknown";
-
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellation);
         timeout.CancelAfter(Timeout);
+
+        // The bound covers reading stdin too, or a harness that never closes it would hang the hook (#122).
+        string payload;
+        try
+        {
+            payload = await ReadPayloadAsync(timeout.Token);
+        }
+        catch (OperationCanceledException)
+        {
+            return CapturePresenter.RenderUnread(hook, Timeout, Console.Out, CaptureLog.Append);
+        }
 
         var result = await _capture.HandleAsync(hook, payload, timeout.Token);
         return CapturePresenter.Render(hook, result, Console.Out, CaptureLog.Append, CaptureRecords.Append);
     }
+
+    // Only reads stdin when it is piped (a real hook invocation), so running this by hand in a terminal does not wait
+    // for input. Console.In reads synchronously and ignores cancellation, so the read runs on the thread pool and is
+    // abandoned when the bound passes; the process then exits with it still blocked, which is harmless.
+    private static async Task<string> ReadPayloadAsync(CancellationToken cancellationToken) =>
+        Console.IsInputRedirected
+            ? await Task.Run(Console.In.ReadToEnd, CancellationToken.None).WaitAsync(cancellationToken)
+            : string.Empty;
 }

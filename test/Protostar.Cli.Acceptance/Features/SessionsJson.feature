@@ -55,3 +55,27 @@ Feature: Session commands give agents structured results
     And standard error is a JSON error with code "registry_incompatible"
     And the output contains "too old for session backups"
     And the registry was asked only for its capabilities
+
+  Scenario Outline: A registry that does not list redacted-read is refused before any session is read
+    Given I am signed in to a registry whose capabilities are "<capabilities>"
+    When I run protostar with "sessions show 7d3c9a52 <format> --registry {registry}"
+    Then the exit code is 1
+    And the output contains "too old for serving sessions with secrets redacted"
+    And the registry was asked only for its capabilities
+
+    Examples:
+      | capabilities  | format |
+      | sessions      |        |
+      | sessions      | --json |
+
+  Scenario Outline: A registry too old to list capabilities is refused before any session is read
+    Given I am signed in to a registry that lists no capabilities
+    When I run protostar with "sessions show 7d3c9a52 <format> --registry {registry}"
+    Then the exit code is 1
+    And the output contains "too old for serving sessions with secrets redacted"
+    And the registry was asked only for its capabilities
+
+    Examples:
+      | format |
+      |        |
+      | --json |

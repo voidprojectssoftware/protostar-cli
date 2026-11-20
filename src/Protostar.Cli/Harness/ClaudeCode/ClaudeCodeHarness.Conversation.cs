@@ -17,7 +17,10 @@ namespace Protostar.Cli.Harness.ClaudeCode;
 /// A subagent links to its parent through the result of the call that started it: the <c>user</c> line carrying that
 /// <c>tool_result</c> has <c>toolUseResult.agentId</c>, and the subagent's transcript is
 /// <c>subagents/agent-&lt;agentId&gt;.jsonl</c>, key <c>&lt;session id&gt;.agent-&lt;agentId&gt;</c>. Versions that do not
-/// write <c>toolUseResult</c> still end the result text with <c>agentId: &lt;id&gt;</c>, which is used instead.
+/// write <c>toolUseResult</c> still end the result text with <c>agentId: &lt;id&gt;</c>, so the last such mention is used
+/// instead. A line on its own cannot tell which call a result answers, so any result may come out with an agent id
+/// here (a Bash result that prints a log line naming one, say); <see cref="Sessions.SessionReader"/> keeps it only for
+/// the result of a call that ran a subagent (#121).
 /// </para>
 /// </remarks>
 internal sealed partial class ClaudeCodeHarness
@@ -25,7 +28,8 @@ internal sealed partial class ClaudeCodeHarness
     // The input fields that say what a call did, most telling first; a tool with none of them shows its first string.
     private static readonly string[] SummaryFields = ["command", "file_path", "notebook_path", "path", "pattern", "url", "query", "description", "prompt"];
 
-    [GeneratedRegex(@"agentId:\s*([A-Za-z0-9_-]{1,100})")]
+    // Right to left: the id the harness appends ends the text, after anything the subagent itself said.
+    [GeneratedRegex(@"agentId:\s*([A-Za-z0-9_-]{1,100})", RegexOptions.RightToLeft)]
     private static partial Regex AgentIdInText();
 
     public IEnumerable<ConversationEntry> ReadConversationLine(string line)

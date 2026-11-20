@@ -160,6 +160,19 @@ public sealed class RegistryTranscriptApiTests
         Assert.Contains("before=2026-11-19T10%3A00%3A00.0000000%2B00%3A00", Assert.Single(handler.Requests).Query);
     }
 
+    [Theory]
+    [InlineData(HttpStatusCode.BadRequest, true)]
+    [InlineData(HttpStatusCode.InternalServerError, false)]
+    [InlineData(HttpStatusCode.NotFound, false)]
+    public async Task Only_a_400_is_reported_as_a_request_the_registry_refused(HttpStatusCode status, bool refused)
+    {
+        var listed = await Api(status, "keyPrefix must be at least 4 characters.").ListAsync(
+            Registry, "tok", new TranscriptListQuery(null, null, null, null, 11, KeyPrefix: "7d3c"), CancellationToken.None);
+
+        Assert.False(listed.Ok);
+        Assert.Equal(refused, listed.Refused);
+    }
+
     private sealed class RecordingHandler(string body) : HttpMessageHandler
     {
         public List<Uri> Requests { get; } = [];

@@ -13,6 +13,8 @@ internal interface ISessionReader
     /// <remarks>
     /// A whole key is found directly, subagent keys included. Anything else is matched, ignoring case, against the
     /// start of the session keys in the registry; one match is opened, several are refused with the candidates.
+    /// A registry that does not list <c>redacted-read</c> is refused before anything is asked, a registry too old to
+    /// list capabilities included, since every read of the session is requested redacted and must come back so.
     /// </remarks>
     Task<SessionOpenResult> OpenAsync(string? registry, string? harnessId, string id, CancellationToken cancellationToken);
 
@@ -146,19 +148,25 @@ internal sealed class SessionReader : ISessionReader
             return SessionOpenResult.Fail(SessionSyncService.SessionFailure(lookup.State), null, registry);
         var token = stored.AccessToken;
 
+        // Sessions as leniently as every command; redaction strictly, as the MCP tools do: a registry that cannot list
+        // redacted-read may ignore redacted=true and serve the stored lines, secrets included, and agents run
+        // `sessions show --json` through a shell (#122). /v1/meta is read once, so the second check asks nothing.
         var check = await _capabilities.RequireAsync(registry, cancellationToken, RegistryCapability.Sessions);
+        if (check.Ok)
+            check = await _capabilities.RequireListedAsync(registry, cancellationToken, RegistryCapability.RedactedRead);
         if (!check.Ok)
             return SessionOpenResult.Fail(SessionSyncService.CheckFailure(check), check.Detail, registry);
 
         // One request when the registry can look a prefix up itself; a whole subagent key is no session's prefix, so
-        // nothing found that way still tries the id as a whole key.
+        // nothing found that way still tries the id as a whole key. So does a prefix the registry refuses (400): no
+        // session key starts with something the registry will not even look up.
         if (check.Supports(RegistryCapability.TranscriptPrefixLookup) == CapabilitySupport.Listed && IsLookupPrefix(id))
         {
             var found = await _api.ListAsync(
                 registry, token, new TranscriptListQuery(null, null, harnessId, null, MaxCandidates + 1, KeyPrefix: id), cancellationToken);
-            if (!found.Ok)
+            if (!found.Ok && !found.Refused)
                 return SessionOpenResult.Fail(SessionSyncFailure.RegistryUnreachable, found.Error, registry);
-            var matches = found.Value!.Where(t => harnesses.Any(h => h.Id == t.Harness)).ToList();
+            var matches = found.Ok ? found.Value!.Where(t => harnesses.Any(h => h.Id == t.Harness)).ToList() : [];
             if (matches.Count > 0)
                 return await OpenMatchAsync(registry, token, harnesses, id, matches, cancellationToken);
             return await OpenExactAsync(registry, token, harnesses, id, cancellationToken)
@@ -255,18 +263,17 @@ internal sealed class SessionReader : ISessionReader
             using var reader = new StreamReader(content);
             while (await NextLineAsync(reader, transcript, cancellationToken) is { } line)
             {
-                foreach (var entry in session.Format.ReadConversationLine(line))
+                foreach (var read in session.Format.ReadConversationLine(line))
                 {
-                    if (!full && entry is ToolResultEntry || !full && entry.Sidechain)
+                    if (!full && read is ToolResultEntry || !full && read.Sidechain)
                         continue;
+
+                    var entry = Linked(read, calls, out var subagent);
                     yield return new ShownEntry(transcript.Key, entry.Sidechain ? 1 : 0, entry);
 
-                    if (entry is ToolCallEntry call)
-                        calls[call.Id] = call;
-                    if (entry is ToolResultEntry { AgentId: { } agentId } result &&
+                    if (entry is ToolResultEntry { AgentId: { } agentId } &&
                         subagents.Remove($"{transcript.Key}.agent-{agentId}", out var ran))
                     {
-                        var subagent = calls.GetValueOrDefault(result.ToolUseId)?.Subagent;
                         await foreach (var nested in SubagentAsync(session, ran.Transcript, ran.File, subagent, linked: true, cancellationToken))
                             yield return nested;
                     }
@@ -286,17 +293,37 @@ internal sealed class SessionReader : ISessionReader
         }
     }
 
+    // The entry as shown, with `calls` updated. Only the result of a call that ran a subagent names one (#121): an
+    // agent id on any other result is text that happens to mention it, so it is cleared, and neither takes a subagent
+    // nor reaches the JSON. `subagent` is what the call that ran it asked for, when the result keeps its id.
+    private static ConversationEntry Linked(ConversationEntry read, Dictionary<string, ToolCallEntry> calls, out SubagentCall? subagent)
+    {
+        subagent = null;
+        switch (read)
+        {
+            case ToolCallEntry call:
+                calls[call.Id] = call;
+                return read;
+            case ToolResultEntry { AgentId: not null } result:
+                subagent = calls.GetValueOrDefault(result.ToolUseId)?.Subagent;
+                return subagent is null ? result with { AgentId = null } : read;
+            default:
+                return read;
+        }
+    }
+
     private static async IAsyncEnumerable<ShownEntry> SubagentAsync(
         OpenedSession session, RemoteTranscript subagent, string file, SubagentCall? call, bool linked,
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
         yield return new ShownEntry(subagent.Key, 1, new SubagentStartEntry(subagent.Key, call?.AgentType, call?.Description ?? subagent.Title, linked));
+        var calls = new Dictionary<string, ToolCallEntry>(StringComparer.Ordinal);
         using (var reader = new StreamReader(file))
         {
             while (await reader.ReadLineAsync(cancellationToken) is { } line)
             {
                 foreach (var entry in session.Format.ReadConversationLine(line))
-                    yield return new ShownEntry(subagent.Key, 1, entry);
+                    yield return new ShownEntry(subagent.Key, 1, Linked(entry, calls, out _));
             }
         }
 

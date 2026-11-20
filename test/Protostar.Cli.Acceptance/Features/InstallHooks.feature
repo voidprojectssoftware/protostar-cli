@@ -79,6 +79,13 @@ Feature: Installing capture hooks into a harness
     Then the exit code is 0
     And the output contains "protostar capture"
 
+  # The bound is 15 seconds; reading stdin counts against it (#122).
+  Scenario: A hook whose standard input never closes still exits 0 within its bound
+    When I run protostar with "capture --hook PostToolUse" and a standard input that never closes
+    Then the exit code is 0
+    And it finished within 20 seconds
+    And the output contains "the hook's input did not end within 15 seconds"
+
   Scenario: The exact hook command lines install-hooks writes still parse
     Given a fake claude-code harness
     When I run protostar with "install-hooks --harness claude-code --harness-home {harnessHome} --exe-path {protostar} --yes"
