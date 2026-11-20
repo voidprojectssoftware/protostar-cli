@@ -29,7 +29,11 @@ internal sealed record ToolCallEntry(DateTimeOffset? At, bool Sidechain, string 
 /// <param name="ToolUseId">The id of the call it answers.</param>
 /// <param name="Text">The result's text.</param>
 /// <param name="IsError">Whether the tool reported an error.</param>
-/// <param name="AgentId">For a call that ran a subagent, the subagent's agent id, which names its transcript; <c>null</c> otherwise.</param>
+/// <param name="AgentId">
+/// For a call that ran a subagent, the subagent's agent id, which names its transcript; <c>null</c> otherwise. A harness
+/// reads one line at a time and cannot always tell which call a result answers, so it may set this on any result that
+/// names an agent id; <see cref="Sessions.ISessionReader.ReadAsync"/> clears it unless the call it answers ran a subagent.
+/// </param>
 internal sealed record ToolResultEntry(DateTimeOffset? At, bool Sidechain, string ToolUseId, string Text, bool IsError, string? AgentId)
     : ConversationEntry(At, Sidechain);
 

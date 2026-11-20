@@ -255,18 +255,29 @@ internal sealed class SessionReader : ISessionReader
             using var reader = new StreamReader(content);
             while (await NextLineAsync(reader, transcript, cancellationToken) is { } line)
             {
-                foreach (var entry in session.Format.ReadConversationLine(line))
+                foreach (var read in session.Format.ReadConversationLine(line))
                 {
-                    if (!full && entry is ToolResultEntry || !full && entry.Sidechain)
+                    if (!full && read is ToolResultEntry || !full && read.Sidechain)
                         continue;
+
+                    // Only the result of a call that ran a subagent names one (#121): an agent id on any other result is
+                    // text that happens to mention it, and must neither take the subagent nor reach the JSON.
+                    var entry = read;
+                    SubagentCall? subagent = null;
+                    if (read is ToolResultEntry { AgentId: not null } named)
+                    {
+                        subagent = calls.GetValueOrDefault(named.ToolUseId)?.Subagent;
+                        if (subagent is null)
+                            entry = named with { AgentId = null };
+                    }
+
                     yield return new ShownEntry(transcript.Key, entry.Sidechain ? 1 : 0, entry);
 
                     if (entry is ToolCallEntry call)
                         calls[call.Id] = call;
-                    if (entry is ToolResultEntry { AgentId: { } agentId } result &&
+                    if (entry is ToolResultEntry { AgentId: { } agentId } &&
                         subagents.Remove($"{transcript.Key}.agent-{agentId}", out var ran))
                     {
-                        var subagent = calls.GetValueOrDefault(result.ToolUseId)?.Subagent;
                         await foreach (var nested in SubagentAsync(session, ran.Transcript, ran.File, subagent, linked: true, cancellationToken))
                             yield return nested;
                     }
