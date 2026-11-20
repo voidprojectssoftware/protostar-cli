@@ -1,5 +1,5 @@
 ---
-sidebar_position: 3
+sidebar_position: 4
 title: Authenticate to a registry
 ---
 
@@ -18,6 +18,9 @@ running a registry themselves — most often a local development instance on
 registry (and the sync that depends on it) lands as the loop fills in. The steps
 below work against any registry you point at.
 :::
+
+`protostar setup` signs you in as its first step (see
+[Set up a machine](./set-up-a-machine.md)). To sign in on its own:
 
 ```console
 $ protostar auth login

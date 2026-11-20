@@ -16,6 +16,23 @@ $ protostar --help          # list commands
 $ protostar --version, -v   # print the version (e.g. 0.1.0)
 ```
 
+## `protostar setup`
+
+Set up this machine in one step: sign in, install capture hooks, pull skills,
+and offer to back up existing sessions. Prints one line per step (done, already
+done, skipped, or failed) and is safe to run again. Exits `0` unless a step
+failed.
+
+| Option | Description |
+|---|---|
+| `--registry <URL>` | Registry base URL. Defaults to `$PROTOSTAR_REGISTRY_URL`, then the built-in dev default. |
+| `-y`, `--yes` | Back up this machine's sessions without asking. Without it, setup asks on a terminal and skips the backup otherwise. |
+| `--no-browser` | Print the sign-in URL instead of opening a browser. |
+| `--provider <NAME>` | Skip the registry's sign-in chooser and go straight to this provider. |
+| `--harness-home <DIR>` | Override the harness config root. |
+
+See [Set up a machine](../get-started/set-up-a-machine.md).
+
 ## `protostar install`
 
 Install protostar to a per-user directory and add it to `PATH`.

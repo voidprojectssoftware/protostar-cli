@@ -155,8 +155,19 @@ internal static class SkillPullPresenter
     /// <remarks>Also used by <see cref="SkillChangePresenter"/>, whose lookup stops for the same reasons.</remarks>
     internal static int? Failure(SkillPullRunFailure failure, string? detail, Uri? registry, IHarnessCatalog catalog)
     {
+        var message = FailureMessage(failure, detail, registry, catalog);
+        if (message is null)
+            return null;
+
+        AnsiConsole.MarkupLine($"[red]{Markup.Escape(message)}[/]");
+        return 1;
+    }
+
+    /// <summary>Why a run stopped early, as plain text; <c>null</c> when it went ahead. Also used by <c>setup</c>.</summary>
+    internal static string? FailureMessage(SkillPullRunFailure failure, string? detail, Uri? registry, IHarnessCatalog catalog)
+    {
         var authority = Authority(registry);
-        string? message = failure switch
+        return failure switch
         {
             SkillPullRunFailure.None => null,
             SkillPullRunFailure.InvalidRegistry => detail,
@@ -171,10 +182,5 @@ internal static class SkillPullPresenter
             SkillPullRunFailure.SkillNotFound => $"There is no skill named '{detail}' in {authority}. Run `protostar skills remote` to see what is there.",
             _ => detail,
         };
-        if (message is null)
-            return null;
-
-        AnsiConsole.MarkupLine($"[red]{Markup.Escape(message)}[/]");
-        return 1;
     }
 }

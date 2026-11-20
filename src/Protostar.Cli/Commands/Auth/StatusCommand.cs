@@ -1,4 +1,3 @@
-using System.Security.Claims;
 using Protostar.Cli.Auth;
 using Spectre.Console;
 using Spectre.Console.Cli;
@@ -6,22 +5,19 @@ using Spectre.Console.Cli;
 namespace Protostar.Cli.Commands.Auth;
 
 /// <summary>
-/// <c>protostar auth status</c> — reports whether there is a stored session for the registry and,
-/// if reachable, verifies it by calling the userinfo endpoint (refreshing an expired access token
-/// when possible). Works offline: with no stored session it simply reports "Not logged in".
+/// <c>protostar auth status</c>: reports whether there is a stored session for the registry and,
+/// if reachable, verifies it with the registry (refreshing an expired access token when possible).
+/// Works offline: with no stored session it simply reports "Not logged in".
 /// </summary>
 internal sealed class StatusCommand : AsyncCommand<StatusCommand.Settings>
 {
-    private readonly IAccessTokenProvider _tokens;
+    private readonly ISignInService _signIn;
 
-    public StatusCommand(IAccessTokenProvider tokens) => _tokens = tokens;
+    public StatusCommand(ISignInService signIn) => _signIn = signIn;
 
     public sealed class Settings : AuthSettings;
 
-    protected override Task<int> ExecuteAsync(CommandContext context, Settings settings, CancellationToken cancellation) =>
-        RunAsync(settings, cancellation);
-
-    private async Task<int> RunAsync(Settings settings, CancellationToken cancellation)
+    protected override async Task<int> ExecuteAsync(CommandContext context, Settings settings, CancellationToken cancellation)
     {
         Uri registry;
         try
@@ -34,44 +30,6 @@ internal sealed class StatusCommand : AsyncCommand<StatusCommand.Settings>
             return 1;
         }
 
-        var authority = registry.GetLeftPart(UriPartial.Authority);
-        // Refreshes a stale access token when it can, so a verified status survives short sessions.
-        var stored = await _tokens.GetSessionAsync(registry, cancellation);
-
-        if (stored is null)
-        {
-            AnsiConsole.MarkupLine($"Not logged in to [grey]{Markup.Escape(authority)}[/].");
-            return 0;
-        }
-
-        var oidc = OidcClientFactory.Create(registry);
-
-        IEnumerable<Claim>? claims = null;
-        try
-        {
-            var info = await oidc.GetUserInfoAsync(stored.AccessToken, cancellation);
-            if (!info.IsError)
-                claims = info.Claims;
-        }
-        catch (HttpRequestException)
-        {
-            // Registry unreachable; show the stored identity instead.
-        }
-
-        var verifiedLogin = claims?.FirstOrDefault(c => c.Type == "preferred_username")?.Value
-            ?? claims?.FirstOrDefault(c => c.Type == "github_login")?.Value;
-        var login = verifiedLogin ?? stored.Login ?? "(unknown)";
-
-        if (claims is not null)
-        {
-            AnsiConsole.MarkupLine($"[green]Logged in[/] to [grey]{Markup.Escape(authority)}[/] as [aqua]{Markup.Escape(login)}[/].");
-        }
-        else
-        {
-            AnsiConsole.MarkupLine($"[yellow]Logged in[/] to [grey]{Markup.Escape(authority)}[/] as [aqua]{Markup.Escape(login)}[/] " +
-                "[grey](could not verify with the registry; it may be unreachable or the session expired).[/]");
-        }
-
-        return 0;
+        return SignInPresenter.RenderStatus(await _signIn.CheckAsync(registry, cancellation));
     }
 }
