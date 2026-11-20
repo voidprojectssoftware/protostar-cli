@@ -29,3 +29,13 @@ Feature: Session commands give agents structured results
     Then the exit code is 1
     And standard output is empty
     And standard error is a JSON error with code "invalid_registry"
+
+  Scenario: Not signed in, sessions show --json gives an error code and nothing on standard output
+    When I run protostar with "sessions show 7d3c9a52 --json --registry https://not-signed-in.invalid"
+    Then the exit code is 1
+    And standard output is empty
+    And standard error is a JSON error with code "not_signed_in"
+
+  Scenario: sessions show needs an id
+    When I run protostar with "sessions show"
+    Then the exit code is not 0

@@ -440,12 +440,13 @@ registry refused, or confirmation was needed and not possible.
 
 ## `protostar sessions`
 
-Back up your harness's session transcripts to the registry and see what is backed
-up. Each session is filed under the [project](../guides/projects.md) of the folder
+Back up your harness's session transcripts to the registry, see what is backed
+up, and read a session back. Each session is filed under the [project](../guides/projects.md) of the folder
 it ran in. `protostar sessions` on its own prints its help; use one of the commands
 below.
 
-These options are shared by all three commands:
+These options are shared by `push`, `status` and `list` (`show` takes `--registry`
+and `--harness`, since it reads only the registry):
 
 | Option | Description |
 |---|---|
@@ -726,13 +727,75 @@ Pulled memory for 1 project: 1 written, 1 updated, 0 already here, 1 conflicted,
 The exit code is `0` unless a memory folder could not be written. Conflicts and
 skipped projects do not fail the pull.
 
+### `protostar sessions show`
+
+Read a backed-up session as a conversation, from any machine you are signed in on.
+Give its id from `protostar sessions list`, or enough of the start of it to name
+one session (case does not matter); a subagent's full id works too. Prompts and
+replies are shown in order. Each tool call is one line (the tool and what it acted
+on), and so is each subagent, through the call that started it:
+
+```console
+$ protostar sessions show 7d3c9a52
+List files and summarise README
+github.com/example/demo-app · vm-dev-01 · claude-code · 2026-11-19 04:00 to 2026-11-19 04:01
+7d3c9a52-1f4e-4b8a-9c0d-2e6f8a1b3c4d
+
+You 04:00
+  List the files here, then ask a helper to summarise README.md. My token is [redacted:github-token]
+
+Assistant 04:00
+  I'll list the files first.
+  ▸ Bash ls -la
+  ▸ Task subagent general-purpose: Summarise README
+  There are two entries, README.md and src. The helper says the README describes a demo app.
+```
+
+Secrets the registry recognises (tokens, keys, passwords) are shown as
+`[redacted:<type>]`. The backup itself keeps the original bytes.
+
+With `--full`, each tool call's input and result follow it, and each subagent's
+own conversation is nested, marked with a bar, right after the call that ran it:
+
+```console
+$ protostar sessions show 7d3c9a52 --full
+...
+  ▸ Task subagent general-purpose: Summarise README
+      {
+        "description": "Summarise README",
+        "prompt": "Read README.md and summarise it in one line.",
+        "subagent_type": "general-purpose"
+      }
+    ◂ result
+      The README describes a demo app.
+┌ Subagent general-purpose: Summarise README 7d3c9a52-1f4e-4b8a-9c0d-2e6f8a1b3c4d.agent-a1b2c3d4e5
+│
+│ Task 04:00
+│   Read README.md and summarise it in one line.
+...
+└
+```
+
+A session is shown as it downloads, so even a very large one starts at once and
+uses little memory. An id that matches nothing says so and suggests
+`protostar sessions list`. A prefix that matches several sessions lists them,
+and you give more of the id. Either way the exit code is `1`.
+
+| Option | Description |
+|---|---|
+| `--registry <URL>` | Registry to use. Defaults to `PROTOSTAR_REGISTRY_URL`, then the saved default, then `https://localhost:7443`. |
+| `-H, --harness <ID>` | Only look in this harness's sessions. |
+| `--full` | Also show tool call inputs and results, and subagents' conversations where they ran. |
+| `--json` | Print one JSON record per message (JSON Lines) instead of the conversation. See [JSON output](json-output.md#sessions-show). |
+
 ## `protostar project`
 
 See which [project](../guides/projects.md) a folder belongs to, and link or unlink
 it. A project is what sessions and project skills are filed under, the same on
 every machine. With no subcommand, `protostar project` is `protostar project show`.
 
-These options are shared by all three commands:
+These options are shared by `push`, `status` and `list` (`show` takes `--registry`
+and `--harness`, since it reads only the registry):
 
 | Option | Description |
 |---|---|

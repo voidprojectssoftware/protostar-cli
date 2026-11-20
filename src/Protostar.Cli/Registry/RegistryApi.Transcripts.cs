@@ -108,12 +108,80 @@ internal sealed partial class RegistryApi : ITranscriptApi
         if (query.Machine is { } machine) parts.Add("machine=" + machine);
         // In UTC: `--since 2026-11-01` parses with the local offset, and the registry answered 500 to any offset but zero.
         if (query.Since is { } since) parts.Add("since=" + Uri.EscapeDataString(since.ToUniversalTime().ToString("O")));
+        if (query.Before is { } before) parts.Add("before=" + Uri.EscapeDataString(before.ToUniversalTime().ToString("O")));
 
         using var request = Request(HttpMethod.Get, registry, "/v1/transcripts?" + string.Join('&', parts), accessToken);
         return await SendAsync<IReadOnlyList<RemoteTranscript>>(
             request,
             async response => await response.Content.ReadFromJsonAsync<RemoteTranscript[]>(TranscriptJson.Options) ?? [],
             cancellationToken);
+    }
+
+    /// <inheritdoc />
+    public async Task<ApiResult<TranscriptDetail>> GetAsync(Uri registry, string accessToken, string harness, string key, CancellationToken cancellationToken)
+    {
+        using var request = Request(HttpMethod.Get, registry, TranscriptPath(harness, key), accessToken);
+        return await SendAsync(
+            request,
+            async response => await response.Content.ReadFromJsonAsync<TranscriptDetail>(TranscriptJson.Options, cancellationToken)
+                ?? throw new JsonException("The registry sent an empty transcript."),
+            cancellationToken);
+    }
+
+    /// <inheritdoc />
+    public async Task<ApiResult<Stream>> OpenRedactedContentAsync(Uri registry, string accessToken, string harness, string key, CancellationToken cancellationToken)
+    {
+        using var request = Request(HttpMethod.Get, registry, $"{TranscriptPath(harness, key)}/content?redacted=true", accessToken);
+        HttpResponseMessage? response = null;
+        try
+        {
+            // Headers only: the body is read as the caller renders it, never buffered whole.
+            response = await _http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+            if (response.IsSuccessStatusCode)
+            {
+                var body = await response.Content.ReadAsStreamAsync(cancellationToken);
+                return ApiResult<Stream>.Success(new ResponseStream(body, response));
+            }
+
+            using (response)
+            {
+                var problem = await ReadProblemAsync(response, cancellationToken);
+                return IsUnknownTranscript(response, problem)
+                    ? ApiResult<Stream>.UnknownTranscript(problem!.Title ?? "No such transcript.")
+                    : ApiResult<Stream>.Fail(problem?.Title ?? Describe(response.StatusCode));
+            }
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException && !cancellationToken.IsCancellationRequested)
+        {
+            response?.Dispose();
+            return ApiResult<Stream>.Fail($"Could not reach the registry: {ex.Message}");
+        }
+    }
+
+    // The response body, which ends the response when disposed.
+    private sealed class ResponseStream(Stream body, HttpResponseMessage response) : Stream
+    {
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => throw new NotSupportedException();
+        public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
+        public override int Read(byte[] buffer, int offset, int count) => body.Read(buffer, offset, count);
+        public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default) => body.ReadAsync(buffer, cancellationToken);
+        public override void Flush() { }
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
+            {
+                body.Dispose();
+                response.Dispose();
+            }
+            base.Dispose(disposing);
+        }
     }
 
     private static HttpRequestMessage Request(HttpMethod method, Uri registry, string path, string accessToken)
@@ -139,6 +207,8 @@ internal sealed partial class RegistryApi : ITranscriptApi
             var problem = await ReadProblemAsync(response, cancellationToken);
             if (machineId is { } id && IsUnknownMachine(response, problem, id))
                 return ApiResult<T>.UnknownMachine(problem!.Title!);
+            if (IsUnknownTranscript(response, problem))
+                return ApiResult<T>.UnknownTranscript(problem!.Title ?? "No such transcript.");
             return ApiResult<T>.Fail(problem?.Title ?? Describe(response.StatusCode));
         }
         catch (Exception ex) when (ex is HttpRequestException or JsonException or TaskCanceledException && !cancellationToken.IsCancellationRequested)

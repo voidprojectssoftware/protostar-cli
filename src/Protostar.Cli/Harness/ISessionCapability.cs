@@ -3,8 +3,10 @@ namespace Protostar.Cli.Harness;
 /// <summary>Capability: a harness whose session transcripts protostar can find on disk.</summary>
 /// <remarks>
 /// A transcript is one append-only JSONL file: a whole session, or one subagent's run inside a session.
-/// The CLI finds and uploads the files and the registry understands their format, with one exception:
-/// <see cref="ReadWorkingDirectory"/>, because only the CLI can run git in that directory to find its project.
+/// The CLI finds and uploads the files and the registry understands their format, with two exceptions:
+/// <see cref="ReadWorkingDirectory"/>, because only the CLI can run git in that directory to find its project, and
+/// <see cref="ReadConversationLine"/>, because rendering a conversation is presentation, which is the CLI's job; the
+/// registry serves the (redacted) lines and keeps no rendering of its own.
 /// </remarks>
 internal interface ISessionCapability
 {
@@ -22,6 +24,11 @@ internal interface ISessionCapability
     /// <returns><c>null</c> when the file records none yet (or cannot be read).</returns>
     /// <remarks>Read from the file's own lines, never decoded from the folder it sits in, which is lossy (ADR 0002).</remarks>
     string? ReadWorkingDirectory(LocalTranscript transcript);
+
+    /// <summary>The conversation entries one transcript line holds, in the order they happened.</summary>
+    /// <returns>Nothing for a line that is blank, not valid JSON, or of a type that is not part of the conversation; never throws for a line's content.</returns>
+    /// <remarks>Called one line at a time, so a transcript of any size is read without holding it in memory.</remarks>
+    IEnumerable<ConversationEntry> ReadConversationLine(string line);
 }
 
 /// <summary>Whether a transcript is a whole session or one subagent's run.</summary>

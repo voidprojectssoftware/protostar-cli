@@ -438,7 +438,7 @@ internal sealed partial class SessionSyncService : ISessionSyncService
     }
 
     // Why a run that needs the registry stops when there is no current session.
-    private static SessionSyncFailure SessionFailure(SessionState session) => session switch
+    internal static SessionSyncFailure SessionFailure(SessionState session) => session switch
     {
         SessionState.None => SessionSyncFailure.NotLoggedIn,
         SessionState.RegistryUnreachable => SessionSyncFailure.RegistryUnreachable,

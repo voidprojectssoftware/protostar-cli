@@ -35,6 +35,7 @@ services.AddSingleton<IMachineIdentity, MachineIdentity>();
 services.AddSingleton(TimeProvider.System);
 services.AddSingleton<IProjectFactsResolver, ProjectFactsResolver>();
 services.AddSingleton<ISessionSyncService, SessionSyncService>();
+services.AddSingleton<ISessionReader, SessionReader>();
 services.AddSingleton<IProjectApi>(sp => sp.GetRequiredService<RegistryApi>());
 services.AddSingleton<IProjectService, ProjectService>();
 services.AddSingleton<IMemoryApi>(sp => sp.GetRequiredService<RegistryApi>());
@@ -111,13 +112,15 @@ app.Configure(config =>
 
     config.AddBranch(Named("sessions"), sessions =>
     {
-        sessions.SetDescription("Back up session transcripts, and see what is backed up.");
+        sessions.SetDescription("Back up session transcripts, see what is backed up, and read them back.");
         sessions.AddCommand<SessionsPushCommand>("push")
             .WithDescription("Back up every session transcript on this machine to the registry.");
         sessions.AddCommand<SessionsStatusCommand>("status")
             .WithDescription("Show what is and is not backed up on this machine. Works offline; exits 1 while anything is pending.");
         sessions.AddCommand<SessionsListCommand>("list")
             .WithDescription("List sessions backed up from every machine.");
+        sessions.AddCommand<SessionsShowCommand>("show")
+            .WithDescription("Read a backed-up session as a conversation: prompts and replies, with tool calls and subagents on one line each.");
     });
 
     config.AddBranch(Named("memory"), memory =>
