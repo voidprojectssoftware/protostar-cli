@@ -18,6 +18,9 @@ internal static class SessionShowPresenter
     // A collapsed tool call fits on one line of an 80-column terminal, with its indent.
     private const int SummaryWidth = 72;
 
+    // A longer skill name is cut, so one long plugin name does not push every other row's columns off the line.
+    private const int MaxSkillName = 40;
+
     /// <summary>Renders a lookup that found nothing to show and returns its exit code; <c>null</c> when a session was found.</summary>
     public static int? RenderOpen(SessionOpenResult result, string id, IHarnessCatalog catalog, bool json)
     {
@@ -50,15 +53,18 @@ internal static class SessionShowPresenter
     }
 
     /// <summary>Writes the session's entries as they are read and returns the exit code: 0, or 1 when the download failed part way.</summary>
-    public static Task<int> RenderAsync(OpenedSession session, IAsyncEnumerable<ShownEntry> entries, bool full, bool json) =>
-        RenderAsync(session, entries, full, json, json ? null : ConversationWriter.ForConsole());
+    /// <param name="skills">The skills the session used, from <see cref="ISessionSkills"/>, started alongside the download; shown when it gives a list.</param>
+    public static Task<int> RenderAsync(OpenedSession session, IAsyncEnumerable<ShownEntry> entries, bool full, bool json, Task<IReadOnlyList<UsedSkill>?>? skills) =>
+        RenderAsync(session, entries, full, json, json ? null : ConversationWriter.ForConsole(), skills);
 
     /// <summary>Writes the session's entries through <paramref name="writer"/>, or as JSON Lines when it is <c>null</c>.</summary>
-    internal static async Task<int> RenderAsync(OpenedSession session, IAsyncEnumerable<ShownEntry> entries, bool full, bool json, ConversationWriter? writer)
+    internal static async Task<int> RenderAsync(
+        OpenedSession session, IAsyncEnumerable<ShownEntry> entries, bool full, bool json, ConversationWriter? writer, Task<IReadOnlyList<UsedSkill>?>? skills = null)
     {
         var harness = session.Detail.Transcript.Harness;
         var view = writer is null ? null : new ConversationView(writer);
         view?.Header(session.Detail.Transcript);
+        var headed = false;
         var reading = entries.GetAsyncEnumerator();
         try
         {
@@ -69,7 +75,21 @@ internal static class SessionShowPresenter
                 var next = reading.MoveNextAsync();
                 if (!next.IsCompleted)
                     writer?.Flush();
-                if (!await next)
+                var more = await next;
+
+                // The skills are awaited once the download has answered, so their request runs alongside it rather
+                // than before it, and they are written before the first message.
+                if (!headed)
+                {
+                    headed = true;
+                    var used = skills is null ? null : await skills;
+                    if (view is null)
+                        SessionsJson.WriteObject(SessionsJson.SessionRecord(session.Detail.Transcript, used));
+                    else if (used is not null)
+                        view.Skills(used);
+                }
+
+                if (!more)
                     break;
                 if (view is null)
                     SessionsJson.WriteObject(SessionsJson.ShowRecord(reading.Current, harness, full));
@@ -119,6 +139,50 @@ internal static class SessionShowPresenter
             _out.Line(new Span(string.Join(" · ", facts.OfType<string>()), "grey"));
             _out.Line(new Span(t.Key, "grey"));
         }
+
+        // The skills the session used, aligned in columns, with what each mark means.
+        public void Skills(IReadOnlyList<UsedSkill> used)
+        {
+            if (used.Count == 0)
+            {
+                _out.Line(new Span("Skills used: none", "grey"));
+                return;
+            }
+
+            _out.Line(new Span("Skills used", "bold"));
+            var nameWidth = Math.Min(MaxSkillName, used.Max(u => u.Skill.Name.Length));
+            var usesWidth = used.Max(u => Uses(u.Skill).Length);
+            var versionWidth = used.Max(u => Version(u.Skill).Length);
+            foreach (var u in used)
+            {
+                var notes = new List<Span>();
+                if (u.Skill.Deleted)
+                    notes.Add(new Span("deleted from the registry", "yellow"));
+                else if (u.FromPlugin)
+                    notes.Add(new Span("plugin", "grey"));
+                else if (u.Skill.SkillId is null)
+                    notes.Add(new Span("not in the registry", "grey"));
+                if (u.InstalledHere == false)
+                    notes.Add(new Span("not installed here", "yellow"));
+
+                Span[] line =
+                [
+                    new("  " + Truncate(u.Skill.Name, MaxSkillName).PadRight(nameWidth) + "  "),
+                    new(Uses(u.Skill).PadLeft(usesWidth), "grey"),
+                    new("  " + Version(u.Skill).PadRight(versionWidth)),
+                ];
+                for (var i = 0; i < notes.Count; i++)
+                    line = [.. line, new Span(i == 0 ? "  " : ", "), notes[i]];
+                _out.Line(line);
+            }
+
+            if (used.Any(u => u.Skill.VersionInferred))
+                _out.Line(new Span("  ? the version in use then, inferred from when the skill's versions were pushed", "grey"));
+        }
+
+        private static string Uses(SessionSkill skill) => skill.Uses == 1 ? "1 use" : $"{skill.Uses} uses";
+
+        private static string Version(SessionSkill skill) => skill.Version is { } v ? $"v{v}{(skill.VersionInferred ? "?" : "")}" : "";
 
         public void Write(ShownEntry shown, bool full)
         {

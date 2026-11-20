@@ -119,6 +119,32 @@ internal static class SessionsJson
             t.Status, t.BytesUploaded, t.BytesPending, t.Rewritten, t.Message, t.Verified),
         TranscriptJson.Options)!;
 
+    /// <summary>The first <c>sessions show</c> record: the session itself, and the skills it used when the registry lists them.</summary>
+    /// <remarks>
+    /// <c>session</c> is the <c>sessions list</c> record. <c>skills</c> is left out when the registry cannot list them
+    /// (it lacks <c>session-skills</c>, or the request failed); each has the registry's fields plus <c>installedHere</c>,
+    /// which is left out for a skill not looked for (a plugin's).
+    /// </remarks>
+    public static JsonNode SessionRecord(RemoteTranscript session, IReadOnlyList<UsedSkill>? skills)
+    {
+        var record = new JsonObject
+        {
+            ["type"] = "session", ["transcriptId"] = session.Key, ["harness"] = session.Harness,
+            ["session"] = ListRecord(new ListedSession(session, null)),
+        };
+        if (skills is not null)
+            record["skills"] = new JsonArray([.. skills.Select(SkillRecord)]);
+        return record;
+    }
+
+    private static JsonNode SkillRecord(UsedSkill used)
+    {
+        var node = JsonSerializer.SerializeToNode(used.Skill, TranscriptJson.Options)!.AsObject();
+        if (used.InstalledHere is { } installed)
+            node["installedHere"] = installed;
+        return node;
+    }
+
     /// <summary>A <c>sessions show</c> record: one message of the conversation, or where a subagent starts or ends.</summary>
     /// <remarks>
     /// <c>type</c> is <c>prompt</c>, <c>reply</c>, <c>toolCall</c>, <c>toolResult</c>, <c>subagentStart</c> or

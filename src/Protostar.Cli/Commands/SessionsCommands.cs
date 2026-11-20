@@ -188,17 +188,24 @@ internal sealed class SessionsListCommand : AsyncCommand<SessionsListCommand.Set
 internal sealed class SessionsShowCommand : AsyncCommand<SessionsShowCommand.Settings>
 {
     private readonly ISessionReader _reader;
+    private readonly ISessionSkills _skills;
     private readonly IHarnessCatalog _catalog;
 
-    public SessionsShowCommand(ISessionReader reader, IHarnessCatalog catalog)
+    public SessionsShowCommand(ISessionReader reader, ISessionSkills skills, IHarnessCatalog catalog)
     {
         _reader = reader;
+        _skills = skills;
         _catalog = catalog;
     }
 
-    // Not LocalSessionsSettings: show reads only the registry, so a harness home would change nothing.
+    // Not LocalSessionsSettings: show reads the session from the registry; the harness home is only where it looks
+    // for local skills, to mark the skills the session used that are not installed here.
     public sealed class Settings : SessionsSettings
     {
+        [CommandOption("--harness-home <DIR>")]
+        [Description("Override the harness config root whose skills count as installed here (testing or a non-default location).")]
+        public string? HarnessHome { get; init; }
+
         [CommandArgument(0, "<ID>")]
         [Description("The session's id from `protostar sessions list`, or enough of its start to name one session. A subagent's full id works too.")]
         public string Id { get; init; } = "";
@@ -227,6 +234,8 @@ internal sealed class SessionsShowCommand : AsyncCommand<SessionsShowCommand.Set
             return exit;
 
         var session = opened.Session!;
-        return await SessionShowPresenter.RenderAsync(session, _reader.ReadAsync(session, settings.Full, cancellation), settings.Full, settings.Json);
+        // Started now and awaited by the presenter once the content download has started too, so the two overlap.
+        var skills = _skills.GetAsync(session, settings.HarnessHome, Directory.GetCurrentDirectory(), cancellation);
+        return await SessionShowPresenter.RenderAsync(session, _reader.ReadAsync(session, settings.Full, cancellation), settings.Full, settings.Json, skills);
     }
 }
