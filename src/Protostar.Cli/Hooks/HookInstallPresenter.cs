@@ -29,20 +29,10 @@ internal static class HookInstallPresenter
     /// <summary>Render a run's outcome and return the process exit code (0 success, 1 any failure).</summary>
     public static int Render(HookRunResult result, bool dryRun, IHarnessCatalog catalog)
     {
-        switch (result.Failure)
+        if (FailureMessage(result, catalog) is { } failure)
         {
-            case HookRunFailure.UnknownHarness:
-                AnsiConsole.MarkupLine(
-                    $"[red]Unknown harness '{Markup.Escape(result.OffendingHarnessId!)}'.[/] " +
-                    $"Known: {catalog.KnownIds}");
-                return 1;
-            case HookRunFailure.Unsupported:
-                AnsiConsole.MarkupLine(
-                    $"[red]Harness '{Markup.Escape(result.OffendingHarnessId!)}' does not support capture hooks.[/]");
-                return 1;
-            case HookRunFailure.MissingExecutable:
-                AnsiConsole.MarkupLine("[red]Could not determine the protostar binary for the hook command.[/]");
-                return 1;
+            AnsiConsole.MarkupLine(failure);
+            return 1;
         }
 
         if (result.Results.Count == 0)
@@ -69,4 +59,15 @@ internal static class HookInstallPresenter
 
         return failed ? 1 : 0;
     }
+
+    /// <summary>Why a run stopped before touching any harness, as markup; <c>null</c> when it went ahead. Also used by <c>setup</c>.</summary>
+    internal static string? FailureMessage(HookRunResult result, IHarnessCatalog catalog) => result.Failure switch
+    {
+        HookRunFailure.UnknownHarness =>
+            $"[red]Unknown harness '{Markup.Escape(result.OffendingHarnessId!)}'.[/] Known: {catalog.KnownIds}",
+        HookRunFailure.Unsupported =>
+            $"[red]Harness '{Markup.Escape(result.OffendingHarnessId!)}' does not support capture hooks.[/]",
+        HookRunFailure.MissingExecutable => "[red]Could not determine the protostar binary for the hook command.[/]",
+        _ => null,
+    };
 }

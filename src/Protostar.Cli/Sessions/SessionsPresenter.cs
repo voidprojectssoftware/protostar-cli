@@ -299,7 +299,8 @@ internal static class SessionsPresenter
         return 1;
     }
 
-    private static string? FailureMessage(SessionSyncFailure failure, string? detail, Uri? registry, IHarnessCatalog catalog)
+    /// <summary>Why a sync or status stopped early, as plain text; <c>null</c> when it went ahead. Also used by <c>setup</c>.</summary>
+    internal static string? FailureMessage(SessionSyncFailure failure, string? detail, Uri? registry, IHarnessCatalog catalog)
     {
         var authority = registry?.GetLeftPart(UriPartial.Authority) ?? "";
         return failure switch

@@ -1,4 +1,5 @@
 using System.Text.Json.Nodes;
+using System.Text.RegularExpressions;
 using CliWrap.Buffered;
 using Protostar.Cli.Acceptance.Support;
 using Reqnroll;
@@ -12,7 +13,7 @@ namespace Protostar.Cli.Acceptance.Steps;
 /// <see cref="HarnessSandbox"/> per scenario.
 /// </summary>
 [Binding]
-public sealed class CliSteps : IDisposable
+public sealed partial class CliSteps : IDisposable
 {
     private readonly HarnessSandbox _harness;
     private Sandbox? _sandbox;
@@ -26,9 +27,15 @@ public sealed class CliSteps : IDisposable
     private BufferedCommandResult Result =>
         _result ?? throw new InvalidOperationException("No protostar invocation has run in this scenario yet.");
 
-    // Spectre disables colour when stdout is redirected, so captured output is plain text. We still
-    // merge stderr in case a future command writes there.
-    private string Output => Result.StandardOutput + Result.StandardError;
+    // Assertions read plain text, with stderr merged in case a command writes there. Spectre usually
+    // drops colour when stdout is redirected, but it detects CI (GITHUB_ACTIONS and others) and emits
+    // ANSI anyway, so a phrase that spans two styles ("[bold]Sign-in[/]: [red]failed[/]") only matches
+    // once the escape sequences are stripped. Stripping here keeps every scenario independent of the
+    // machine's environment.
+    private string Output => AnsiEscape().Replace(Result.StandardOutput + Result.StandardError, string.Empty);
+
+    [GeneratedRegex(@"\x1B\[[0-9;?]*[A-Za-z]")]
+    private static partial Regex AnsiEscape();
 
     [Given("a clean install sandbox")]
     public void GivenACleanInstallSandbox() => _ = Sandbox;

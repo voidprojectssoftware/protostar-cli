@@ -1,5 +1,5 @@
 ---
-sidebar_position: 2
+sidebar_position: 3
 title: Connect your harness
 ---
 
@@ -10,7 +10,8 @@ that by installing small, well-behaved hooks into your AI harness (the tool you
 run your agent in, such as Claude Code). Once the hooks are in place, every skill
 use is captured — the first half of the `use → sync → refine` loop.
 
-This is a one-command step:
+`protostar setup` does this for you (see [Set up a machine](./set-up-a-machine.md)).
+To do it on its own, it is one command:
 
 ```console
 $ protostar install-hooks

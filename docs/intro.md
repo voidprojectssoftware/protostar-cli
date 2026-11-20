@@ -52,6 +52,7 @@ Protostar is built incrementally. Here is what the CLI does right now:
 | Task | Command | Guide |
 |---|---|---|
 | Install the binary and put it on your `PATH` | `protostar install` | [Installation](./get-started/installation.md) |
+| Set up a machine in one step: sign in, hooks, skills, sessions | `protostar setup` | [Set up a machine](./get-started/set-up-a-machine.md) |
 | Connect protostar to your AI harness | `protostar install-hooks` | [Connect your harness](./get-started/connect-your-harness.md) |
 | Sign in to a registry | `protostar auth login` | [Authenticate](./get-started/authenticate.md) |
 | Follow the stable or edge release track | install `--channel` | [Choose a channel](./guides/choose-a-channel.md) |

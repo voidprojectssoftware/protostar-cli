@@ -77,8 +77,8 @@ Live, continuous refinement of agent skills.
 Run protostar --help to see available commands.
 ```
 
-If you see a version number, you are done. Next, head to
-[Connect your harness](./connect-your-harness.md).
+If you see a version number, you are done. Next, set the machine up in one
+command: [Set up a machine](./set-up-a-machine.md).
 
 :::info 📷 Screenshot slot — `img/install-verify.png`
 A terminal window showing `protostar --version` and the `protostar` banner right
