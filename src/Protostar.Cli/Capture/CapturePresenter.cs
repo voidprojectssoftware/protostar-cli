@@ -1,3 +1,4 @@
+using Protostar.Cli.Memory;
 using Protostar.Cli.Registry;
 using Protostar.Cli.Sessions;
 using Protostar.Cli.Skills;
@@ -91,6 +92,19 @@ internal static class CapturePresenter
             log($"{DateTimeOffset.UtcNow:O} {line}");
 
         return 0;
+    }
+
+    /// <summary>Reports what a hook's background push did with its session's project memory; logs only failures, and never contents.</summary>
+    public static void RenderBackgroundMemoryPush(MemoryPushResult result, TextWriter output, Action<string> log)
+    {
+        var line = "protostar memory push (background): " + (result.Failure != SessionSyncFailure.None
+            ? $"memory not backed up: {result.Detail ?? result.Failure.ToString()}"
+            : result.Folders.FirstOrDefault(f => f.Error is not null) is { } failed
+                ? $"memory of {failed.Directory} not backed up: {failed.Error}"
+                : $"{result.Folders.Sum(f => f.Uploaded)} memory files backed up, {result.Folders.Sum(f => f.Deleted)} deletions recorded.");
+        output.WriteLine(line);
+        if (!result.Complete)
+            log($"{DateTimeOffset.UtcNow:O} {line}");
     }
 
     internal static string DescribeSessions(SessionSyncResult sync)

@@ -2,6 +2,7 @@ using System.ComponentModel;
 using Protostar.Cli.Capture;
 using Protostar.Cli.Harness;
 using Protostar.Cli.Infrastructure;
+using Protostar.Cli.Memory;
 using Protostar.Cli.Registry;
 using Protostar.Cli.Sessions;
 using Spectre.Console;
@@ -34,17 +35,21 @@ internal class LocalSessionsSettings : SessionsSettings
 /// <para>Newest transcripts first, with progress, and resumable: Ctrl+C stops it cleanly and the next push carries on.</para>
 /// <para>
 /// With the hidden <c>--session</c> option it is the background push a capture hook starts (see
-/// <see cref="BackgroundPush"/>): one session, no progress display, and problems go to <c>capture.log</c>.
+/// <see cref="BackgroundPush"/>): one session, no progress display, and problems go to <c>capture.log</c>. It then
+/// backs up the memory of that session's project (<see cref="MemoryPushRequest.SessionPath"/>), which costs a stat per
+/// memory file when nothing changed, so agent memory goes up as it is written without a full scan.
 /// </para>
 /// </remarks>
 internal sealed class SessionsPushCommand : AsyncCommand<SessionsPushCommand.Settings>
 {
     private readonly ISessionSyncService _sessions;
+    private readonly IMemorySyncService _memory;
     private readonly IHarnessCatalog _catalog;
 
-    public SessionsPushCommand(ISessionSyncService sessions, IHarnessCatalog catalog)
+    public SessionsPushCommand(ISessionSyncService sessions, IMemorySyncService memory, IHarnessCatalog catalog)
     {
         _sessions = sessions;
+        _memory = memory;
         _catalog = catalog;
     }
 
@@ -76,7 +81,10 @@ internal sealed class SessionsPushCommand : AsyncCommand<SessionsPushCommand.Set
             BackgroundPush.DetachFromTerminal();
             var throttle = settings.Throttle is { } seconds ? TimeSpan.FromSeconds(seconds) : (TimeSpan?)null;
             var one = new SessionSyncRequest(settings.Registry, settings.Harness, settings.HarnessHome, session, null, throttle);
-            return CapturePresenter.RenderBackgroundPush(await _sessions.SyncAsync(one, null, cancellation), Console.Out, CaptureLog.Append);
+            var exit = CapturePresenter.RenderBackgroundPush(await _sessions.SyncAsync(one, null, cancellation), Console.Out, CaptureLog.Append);
+            var memory = await _memory.PushAsync(new MemoryPushRequest(settings.Registry, settings.HarnessHome, session), cancellation);
+            CapturePresenter.RenderBackgroundMemoryPush(memory, Console.Out, CaptureLog.Append);
+            return exit;
         }
 
         // Ctrl+C stops between or during chunks, with the ledger and locks left clean, rather than killing the process.
