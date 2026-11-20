@@ -1,6 +1,6 @@
 Feature: Setting up a machine in one command
   As a developer on a new machine
-  I want protostar setup to sign me in, install hooks, pull my skills and back up my sessions
+  I want protostar setup to sign me in, install hooks, back up and pull my skills, and back up my sessions
   So that the machine is ready to work in minutes
 
   Scenario: setup --help lists its options

@@ -13,28 +13,8 @@ internal static class SkillPushPresenter
     public static int Render(SkillPushRunResult result, IHarnessCatalog catalog)
     {
         var authority = result.Registry?.GetLeftPart(UriPartial.Authority) ?? string.Empty;
-        switch (result.Failure)
-        {
-            case SkillPushRunFailure.InvalidRegistry:
-                return Error(result.Detail!);
-            case SkillPushRunFailure.UnknownHarness:
-                return Error($"Unknown harness '{result.Detail}'. Known: {catalog.KnownIds}");
-            case SkillPushRunFailure.Unsupported:
-                return Error($"Harness '{result.Detail}' does not support skill discovery.");
-            case SkillPushRunFailure.SkillNotFound:
-                return Error($"No skill named '{result.Detail}' was found. Run `protostar skills` to see what is on this machine.");
-            case SkillPushRunFailure.NotLoggedIn:
-                return Error($"Not logged in to {authority}. Run `protostar auth login` first.");
-            case SkillPushRunFailure.SessionExpired:
-                return Error($"Your session for {authority} has expired. Run `protostar auth login` again.");
-            case SkillPushRunFailure.RegistryUnreachable:
-                return Error($"Could not reach the registry at {authority}.");
-            case SkillPushRunFailure.Incompatible:
-            case SkillPushRunFailure.InvalidAs:
-                return Error(result.Detail!);
-            case SkillPushRunFailure.ListFailed:
-                return Error($"Could not list the skills in {authority} to confirm what is backed up: {result.Detail}");
-        }
+        if (FailureMessage(result, catalog) is { } failure)
+            return Error(failure);
 
         if (result.Entries.Count == 0)
         {
@@ -70,6 +50,24 @@ internal static class SkillPushPresenter
             ResolutionHelp(entry.Skill.Name, entry.Outcome.Version);
 
         return result.Succeeded ? 0 : 1;
+    }
+
+    /// <summary>Why a run stopped before uploading anything, as plain text; <c>null</c> when it went ahead. Also used by <c>setup</c>.</summary>
+    internal static string? FailureMessage(SkillPushRunResult result, IHarnessCatalog catalog)
+    {
+        var authority = result.Registry?.GetLeftPart(UriPartial.Authority) ?? string.Empty;
+        return result.Failure switch
+        {
+            SkillPushRunFailure.None => null,
+            SkillPushRunFailure.UnknownHarness => $"Unknown harness '{result.Detail}'. Known: {catalog.KnownIds}",
+            SkillPushRunFailure.Unsupported => $"Harness '{result.Detail}' does not support skill discovery.",
+            SkillPushRunFailure.SkillNotFound => $"No skill named '{result.Detail}' was found. Run `protostar skills` to see what is on this machine.",
+            SkillPushRunFailure.NotLoggedIn => $"Not logged in to {authority}. Run `protostar auth login` first.",
+            SkillPushRunFailure.SessionExpired => $"Your session for {authority} has expired. Run `protostar auth login` again.",
+            SkillPushRunFailure.RegistryUnreachable => $"Could not reach the registry at {authority}.",
+            SkillPushRunFailure.ListFailed => $"Could not list the skills in {authority} to confirm what is backed up: {result.Detail}",
+            _ => result.Detail,
+        };
     }
 
     /// <summary>The three ways out of "changed here and in the registry", for the skill <paramref name="name"/>.</summary>
