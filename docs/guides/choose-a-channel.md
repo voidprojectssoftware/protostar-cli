@@ -22,7 +22,7 @@ If you do nothing, you are on **stable** — that is what the
 <summary><strong>Linux / macOS</strong></summary>
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/voidprojectssoftware/protostar/main/scripts/install.sh | sh -s -- --channel edge
+curl -fsSL https://raw.githubusercontent.com/voidprojectssoftware/protostar-cli/main/scripts/install.sh | sh -s -- --channel edge
 ```
 
 </details>
@@ -34,7 +34,7 @@ The piped one-liner cannot take parameters, so fetch the script first, then invo
 it with `-Channel`:
 
 ```powershell
-& ([scriptblock]::Create((irm https://raw.githubusercontent.com/voidprojectssoftware/protostar/main/scripts/install.ps1))) -Channel edge
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/voidprojectssoftware/protostar-cli/main/scripts/install.ps1))) -Channel edge
 ```
 
 </details>
@@ -48,7 +48,7 @@ latest tagged release over your edge build:
 <summary><strong>Linux / macOS</strong></summary>
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/voidprojectssoftware/protostar/main/scripts/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/voidprojectssoftware/protostar-cli/main/scripts/install.sh | sh
 ```
 
 </details>
@@ -57,7 +57,7 @@ curl -fsSL https://raw.githubusercontent.com/voidprojectssoftware/protostar/main
 <summary><strong>Windows (PowerShell)</strong></summary>
 
 ```powershell
-irm https://raw.githubusercontent.com/voidprojectssoftware/protostar/main/scripts/install.ps1 | iex
+irm https://raw.githubusercontent.com/voidprojectssoftware/protostar-cli/main/scripts/install.ps1 | iex
 ```
 
 </details>

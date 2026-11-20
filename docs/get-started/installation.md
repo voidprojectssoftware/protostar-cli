@@ -23,7 +23,7 @@ right binary for your platform and puts it on your `PATH`.
 <summary><strong>Windows (PowerShell)</strong></summary>
 
 ```powershell
-irm https://raw.githubusercontent.com/voidprojectssoftware/protostar/main/scripts/install.ps1 | iex
+irm https://raw.githubusercontent.com/voidprojectssoftware/protostar-cli/main/scripts/install.ps1 | iex
 ```
 
 </details>
@@ -32,13 +32,13 @@ irm https://raw.githubusercontent.com/voidprojectssoftware/protostar/main/script
 <summary><strong>Linux / macOS</strong></summary>
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/voidprojectssoftware/protostar/main/scripts/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/voidprojectssoftware/protostar-cli/main/scripts/install.sh | sh
 ```
 
 </details>
 
 The script downloads the latest
-[GitHub release](https://github.com/voidprojectssoftware/protostar/releases) for
+[GitHub release](https://github.com/voidprojectssoftware/protostar-cli/releases) for
 your OS and CPU, then runs `protostar install` — which copies the binary into a
 per-user directory (no admin rights needed) and adds that directory to your
 `PATH`:
@@ -50,10 +50,9 @@ per-user directory (no admin rights needed) and adds that directory to your
 
 Choose a different location with `protostar install --dir <DIR>`.
 
-:::note Releases vs source
-The install scripts and binaries are published to the public
-**`voidprojectssoftware/protostar`** release repo. The CLI **source** (and these
-docs) live in `voidprojectssoftware/protostar-cli` — which is where the
+:::note Releases and source
+The install scripts, the release binaries, the CLI **source** and these docs all
+live in **`voidprojectssoftware/protostar-cli`**, which is also where the
 "Edit this page" link sends you.
 :::
 

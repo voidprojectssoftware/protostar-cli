@@ -24,16 +24,16 @@ with a one-liner:
 **Windows (PowerShell)**
 
 ```powershell
-irm https://raw.githubusercontent.com/voidprojectssoftware/protostar/main/scripts/install.ps1 | iex
+irm https://raw.githubusercontent.com/voidprojectssoftware/protostar-cli/main/scripts/install.ps1 | iex
 ```
 
 **Linux / macOS**
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/voidprojectssoftware/protostar/main/scripts/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/voidprojectssoftware/protostar-cli/main/scripts/install.sh | sh
 ```
 
-These download the right binary from the latest [GitHub release](https://github.com/voidprojectssoftware/protostar/releases)
+These download the right binary from the latest [GitHub release](https://github.com/voidprojectssoftware/protostar-cli/releases)
 and run `protostar install`, which places `protostar` in a per-user directory and adds it to PATH.
 Restart your shell, then:
 
@@ -60,13 +60,13 @@ prerelease rebuilt from the tip of `main` on every code change — handy for try
 **Linux / macOS**
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/voidprojectssoftware/protostar/main/scripts/install.sh | sh -s -- --channel edge
+curl -fsSL https://raw.githubusercontent.com/voidprojectssoftware/protostar-cli/main/scripts/install.sh | sh -s -- --channel edge
 ```
 
 **Windows (PowerShell)** — fetch then invoke with `-Channel` (the piped one-liner can't take params):
 
 ```powershell
-& ([scriptblock]::Create((irm https://raw.githubusercontent.com/voidprojectssoftware/protostar/main/scripts/install.ps1))) -Channel edge
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/voidprojectssoftware/protostar-cli/main/scripts/install.ps1))) -Channel edge
 ```
 
 Edge binaries report a prerelease version like `0.2.0-alpha.0.7`. Re-run the same command to update.

@@ -36,3 +36,22 @@ jobs:
 
       - name: Test
         run: dotnet test -c Release --no-build --verbosity normal
+
+      # Issue #90: the Windows one-liner broke under Windows PowerShell 5.1. Run this branch's
+      # installer the way the documented one-liner does (a script block built from the script's text),
+      # under powershell.exe 5.1 rather than pwsh, for both channels. It downloads the real release
+      # asset and installs into a temp dir without touching PATH or hooks, then runs the installed binary.
+      - name: Installer one-liner (Windows PowerShell 5.1)
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          "PowerShell $($PSVersionTable.PSVersion) ($($PSVersionTable.PSEdition)), PROCESSOR_ARCHITECTURE=$env:PROCESSOR_ARCHITECTURE"
+          if ($PSVersionTable.PSVersion.Major -ne 5) { throw 'Expected Windows PowerShell 5.1.' }
+          $installer = [scriptblock]::Create((Get-Content -Raw scripts/install.ps1))
+          foreach ($channel in 'stable', 'edge') {
+            $dir = Join-Path $env:RUNNER_TEMP "protostar-$channel"
+            & $installer -Channel $channel --dir $dir --no-modify-path --no-hooks
+            & (Join-Path $dir 'protostar.exe') --version
+            if ($LASTEXITCODE -ne 0) { throw "protostar --version failed for $channel." }
+          }
