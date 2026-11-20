@@ -954,6 +954,167 @@ public sealed class SessionSyncServiceTests : IDisposable
 
     // ── fakes ─────────────────────────────────────────────────────────────────────
 
+    // ── retrying failed background backups ────────────────────────────────────────
+
+    private static string Id(int n) => $"0b8f5c21-0000-4000-8000-{n:D12}";
+
+    private Task<SessionSyncResult> HookPush(string sessionPath) =>
+        Sut().SyncAsync(Request(sessionPath: sessionPath), null, CancellationToken.None);
+
+    private FailedBackup? Mark(string key) => _ledger.FailedBackups(new Uri(Registry)).SingleOrDefault(m => m.Key == key);
+
+    [Fact]
+    public async Task A_hook_push_that_cannot_reach_the_registry_marks_its_session_failed_and_status_says_so()
+    {
+        WriteSession("""{"n":1}""");
+        _registry.Offline = true;
+
+        var result = await HookPush(SessionFile);
+
+        Assert.Equal(SessionSyncFailure.RegistryUnreachable, result.Failure);
+        Assert.Equal(SessionFile, Mark(SessionId)!.Path);
+        Assert.NotNull(Assert.Single(Sut().Status(Registry, "claude-code", _root).Transcripts).BackupFailedAt);
+    }
+
+    [Fact]
+    public async Task A_manual_push_that_cannot_reach_the_registry_marks_nothing()
+    {
+        WriteSession("""{"n":1}""");
+        _registry.Offline = true;
+
+        await Sync();
+
+        Assert.Empty(_ledger.FailedBackups(new Uri(Registry)));
+    }
+
+    [Fact]
+    public async Task The_next_hook_push_that_reaches_the_registry_sends_a_failed_session_and_clears_its_mark()
+    {
+        WriteSession("""{"n":1}""", """{"n":2}""");
+        var other = WriteSessionIn("-home-me-src-other", Id(7), DateTime.UtcNow);
+        _registry.Offline = true;
+        await HookPush(SessionFile);
+        _registry.Offline = false;
+
+        var result = await HookPush(other);
+
+        Assert.Equal(Id(7), Assert.Single(result.Transcripts).Transcript.Key);
+        Assert.Equal(TranscriptSyncStatus.Uploaded, Assert.Single(result.Retried!).Status);
+        Assert.Equal(File.ReadAllBytes(SessionFile), _registry.Content(SessionId));
+        Assert.Null(Mark(SessionId));
+        Assert.True(Sut().Status(Registry, "claude-code", _root).FullySynced);
+    }
+
+    [Fact]
+    public async Task A_hook_push_never_touches_sessions_that_were_simply_never_backed_up()
+    {
+        for (var n = 1; n <= 50; n++)
+            WriteSessionIn("-home-me-src-history", Id(n), DateTime.UtcNow.AddDays(-n));
+        var current = WriteSessionIn("-home-me-src-now", Id(100), DateTime.UtcNow);
+
+        var result = await HookPush(current);
+
+        Assert.Equal(Id(100), Assert.Single(result.Transcripts).Transcript.Key);
+        Assert.Null(result.Retried);
+        Assert.Equal([Id(100)], _registry.Registered.Keys);
+    }
+
+    [Fact]
+    public async Task A_hook_push_retries_at_most_the_limit_oldest_failure_first()
+    {
+        var registry = new Uri(Registry);
+        var start = DateTimeOffset.UtcNow.AddHours(-1);
+        for (var n = 1; n <= SessionSyncService.RetryLimit + 2; n++)
+        {
+            var path = WriteSessionIn("-home-me-src-failed", Id(n), DateTime.UtcNow);
+            _ledger.MarkFailed(registry, new FailedBackup("claude-code", Id(n), path, start.AddMinutes(-n)));
+        }
+
+        var current = WriteSessionIn("-home-me-src-now", Id(100), DateTime.UtcNow);
+        var result = await HookPush(current);
+
+        var oldest = Enumerable.Range(1, SessionSyncService.RetryLimit + 2).Reverse().Take(SessionSyncService.RetryLimit).Select(Id);
+        Assert.Equal(oldest, result.Retried!.Select(o => o.Transcript.Key));
+        Assert.Equal(2, _ledger.FailedBackups(registry).Count);
+        Assert.Equal([Id(1), Id(2)], _ledger.FailedBackups(registry).Select(m => m.Key).Order());
+    }
+
+    [Fact]
+    public async Task A_hook_push_that_needs_no_network_retries_nothing_and_stays_offline()
+    {
+        var current = WriteSessionIn("-home-me-src-now", Id(100), DateTime.UtcNow);
+        await HookPush(current);
+        var failed = WriteSessionIn("-home-me-src-failed", Id(1), DateTime.UtcNow);
+        _ledger.MarkFailed(new Uri(Registry), new FailedBackup("claude-code", Id(1), failed, DateTimeOffset.UtcNow.AddMinutes(-5)));
+        _registry.ResetCounters();
+
+        var result = await HookPush(current);
+
+        Assert.Null(result.Retried);
+        Assert.Equal(0, _registry.Calls);
+        Assert.NotNull(Mark(Id(1)));
+    }
+
+    [Fact]
+    public async Task A_retry_never_uploads_a_session_another_process_is_already_uploading()
+    {
+        WriteSession("""{"n":1}""");
+        var other = WriteSessionIn("-home-me-src-other", Id(7), DateTime.UtcNow);
+        _registry.Offline = true;
+        await HookPush(SessionFile);
+        _registry.Offline = false;
+        _ledger.Held.Add(SessionId);
+
+        var result = await HookPush(other);
+
+        Assert.Equal(TranscriptSyncStatus.Skipped, Assert.Single(result.Retried!).Status);
+        Assert.DoesNotContain(SessionId, _registry.Registered.Keys);
+        Assert.NotNull(Mark(SessionId));
+    }
+
+    [Fact]
+    public async Task A_retry_that_fails_again_is_marked_anew_so_it_goes_behind_the_others()
+    {
+        WriteSession("""{"n":1}""");
+        var other = WriteSessionIn("-home-me-src-other", Id(7), DateTime.UtcNow);
+        var before = DateTimeOffset.UtcNow.AddHours(-1);
+        _ledger.MarkFailed(new Uri(Registry), new FailedBackup("claude-code", SessionId, SessionFile, before));
+        await HookPush(other);
+        AppendRaw("{\"n\":2}\n");
+        _ledger.MarkFailed(new Uri(Registry), new FailedBackup("claude-code", SessionId, SessionFile, before));
+        _registry.AppendAnswer = new AppendResult(AppendStatus.Failed, null, "The registry answered 503.");
+        File.AppendAllText(other, "{\"n\":2}\n");
+
+        var result = await HookPush(other);
+
+        Assert.Contains(result.Retried!, o => o.Transcript.Key == SessionId && o.Status == TranscriptSyncStatus.Failed);
+        Assert.True(Mark(SessionId)!.FailedAt > before);
+    }
+
+    [Fact]
+    public async Task A_manual_push_clears_the_mark_of_a_session_it_backs_up()
+    {
+        WriteSession("""{"n":1}""");
+        _registry.Offline = true;
+        await HookPush(SessionFile);
+        _registry.Offline = false;
+
+        await Sync();
+
+        Assert.Null(Mark(SessionId));
+    }
+
+    [Fact]
+    public async Task A_failed_session_whose_file_is_gone_loses_its_mark()
+    {
+        var other = WriteSessionIn("-home-me-src-other", Id(7), DateTime.UtcNow);
+        _ledger.MarkFailed(new Uri(Registry), new FailedBackup("claude-code", SessionId, SessionFile, DateTimeOffset.UtcNow.AddMinutes(-5)));
+
+        await HookPush(other);
+
+        Assert.Null(Mark(SessionId));
+    }
+
     internal sealed class FakeSessions : ISessionSyncService
     {
         public List<SessionSyncRequest> Requests { get; } = [];
@@ -1200,12 +1361,29 @@ public sealed class SessionSyncServiceTests : IDisposable
         /// <summary>Runs as the lock is taken, to stand in for another process that finished just before.</summary>
         public Action? OnLock { get; set; }
 
+        /// <summary>Transcript keys another process is uploading: their lock cannot be taken.</summary>
+        public HashSet<string> Held { get; } = [];
+
         public IDisposable? TryLock(Uri registry, string harness, string key)
         {
+            if (Held.Contains(key))
+                return null;
             var onLock = OnLock;
             OnLock = null;
             onLock?.Invoke();
             return new MemoryStream();
+        }
+
+        private readonly Dictionary<string, FailedBackup> _failed = [];
+
+        public void MarkFailed(Uri registry, FailedBackup backup) => _failed[backup.Harness + "/" + backup.Key] = backup;
+
+        public IReadOnlyList<FailedBackup> FailedBackups(Uri registry) => [.. _failed.Values.OrderBy(m => m.FailedAt)];
+
+        public void ClearFailed(Uri registry, string harness, string key, DateTimeOffset before)
+        {
+            if (_failed.TryGetValue(harness + "/" + key, out var mark) && mark.FailedAt < before)
+                _failed.Remove(harness + "/" + key);
         }
     }
 

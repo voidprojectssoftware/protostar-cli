@@ -41,8 +41,12 @@ themselves: they start a background `protostar sessions push` for the session an
 return at once.
 
 If you are offline, nothing is lost: what has not reached the registry stays
-pending on your machine, and the next sync (the next reply, or
-`protostar sessions push`) sends it. Problems you may need to act on, such as not
+pending on your machine, and the session's next reply, or
+`protostar sessions push`, sends it. A session that ended while the registry was
+unreachable fires no more hooks, so its failed backup is remembered, and the next
+hook backup of any session that reaches the registry retries it (up to three such
+sessions each time, oldest first). `protostar sessions status` shows these as
+"failed to back up, will retry". Problems you may need to act on, such as not
 being signed in, are written to `~/.protostar/capture.log`.
 
 ## Install the hooks

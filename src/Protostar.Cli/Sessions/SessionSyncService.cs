@@ -111,8 +111,13 @@ internal sealed record TranscriptSyncOutcome(
 
 /// <summary>The result of a sync run.</summary>
 /// <param name="Stopped">Whether the run was cancelled (Ctrl+C) before it finished; what it had not sent goes next time.</param>
+/// <param name="Retried">
+/// What a hook's push did for other sessions whose background backup had failed (see <see cref="SessionSyncService.RetryLimit"/>);
+/// <c>null</c> when it retried none. Not part of <see cref="Transcripts"/> or <see cref="Complete"/>, which describe the session asked for.
+/// </param>
 internal sealed record SessionSyncResult(
-    SessionSyncFailure Failure, string? Detail, Uri? Registry, IReadOnlyList<TranscriptSyncOutcome> Transcripts, bool Stopped = false)
+    SessionSyncFailure Failure, string? Detail, Uri? Registry, IReadOnlyList<TranscriptSyncOutcome> Transcripts, bool Stopped = false,
+    IReadOnlyList<TranscriptSyncOutcome>? Retried = null)
 {
     /// <summary>True when the run went ahead and nothing failed or was left over.</summary>
     public bool Complete => Failure == SessionSyncFailure.None &&
@@ -144,9 +149,10 @@ internal sealed record SessionSyncProgress(int TranscriptsDone, int TranscriptsT
 /// <param name="LastSyncedAt">When the registry last confirmed it.</param>
 /// <param name="LastModifiedAt">When the file last changed.</param>
 /// <param name="Verified">What the registry holds compared with the ledger, from <c>sessions status --verify</c>; <c>null</c> otherwise.</param>
+/// <param name="BackupFailedAt">When a hook's background backup of its session last failed, so a later hook retries it; <c>null</c> when not marked.</param>
 internal sealed record TranscriptStatus(
     LocalTranscript Transcript, long SizeOnDisk, long BytesBackedUp, long BytesPending, bool Rewritten,
-    DateTimeOffset? LastSyncedAt, DateTimeOffset LastModifiedAt, VerifiedBackup? Verified = null);
+    DateTimeOffset? LastSyncedAt, DateTimeOffset LastModifiedAt, VerifiedBackup? Verified = null, DateTimeOffset? BackupFailedAt = null);
 
 /// <summary>Every transcript's backup state on this machine.</summary>
 internal sealed record SessionStatusResult(SessionSyncFailure Failure, string? Detail, Uri? Registry, IReadOnlyList<TranscriptStatus> Transcripts)
@@ -216,6 +222,14 @@ internal sealed record VerifiedBackup(BackupCheck Check, int? Revision, long? Le
 /// registration recovers a forgotten machine first, so a registry reset that lost both comes back in one push. A
 /// subagent's registration carries its parent key as always, so its link to the session is restored with it.
 /// </para>
+/// <para>
+/// A hook's push (<see cref="SessionSyncRequest.SessionPath"/>) that fails marks its session in the ledger
+/// (<see cref="ISessionLedger.MarkFailed"/>), because a session that has ended fires no more hooks to send it. A later
+/// hook's push that reached the registry then retries up to <see cref="RetryLimit"/> marked sessions, oldest failure
+/// first. Only marked sessions are retried, never the transcripts that were simply never backed up, so a hook still
+/// never takes on the backlog (#62). Any run that finds every transcript of a marked session backed up clears its
+/// mark, a manual <c>sessions push</c> included.
+/// </para>
 /// </remarks>
 internal sealed partial class SessionSyncService : ISessionSyncService
 {
@@ -224,6 +238,15 @@ internal sealed partial class SessionSyncService : ISessionSyncService
 
     /// <summary>The longest line accepted; a longer line could never fit in a chunk.</summary>
     internal const int MaxLineBytes = 16 * 1024 * 1024;
+
+    /// <summary>The most failed sessions one hook's push retries after its own.</summary>
+    /// <remarks>
+    /// Failures come in bursts: an outage or a flight ends a few sessions, rarely dozens. Stop fires after every reply
+    /// and pushes at most twice a minute per session, so three a push clears a burst within minutes of ordinary use,
+    /// while one push never does more than four sessions' work, its own included. A session that keeps failing is
+    /// marked again with the new time, which moves it behind the others, so it cannot hold a slot for ever.
+    /// </remarks>
+    internal const int RetryLimit = 3;
 
     private readonly IHarnessCatalog _catalog;
     private readonly IAccessTokenProvider _tokens;
@@ -256,6 +279,7 @@ internal sealed partial class SessionSyncService : ISessionSyncService
         if (!TryResolve(request.Registry, request.HarnessId, out var registry, out var harnesses, out var failure, out var detail))
             return SessionSyncResult.Fail(failure, detail, registry);
 
+        var startedAt = _time.GetUtcNow();
         var located = Locate(harnesses, request.HarnessHome, request.SessionPath)
             .Select(transcript => (Transcript: transcript, Plan: Plan(registry, transcript)))
             .ToList();
@@ -343,7 +367,10 @@ internal sealed partial class SessionSyncService : ISessionSyncService
                     }
 
                     if (connected.Failure != SessionSyncFailure.None)
+                    {
+                        MarkIfHook(registry, request, located.Select(p => p.Transcript));
                         return SessionSyncResult.Fail(connected.Failure, connected.Detail, registry);
+                    }
                     session = connected.Session!;
                 }
 
@@ -365,7 +392,94 @@ internal sealed partial class SessionSyncService : ISessionSyncService
             progress?.Report(new SessionSyncProgress(done, work.Count, bytesDone, bytesTotal, null));
         }
 
-        return new SessionSyncResult(SessionSyncFailure.None, null, registry, outcomes, stopped);
+        if (outcomes.Any(o => o.Status == TranscriptSyncStatus.Failed))
+            MarkIfHook(registry, request, located.Select(p => p.Transcript));
+        ClearBackedUp(registry, outcomes, startedAt);
+
+        // Only a hook's push retries, and only once it has reached the registry: an offline hook adds no network call.
+        IReadOnlyList<TranscriptSyncOutcome>? retried = null;
+        if (request.SessionPath is not null && session is not null && !stopped)
+            retried = await RetryFailedAsync(registry, session, located.Select(p => p.Transcript), startedAt, cancellationToken);
+
+        return new SessionSyncResult(SessionSyncFailure.None, null, registry, outcomes, stopped, retried);
+    }
+
+    // ── retrying failed background backups ────────────────────────────────────────
+
+    // Marks the session among a hook push's transcripts as failed; a manual push marks nothing, since its user sees the failure.
+    private void MarkIfHook(Uri registry, SessionSyncRequest request, IEnumerable<LocalTranscript> transcripts)
+    {
+        if (request.SessionPath is null || transcripts.FirstOrDefault(t => t.Kind == TranscriptKind.Session) is not { } session)
+            return;
+        _ledger.MarkFailed(registry, new FailedBackup(session.Harness, session.Key, session.Path, _time.GetUtcNow()));
+    }
+
+    // Clears the mark of every marked session whose transcripts in this run all ended backed up.
+    private void ClearBackedUp(Uri registry, IReadOnlyList<TranscriptSyncOutcome> outcomes, DateTimeOffset startedAt)
+    {
+        foreach (var mark in _ledger.FailedBackups(registry))
+        {
+            var its = outcomes.Where(o => o.Transcript.Harness == mark.Harness && SessionKey(o.Transcript) == mark.Key).ToList();
+            if (its.Count > 0 && its.All(o => o.Status is TranscriptSyncStatus.UpToDate or TranscriptSyncStatus.Uploaded))
+                _ledger.ClearFailed(registry, mark.Harness, mark.Key, startedAt);
+        }
+    }
+
+    private static string SessionKey(LocalTranscript transcript) => transcript.ParentKey ?? transcript.Key;
+
+    // When each transcript's session was marked failed, for status; read once, since status walks every transcript.
+    private Func<LocalTranscript, DateTimeOffset?> FailedSince(Uri registry)
+    {
+        var marks = _ledger.FailedBackups(registry).ToDictionary(m => (m.Harness, m.Key), m => m.FailedAt);
+        return transcript => marks.TryGetValue((transcript.Harness, SessionKey(transcript)), out var at) ? at : null;
+    }
+
+    // Sends up to RetryLimit marked sessions other than the hook's own, oldest failure first, each under its
+    // transcripts' locks, so a retry racing a fresh push of the same session never uploads it twice. A session sent in
+    // full loses its mark; one that fails again is marked with the new time; one another process holds keeps its mark.
+    private async Task<IReadOnlyList<TranscriptSyncOutcome>?> RetryFailedAsync(
+        Uri registry, Session session, IEnumerable<LocalTranscript> own, DateTimeOffset startedAt, CancellationToken cancellationToken)
+    {
+        var ownSessions = own.Select(t => (t.Harness, SessionKey(t))).ToHashSet();
+        var marks = _ledger.FailedBackups(registry)
+            .Where(m => !ownSessions.Contains((m.Harness, m.Key)))
+            .Take(RetryLimit)
+            .ToList();
+        if (marks.Count == 0)
+            return null;
+
+        // Neither budget nor throttle: the cap bounds the work, and a marked session is overdue whenever it last tried.
+        var unbounded = new SessionSyncRequest(null, null, null, null, null, null);
+        var clock = Stopwatch.StartNew();
+        var outcomes = new List<TranscriptSyncOutcome>();
+        foreach (var mark in marks)
+        {
+            var transcripts = _catalog.ById(mark.Harness) is ISessionCapability sessions ? sessions.LocateSession(mark.Path) : [];
+            if (transcripts.Count == 0)
+            {
+                // The file is gone (deleted, or its harness uninstalled): there is nothing left to back up.
+                _ledger.ClearFailed(registry, mark.Harness, mark.Key, startedAt);
+                continue;
+            }
+
+            var its = new List<TranscriptSyncOutcome>(transcripts.Count);
+            foreach (var transcript in transcripts)
+            {
+                if (cancellationToken.IsCancellationRequested)
+                    return outcomes;
+                its.Add(Plan(registry, transcript).UpToDate
+                    ? UpToDate(transcript)
+                    : await UploadUnderLockAsync(registry, session, transcript, unbounded, null, clock, _ => { }, cancellationToken));
+            }
+
+            if (its.Any(o => o.Status == TranscriptSyncStatus.Failed))
+                _ledger.MarkFailed(registry, mark with { FailedAt = _time.GetUtcNow() });
+            else if (its.All(o => o.Status is TranscriptSyncStatus.UpToDate or TranscriptSyncStatus.Uploaded))
+                _ledger.ClearFailed(registry, mark.Harness, mark.Key, startedAt);
+            outcomes.AddRange(its);
+        }
+
+        return outcomes;
     }
 
     // Takes the transcript's lock and uploads from a fresh plan, or says why it did not.
@@ -396,13 +510,15 @@ internal sealed partial class SessionSyncService : ISessionSyncService
         if (!TryResolve(registryOption, harnessId, out var registry, out var harnesses, out var failure, out var detail))
             return new SessionStatusResult(failure, detail, registry, []);
 
+        var failed = FailedSince(registry);
         var statuses = new List<TranscriptStatus>();
         foreach (var transcript in Locate(harnesses, harnessHome, null))
         {
             var plan = Plan(registry, transcript);
             var backedUp = plan.Rewritten ? 0 : plan.Entry?.Length ?? 0;
             statuses.Add(new TranscriptStatus(
-                transcript, plan.Size, backedUp, plan.Pending, plan.Rewritten, plan.Entry?.LastSyncedAt, plan.Modified));
+                transcript, plan.Size, backedUp, plan.Pending, plan.Rewritten, plan.Entry?.LastSyncedAt, plan.Modified,
+                BackupFailedAt: failed(transcript)));
         }
 
         return new SessionStatusResult(SessionSyncFailure.None, null, registry, statuses);

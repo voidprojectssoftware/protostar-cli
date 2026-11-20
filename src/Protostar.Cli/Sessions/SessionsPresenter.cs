@@ -172,6 +172,7 @@ internal static class SessionsPresenter
             {
                 var state = t.Verified?.Check == BackupCheck.Diverged ? "[yellow]registry differs, push leaves it alone[/]"
                     : t.BytesPending == 0 ? (t.Verified?.Check == BackupCheck.Confirmed ? "[green]backed up, verified[/]" : "[green]backed up[/]")
+                    : t.BackupFailedAt is not null ? "[yellow]failed to back up, will retry[/]"
                     : t.Rewritten ? "[yellow]rewritten, re-upload[/]"
                     : t.Verified?.Check == BackupCheck.Missing ? "[red]missing from the registry[/]"
                     : t.Verified?.Check == BackupCheck.Short ? $"[yellow]registry holds only {Bytes(t.BytesBackedUp)}[/]"
@@ -357,7 +358,7 @@ internal static class SessionsPresenter
         return dot < 0 ? key[..Math.Min(8, key.Length)] : $"{key[..Math.Min(8, dot)]}.{key[(dot + 1)..]}";
     }
 
-    private static string Count(int n, string noun) => n == 1 ? $"1 {noun}" : $"{n} {noun}s";
+    internal static string Count(int n, string noun) => n == 1 ? $"1 {noun}" : $"{n} {noun}s";
 
     private static string Truncate(string text, int max) => text.Length <= max ? text : text[..(max - 3)] + "...";
 

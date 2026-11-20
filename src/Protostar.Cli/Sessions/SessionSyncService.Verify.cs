@@ -45,13 +45,15 @@ internal sealed partial class SessionSyncService
         if (verifying.Failure != SessionSyncFailure.None)
             return new SessionStatusResult(verifying.Failure, verifying.Detail, registry, []);
 
+        var failed = FailedSince(registry);
         var statuses = located.Select(p =>
         {
             var verified = verifying.Checks!.GetValueOrDefault((p.Transcript.Harness, p.Transcript.Key));
             var plan = AfterCheck(p.Plan, verified);
             var backedUp = plan.Rewritten ? 0 : plan.Entry?.Length ?? 0;
             return new TranscriptStatus(
-                p.Transcript, plan.Size, backedUp, plan.Pending, plan.Rewritten, plan.Entry?.LastSyncedAt, plan.Modified, verified);
+                p.Transcript, plan.Size, backedUp, plan.Pending, plan.Rewritten, plan.Entry?.LastSyncedAt, plan.Modified, verified,
+                failed(p.Transcript));
         }).ToList();
 
         return new SessionStatusResult(SessionSyncFailure.None, null, registry, statuses);
