@@ -13,7 +13,7 @@ internal sealed partial class RegistryApi : IMemoryApi
     {
         using var request = Request(HttpMethod.Post, registry, "/v1/memory", accessToken);
         request.Content = JsonContent.Create(
-            new { machineId, project = facts, files = files.Select(f => new { path = f.Path, content = f.Content }), deleted },
+            new { machineId, project = facts, files = files.Select(f => new { path = f.Path, content = f.Content, baseVersion = f.BaseVersion }), deleted },
             options: TranscriptJson.Options);
         var result = await SendAsync(
             request,

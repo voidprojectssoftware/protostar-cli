@@ -159,8 +159,8 @@ internal sealed class SetupService : ISetupService
             : step;
     }
 
-    // Pull only: local memory reaches the registry through `memory push` and the hooks. A file kept because it differs
-    // from the registry is reported in the step's lines, not as a decision, since no command settles it yet (6.3).
+    // Pull only: local memory reaches the registry through `memory push` and the hooks. A conflict is reported in the
+    // step's lines, not as a decision: it is settled by merging the copy by hand, which no prompt here can do.
     private async Task<SetupStepResult> PullMemoryAsync(SetupRequest request, CancellationToken cancellationToken)
     {
         var pull = await _memory.PullAsync(new MemoryPullRequest(request.Registry, request.HarnessHome, []), cancellationToken);
@@ -168,7 +168,7 @@ internal sealed class SetupService : ISetupService
         {
             { NoHarness: true } => SetupOutcome.Skipped,
             { Complete: false } => SetupOutcome.Failed,
-            { Written: > 0 } => SetupOutcome.Done,
+            { Written: > 0 } or { Updated: > 0 } => SetupOutcome.Done,
             _ => SetupOutcome.AlreadyDone,
         };
         return new SetupStepResult(SetupStep.Memory, outcome, outcome == SetupOutcome.Skipped ? SetupSkip.NoHarness : SetupSkip.None) { MemoryPull = pull };

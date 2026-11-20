@@ -343,30 +343,330 @@ public sealed class MemorySyncTests : IDisposable
     }
 
     [Fact]
-    public async Task A_local_file_that_differs_from_the_registry_is_left_as_it_is_and_reported()
+    public async Task A_file_unchanged_here_since_the_last_sync_is_fast_forwarded_to_another_machines_newer_version()
     {
         var here = Checkout("alpha");
-        var folder = Project(here, here);
-        Memory(folder, "MEMORY.md", "mine, newer");
-        _registry.RemoteProject("alpha", here, ("MEMORY.md", "theirs"), ("port.md", "1234"));
+        Project(here, here);
+        var project = _registry.RemoteProject("alpha", here, ("port.md", "port 1234"));
+        await Pull();
+        _registry.Change(project, "port.md", "port 5678", "laptop");
+
+        var result = await Pull();
+        await Push();
+
+        Assert.Equal("port 5678", File.ReadAllText(MemoryFile(here, "port.md")));
+        Assert.Equal(1, Assert.Single(result.Folders).Updated);
+        Assert.Empty(Assert.Single(result.Folders).Notes);
+        Assert.Empty(_registry.Pushes);
+    }
+
+    [Fact]
+    public async Task A_version_made_in_parallel_without_this_machines_base_conflicts_even_with_the_file_unchanged_here()
+    {
+        var here = Checkout("alpha");
+        Project(here, here);
+        var project = _registry.RemoteProject("alpha", here, ("port.md", "mine, pushed"));
+        await Pull();
+        _registry.Change(project, "port.md", "the laptop's, never having seen mine", "laptop", parallel: true);
 
         var result = await Pull();
 
-        Assert.Equal("mine, newer", File.ReadAllText(MemoryFile(here, "MEMORY.md")));
-        Assert.Equal("1234", File.ReadAllText(MemoryFile(here, "port.md")));
+        Assert.Equal("mine, pushed", File.ReadAllText(MemoryFile(here, "port.md")));
+        Assert.Equal("the laptop's, never having seen mine", File.ReadAllText(MemoryFile(here, "port.from-laptop.md")));
+        Assert.Equal(MemoryPullNoteKind.Conflicted, Assert.Single(Assert.Single(result.Folders).Notes).Kind);
+    }
+
+    [Fact]
+    public async Task An_index_made_in_parallel_is_merged_not_fast_forwarded_so_no_line_is_lost()
+    {
+        var here = Checkout("alpha");
+        Project(here, here);
+        var project = _registry.RemoteProject("alpha", here, ("MEMORY.md", "- [Deploy](deploy.md): deploy\n"));
+        await Pull();
+        _registry.Change(project, "MEMORY.md", "- [Tests](tests.md): tests\n", "desktop", parallel: true);
+
+        await Pull();
+
+        Assert.Equal("- [Deploy](deploy.md): deploy\n- [Tests](tests.md): tests\n", File.ReadAllText(MemoryFile(here, "MEMORY.md")));
+    }
+
+    [Fact]
+    public async Task An_older_version_another_copy_still_holds_is_never_taken()
+    {
+        var here = Checkout("alpha");
+        Project(here, here);
+        var project = _registry.RemoteProject("alpha", here, ("port.md", "v1"));
+        _registry.Change(project, "port.md", "v2", "laptop");
+        await Pull();
+        _registry.Revert(project, "port.md", "v1", 1);
+
+        var result = await Pull();
+
+        Assert.Equal("v2", File.ReadAllText(MemoryFile(here, "port.md")));
+        Assert.Empty(Assert.Single(result.Folders).Notes);
+    }
+
+    [Fact]
+    public async Task A_push_sends_the_version_each_file_was_edited_from()
+    {
+        var here = Checkout("alpha");
+        var folder = Project(here, here);
+        _registry.RemoteProject("alpha", here, ("port.md", "v1"));
+        await Pull();
+        Memory(folder, "port.md", "v2");
+        Memory(folder, "new.md", "new");
+
+        await Push();
+
+        Assert.Equal(1, _registry.SentBase["port.md"]);
+        Assert.Null(_registry.SentBase["new.md"]);
+    }
+
+    [Fact]
+    public async Task A_file_changed_only_here_is_left_for_the_next_push_and_not_reported()
+    {
+        var here = Checkout("alpha");
+        var folder = Project(here, here);
+        _registry.RemoteProject("alpha", here, ("port.md", "port 1234"));
+        await Pull();
+        Memory(folder, "port.md", "port 9999, mine");
+
+        var result = await Pull();
+        await Push();
+
+        Assert.Equal("port 9999, mine", File.ReadAllText(MemoryFile(here, "port.md")));
+        Assert.Empty(Assert.Single(result.Folders).Notes);
+        Assert.Equal(["port.md"], Assert.Single(_registry.Pushes).Files);
+    }
+
+    [Fact]
+    public async Task A_file_changed_here_and_on_another_machine_keeps_both_with_the_other_beside_it_and_a_pointer_in_the_index()
+    {
+        var here = Checkout("alpha");
+        var folder = Project(here, here);
+        var project = _registry.RemoteProject("alpha", here, ("MEMORY.md", "- [Port](notes/port.md): the port\n"), ("notes/port.md", "port 1234"));
+        await Pull();
+        Memory(folder, "notes/port.md", "port 1234, then mine");
+        _registry.Change(project, "notes/port.md", "port 1234, then the laptop's", "Blake's Laptop");
+
+        var result = await Pull();
+
+        Assert.Equal("port 1234, then mine", File.ReadAllText(MemoryFile(here, "notes/port.md")));
+        Assert.Equal("port 1234, then the laptop's", File.ReadAllText(MemoryFile(here, "notes/port.from-Blake-s-Laptop.md")));
         var note = Assert.Single(Assert.Single(result.Folders).Notes);
-        Assert.Equal(("MEMORY.md", MemoryPullNoteKind.DiffersFromRegistry), (note.Path, note.Kind));
+        Assert.Equal(("notes/port.md", MemoryPullNoteKind.Conflicted, "notes/port.from-Blake-s-Laptop.md"), (note.Path, note.Kind, note.Detail));
+        Assert.Equal(["Blake's Laptop"], note.Machines);
+        var index = File.ReadAllLines(MemoryFile(here, "MEMORY.md"));
+        Assert.StartsWith("- [Conflict: notes/port.md as Blake-s-Laptop changed it](notes/port.from-Blake-s-Laptop.md)", index[0]);
+        Assert.Equal("- [Port](notes/port.md): the port", index[1]);
+    }
+
+    [Fact]
+    public async Task Pulling_a_conflict_again_makes_no_second_copy_and_reports_nothing_new()
+    {
+        var here = Checkout("alpha");
+        var folder = Project(here, here);
+        var project = _registry.RemoteProject("alpha", here, ("port.md", "v1"));
+        await Pull();
+        Memory(folder, "port.md", "mine");
+        _registry.Change(project, "port.md", "theirs", "laptop");
+        await Pull();
+        var index = File.ReadAllText(MemoryFile(here, "MEMORY.md"));
+
+        var again = await Pull();
+
+        Assert.Empty(Assert.Single(again.Folders).Notes);
+        Assert.Equal(["MEMORY.md", "port.from-laptop.md", "port.md"], Directory.GetFiles(Path.Combine(folder, "memory")).Select(Path.GetFileName).Order());
+        Assert.Equal(index, File.ReadAllText(MemoryFile(here, "MEMORY.md")));
+    }
+
+    [Fact]
+    public async Task A_conflict_copy_never_overwrites_a_different_file_of_that_name()
+    {
+        var here = Checkout("alpha");
+        var folder = Project(here, here);
+        var project = _registry.RemoteProject("alpha", here, ("port.md", "v1"));
+        await Pull();
+        Memory(folder, "port.md", "mine");
+        Memory(folder, "port.from-laptop.md", "an older conflict");
+        _registry.Change(project, "port.md", "theirs", "laptop");
+
+        var result = await Pull();
+
+        Assert.Equal("an older conflict", File.ReadAllText(MemoryFile(here, "port.from-laptop.md")));
+        Assert.Equal("theirs", File.ReadAllText(MemoryFile(here, "port.from-laptop-2.md")));
+        Assert.Equal("port.from-laptop-2.md", Assert.Single(Assert.Single(result.Folders).Notes).Detail);
+    }
+
+    [Fact]
+    public async Task The_next_push_sends_the_kept_file_but_never_the_conflict_copy_or_its_pointer()
+    {
+        var here = Checkout("alpha");
+        var folder = Project(here, here);
+        var project = _registry.RemoteProject("alpha", here, ("MEMORY.md", "- [Port](port.md): the port\n"), ("port.md", "v1"));
+        await Pull();
+        Memory(folder, "port.md", "mine");
+        _registry.Change(project, "port.md", "theirs", "laptop");
+        await Pull();
+        File.AppendAllText(MemoryFile(here, "MEMORY.md"), "- [Build](build.md): how to build\n");
+
+        await Push();
+        var status = Sut().Status(Registry, _root);
+
+        Assert.Equal(["MEMORY.md", "port.md"], Assert.Single(_registry.Pushes).Files.Order());
+        Assert.Equal("- [Port](port.md): the port\n- [Build](build.md): how to build\n", _registry.Sent["MEMORY.md"]);
+        Assert.Equal(["port.from-laptop.md"], Assert.Single(status.Folders).Conflicts);
+        Assert.Equal(0, Assert.Single(status.Folders).Pending);
+        Assert.False(status.FullySynced);
+    }
+
+    [Fact]
+    public async Task A_conflict_copy_the_user_deleted_loses_its_pointer_and_status_is_clear_again()
+    {
+        var here = Checkout("alpha");
+        var folder = Project(here, here);
+        var project = _registry.RemoteProject("alpha", here, ("MEMORY.md", "- [Port](port.md): the port\n"), ("port.md", "v1"));
+        await Pull();
+        Memory(folder, "port.md", "mine");
+        _registry.Change(project, "port.md", "theirs", "laptop");
+        await Pull();
+        await Push();
+
+        File.Delete(MemoryFile(here, "port.from-laptop.md"));
+        await Pull();
+
+        Assert.Equal("- [Port](port.md): the port\n", File.ReadAllText(MemoryFile(here, "MEMORY.md")));
+        Assert.True(Sut().Status(Registry, _root).FullySynced);
+    }
+
+    [Fact]
+    public async Task The_index_changed_on_both_sides_is_merged_line_by_line_keeping_local_order_and_every_line()
+    {
+        var here = Checkout("alpha");
+        var folder = Project(here, here);
+        var project = _registry.RemoteProject("alpha", here, ("MEMORY.md", "- [A](a.md): a\n- [B](b.md): b\n"));
+        await Pull();
+        Memory(folder, "MEMORY.md", "- [B](b.md): b\n- [A](a.md): a\n- [Mine](mine.md): mine\n");
+        _registry.Change(project, "MEMORY.md", "- [A](a.md): a\n- [Theirs](theirs.md): theirs\n", "laptop");
+
+        var result = await Pull();
+        await Push();
+
+        Assert.Equal(
+            "- [B](b.md): b\n- [A](a.md): a\n- [Mine](mine.md): mine\n- [Theirs](theirs.md): theirs\n",
+            File.ReadAllText(MemoryFile(here, "MEMORY.md")));
+        var note = Assert.Single(Assert.Single(result.Folders).Notes);
+        Assert.Equal((MemoryPullNoteKind.Merged, "1"), (note.Kind, note.Detail));
+        Assert.Equal(["MEMORY.md"], Assert.Single(_registry.Pushes).Files);
+    }
+
+    [Fact]
+    public async Task An_index_that_already_has_every_remote_line_is_merged_once_silently_and_not_again()
+    {
+        var here = Checkout("alpha");
+        var folder = Project(here, here);
+        Memory(folder, "MEMORY.md", "- [A](a.md): a\n- [B](b.md): b\n");
+        _registry.RemoteProject("alpha", here, ("MEMORY.md", "- [B](b.md): b\n"));
+
+        var first = await Pull();
+        var second = await Pull();
+
+        Assert.Empty(Assert.Single(first.Folders).Notes);
+        Assert.Empty(Assert.Single(second.Folders).Notes);
+        Assert.Equal("- [A](a.md): a\n- [B](b.md): b\n", File.ReadAllText(MemoryFile(here, "MEMORY.md")));
+    }
+
+    [Fact]
+    public async Task A_merged_index_longer_than_claude_code_loads_is_reported()
+    {
+        var here = Checkout("alpha");
+        var folder = Project(here, here);
+        Memory(folder, "MEMORY.md", string.Concat(Enumerable.Range(0, 150).Select(i => $"- [Mine {i}](mine{i}.md): mine\n")));
+        _registry.RemoteProject("alpha", here, ("MEMORY.md", string.Concat(Enumerable.Range(0, 100).Select(i => $"- [Theirs {i}](theirs{i}.md): theirs\n"))));
+
+        var result = await Pull();
+
+        Assert.Equal(250, File.ReadAllLines(MemoryFile(here, "MEMORY.md")).Length);
+        var note = Assert.Single(Assert.Single(result.Folders).Notes, n => n.Kind == MemoryPullNoteKind.IndexTooLong);
+        Assert.Equal("250", note.Detail);
+    }
+
+    [Fact]
+    public async Task An_index_here_that_was_never_synced_is_merged_with_the_registrys_not_replaced()
+    {
+        var here = Checkout("alpha");
+        var folder = Project(here, here);
+        Memory(folder, "MEMORY.md", "- [Mine](mine.md): mine\n");
+        _registry.RemoteProject("alpha", here, ("MEMORY.md", "- [Theirs](theirs.md): theirs\n"), ("theirs.md", "1234"));
+
+        var result = await Pull();
+
+        Assert.Equal("- [Mine](mine.md): mine\n- [Theirs](theirs.md): theirs\n", File.ReadAllText(MemoryFile(here, "MEMORY.md")));
+        Assert.Equal("1234", File.ReadAllText(MemoryFile(here, "theirs.md")));
+        Assert.Equal(MemoryPullNoteKind.Merged, Assert.Single(Assert.Single(result.Folders).Notes).Kind);
         Assert.True(result.Complete);
     }
 
     [Fact]
-    public async Task A_differing_local_file_is_still_backed_up_by_the_next_push_since_the_registry_never_confirmed_it()
+    public async Task A_file_deleted_here_and_changed_on_another_machine_since_comes_back_and_says_so()
     {
         var here = Checkout("alpha");
         var folder = Project(here, here);
-        Memory(folder, "MEMORY.md", "mine");
-        _registry.RemoteProject("alpha", here, ("MEMORY.md", "theirs"));
+        var project = _registry.RemoteProject("alpha", here, ("port.md", "v1"));
         await Pull();
+        File.Delete(MemoryFile(here, "port.md"));
+        await Push();
+        _registry.Change(project, "port.md", "v2 from the laptop", "laptop");
+
+        var result = await Pull();
+        _registry.Pushes.Clear();
+        await Push();
+
+        Assert.Equal("v2 from the laptop", File.ReadAllText(MemoryFile(here, "port.md")));
+        var note = Assert.Single(Assert.Single(result.Folders).Notes);
+        Assert.Equal((MemoryPullNoteKind.Restored, "laptop"), (note.Kind, Assert.Single(note.Machines)));
+        // The registry recorded it deleted on this machine; the push tells it the file is here again.
+        Assert.Equal(["port.md"], Assert.Single(_registry.Pushes).Files);
+    }
+
+    [Fact]
+    public async Task A_pulled_file_deleted_here_stays_deleted_after_a_push_the_registry_answers_unknown()
+    {
+        var here = Checkout("alpha");
+        Project(here, here);
+        _registry.RemoteProject("alpha", here, ("port.md", "v1"));
+        await Pull();
+        File.Delete(MemoryFile(here, "port.md"));
+        var push = await Push();
+
+        var result = await Pull();
+
+        Assert.Equal(1, Assert.Single(push.Folders).Deleted);
+        Assert.False(File.Exists(MemoryFile(here, "port.md")));
+        Assert.Equal(MemoryPullNoteKind.DeletedHere, Assert.Single(Assert.Single(result.Folders).Notes).Kind);
+    }
+
+    [Fact]
+    public async Task This_checkouts_own_deletion_is_not_reported_as_a_deletion_elsewhere()
+    {
+        var here = Checkout("alpha");
+        Project(here, here);
+        var project = _registry.RemoteProject("alpha", here, ("port.md", "v1"));
+        _registry.MarkDeleted(project, "port.md", "test", everywhere: false, machineId: FakeMachine.Id, folder: here);
+        Memory(Folder(here), "port.md", "v1");
+
+        var result = await Pull();
+
+        Assert.Empty(Assert.Single(result.Folders).Notes);
+    }
+
+    [Fact]
+    public async Task A_conflict_copy_is_never_sent_by_a_push()
+    {
+        var here = Checkout("alpha");
+        var folder = Project(here, here);
+        Memory(folder, "MEMORY.md", "index");
+        Memory(folder, "port.from-laptop.md", "theirs");
 
         await Push();
 
@@ -556,8 +856,34 @@ public sealed class MemorySyncTests : IDisposable
 
         public void SameProject(string folder, Guid project) => _folders[folder] = project;
 
-        public void MarkDeleted(Guid project, string path, string machine, bool everywhere) =>
-            Replace(project, path, f => f with { DeletedEverywhere = everywhere, DeletedOn = [new RemoteMemoryCopy { MachineName = machine, Folder = "/laptop/repo" }] });
+        /// <summary>Makes an earlier version, <paramref name="text"/> as <paramref name="version"/>, current again, as when the copy holding the newest is deleted.</summary>
+        public void Revert(Guid project, string path, string text, int version)
+        {
+            var bytes = Encoding.UTF8.GetBytes(text);
+            Replace(project, path, f => f with { Version = version, Sha256 = Convert.ToHexString(SHA256.HashData(bytes)), Content = bytes });
+        }
+
+        public void MarkDeleted(Guid project, string path, string machine, bool everywhere, Guid machineId = default, string folder = "/laptop/repo") =>
+            Replace(project, path, f => f with { DeletedEverywhere = everywhere, DeletedOn = [new RemoteMemoryCopy { MachineId = machineId, MachineName = machine, Folder = folder }] });
+
+        /// <summary>
+        /// Makes <paramref name="text"/>, sent by <paramref name="machine"/>, the file's current version: the next number,
+        /// edited from the current one, or with no base when <paramref name="parallel"/>.
+        /// </summary>
+        public void Change(Guid project, string path, string text, string machine, bool parallel = false)
+        {
+            var bytes = Encoding.UTF8.GetBytes(text);
+            var files = _remote[project].Files;
+            var index = files.FindIndex(f => f.Path == path);
+            var current = files[index];
+            var history = current.History.Count > 0 ? current.History : [new RemoteMemoryVersionBase { Version = current.Version }];
+            files[index] = new RemoteMemoryFile
+            {
+                Path = path, Version = current.Version + 1, Sha256 = Convert.ToHexString(SHA256.HashData(bytes)), Content = bytes,
+                MachineId = Guid.NewGuid(), MachineName = machine,
+                History = [.. history, new RemoteMemoryVersionBase { Version = current.Version + 1, Base = parallel ? null : current.Version }],
+            };
+        }
 
         public void Tamper(Guid project, string path) => Replace(project, path, f => f with { Content = [.. f.Content, (byte)'!'] });
 
@@ -602,6 +928,12 @@ public sealed class MemorySyncTests : IDisposable
         public bool ForgetMachineOnce { get; set; }
         public List<(ProjectFacts Facts, List<string> Files, List<string> Deleted)> Pushes { get; } = [];
 
+        /// <summary>The text last sent for each path.</summary>
+        public Dictionary<string, string> Sent { get; } = [];
+
+        /// <summary>The base version last sent for each path.</summary>
+        public Dictionary<string, int?> SentBase { get; } = [];
+
         public int Versions(string folder, string path) => _files[(folder, path)].Versions.Count;
 
         public bool IsDeleted(string folder, string path) => _files[(folder, path)].Deleted;
@@ -622,6 +954,8 @@ public sealed class MemorySyncTests : IDisposable
             var outcomes = new List<MemoryFileOutcome>();
             foreach (var file in files)
             {
+                Sent[file.Path] = Encoding.UTF8.GetString(file.Content);
+                SentBase[file.Path] = file.BaseVersion;
                 var hash = Convert.ToHexString(SHA256.HashData(file.Content));
                 var (versions, _) = _files.GetValueOrDefault((folder, file.Path), ([], false));
                 var change = versions.Count == 0 ? "created" : versions.Contains(hash) ? "unchanged" : "versioned";
@@ -724,9 +1058,11 @@ public sealed class MemorySyncTests : IDisposable
 
     private sealed class FakeMachine : IMachineIdentity
     {
+        public static readonly Guid Id = Guid.Parse("11111111-2222-3333-4444-555555555555");
+
         private bool _registered;
 
-        public MachineInfo Get() => new(Guid.Parse("11111111-2222-3333-4444-555555555555"), "test", "linux");
+        public MachineInfo Get() => new(Id, "test", "linux");
 
         public bool IsRegisteredWith(Uri registry) => _registered;
 

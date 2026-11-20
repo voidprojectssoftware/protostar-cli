@@ -17,7 +17,7 @@ internal interface IMemorySyncService
     /// <summary>Compares the memory on disk with the ledger, without contacting the registry.</summary>
     MemoryStatusResult Status(string? registry, string? harnessHome);
 
-    /// <summary>Writes the registry's memory into the memory folder of each local checkout of its project, never over a local file.</summary>
+    /// <summary>Writes the registry's memory into the memory folder of each local checkout of its project, never losing a local change.</summary>
     Task<MemoryPullResult> PullAsync(MemoryPullRequest request, CancellationToken cancellationToken);
 }
 
@@ -46,9 +46,13 @@ internal sealed record OversizedMemoryFile(string Path, long Size);
 /// <param name="Deleted">Files the registry confirmed that are gone from disk and not yet recorded as deleted.</param>
 /// <param name="UpToDate">Files the registry holds as they are.</param>
 /// <param name="Oversized">Files too large to back up.</param>
+/// <param name="Conflicts">
+/// Conflict copies still here (<see cref="MemoryIndex.IsConflictCopy"/>): another machine's version of a file this machine
+/// changed too, left by a pull until the user merges it and deletes the copy. Never backed up.
+/// </param>
 internal sealed record MemoryFolderStatus(
     string Folder, string Directory, IReadOnlyList<string> New, IReadOnlyList<string> Changed, IReadOnlyList<string> Deleted, int UpToDate,
-    IReadOnlyList<OversizedMemoryFile> Oversized)
+    IReadOnlyList<OversizedMemoryFile> Oversized, IReadOnlyList<string> Conflicts)
 {
     public int Pending => New.Count + Changed.Count + Deleted.Count;
 }
@@ -57,8 +61,8 @@ internal sealed record MemoryFolderStatus(
 internal sealed record MemoryStatusResult(
     SessionSyncFailure Failure, string? Detail, Uri? Registry, IReadOnlyList<MemoryFolderStatus> Folders, IReadOnlyList<SkippedMemoryFolder> Skipped)
 {
-    /// <summary>True when nothing is pending. Skipped folders and oversized files are reported, but backing up again would not change them.</summary>
-    public bool FullySynced => Failure == SessionSyncFailure.None && Folders.All(f => f.Pending == 0);
+    /// <summary>True when nothing is pending and no conflict is left to resolve. Skipped folders and oversized files are reported, but backing up again would not change them.</summary>
+    public bool FullySynced => Failure == SessionSyncFailure.None && Folders.All(f => f.Pending == 0 && f.Conflicts.Count == 0);
 }
 
 /// <summary>What a push did for one memory folder.</summary>
@@ -213,7 +217,7 @@ internal sealed partial class MemorySyncService : IMemorySyncService
                 folder.Memory.Name, folder.Directory,
                 [.. plan.Send.Where(s => s.IsNew).Select(s => s.Path)],
                 [.. plan.Send.Where(s => !s.IsNew).Select(s => s.Path)],
-                plan.Delete, plan.UpToDate.Count, plan.Oversized);
+                plan.Delete, plan.UpToDate.Count, plan.Oversized, plan.Conflicts);
         }).ToList();
         return new MemoryStatusResult(SessionSyncFailure.None, null, registry, statuses, skipped);
     }
@@ -307,7 +311,7 @@ internal sealed partial class MemorySyncService : IMemorySyncService
     /// <param name="Refreshed">Whether <paramref name="Entries"/> differs from what the ledger holds.</param>
     private sealed record UploadPlan(
         Dictionary<string, MemoryLedgerEntry> Entries, bool Refreshed, IReadOnlyList<Pending> Send, IReadOnlyList<string> Delete,
-        IReadOnlyList<string> UpToDate, IReadOnlyList<OversizedMemoryFile> Oversized)
+        IReadOnlyList<string> UpToDate, IReadOnlyList<OversizedMemoryFile> Oversized, IReadOnlyList<string> Conflicts)
     {
         public int Pending => Send.Count + Delete.Count;
     }
@@ -320,12 +324,20 @@ internal sealed partial class MemorySyncService : IMemorySyncService
         var send = new List<Pending>();
         var upToDate = new List<string>();
         var oversized = new List<OversizedMemoryFile>();
+        var conflicts = new List<string>();
         var onDisk = new HashSet<string>(StringComparer.Ordinal);
 
         foreach (var file in Files(root))
         {
             var path = Path.GetRelativePath(root, file).Replace('\\', '/');
             onDisk.Add(path);
+            if (MemoryIndex.IsConflictCopy(path))
+            {
+                // Another machine's version, kept here by a pull: not this machine's learning, so never sent (MemoryIndex).
+                conflicts.Add(path);
+                continue;
+            }
+
             var (size, modified) = Stat(file);
             if (size > MaxFileBytes)
             {
@@ -347,7 +359,7 @@ internal sealed partial class MemorySyncService : IMemorySyncService
                 continue;
             }
 
-            if (entry.Size == size && HashOf(file) == entry.Sha256)
+            if (entry.Size == size && SyncedHashOf(path, file) == entry.Sha256)
             {
                 entries[path] = entry with { ModifiedAt = modified, RecordedAt = DateTimeOffset.UtcNow };
                 refreshed = true;
@@ -359,7 +371,7 @@ internal sealed partial class MemorySyncService : IMemorySyncService
         }
 
         var delete = entries.Where(e => !e.Value.Deleted && !onDisk.Contains(e.Key)).Select(e => e.Key).Order(StringComparer.Ordinal).ToList();
-        return new UploadPlan(entries, refreshed, send, delete, upToDate, oversized);
+        return new UploadPlan(entries, refreshed, send, delete, upToDate, oversized, conflicts);
     }
 
     // ── uploading ─────────────────────────────────────────────────────────────────
@@ -388,10 +400,10 @@ internal sealed partial class MemorySyncService : IMemorySyncService
             {
                 // Stat before reading: a write after the stat leaves the ledger behind the file, so the next run looks again.
                 var (_, modified) = Stat(pending.FullPath);
-                byte[] content;
+                byte[] read;
                 try
                 {
-                    content = File.ReadAllBytes(pending.FullPath);
+                    read = File.ReadAllBytes(pending.FullPath);
                 }
                 catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
                 {
@@ -399,10 +411,12 @@ internal sealed partial class MemorySyncService : IMemorySyncService
                     continue;
                 }
 
+                var content = Synced(pending.Path, read);
                 if (content.Length > MaxFileBytes)
                     continue;
-                stats[pending.Path] = (content.Length, modified, Convert.ToHexStringLower(SHA256.HashData(content)));
-                files.Add(new MemoryUpload(pending.Path, content));
+                // The size is the file's, for the next plan's stat; the hash is of what was sent.
+                stats[pending.Path] = (read.Length, modified, Convert.ToHexStringLower(SHA256.HashData(content)));
+                files.Add(new MemoryUpload(pending.Path, content, entries.TryGetValue(pending.Path, out var synced) ? synced.Version : null));
             }
 
             ApiResult<MemoryPushResponse> result;
@@ -430,13 +444,11 @@ internal sealed partial class MemorySyncService : IMemorySyncService
                     else
                         uploaded++;
                 }
-                else if (file.Change == "unknown")
-                {
-                    // The registry never had this copy of it, so there is nothing to mark; forget it.
-                    entries.Remove(file.Path);
-                }
                 else if (entries.TryGetValue(file.Path, out var entry))
                 {
+                    // Also for "unknown" (a registry from before protostar-cli#47 has no copy to mark for a file this
+                    // machine only pulled): the ledger must still remember the deletion, or the next pull would
+                    // bring the file back.
                     entries[file.Path] = entry with { Deleted = true };
                     deleted++;
                 }
@@ -570,6 +582,23 @@ internal sealed partial class MemorySyncService : IMemorySyncService
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             return (0, DateTimeOffset.MinValue);
+        }
+    }
+
+    // What is synced of a memory file: all of it, except MEMORY.md's pointer lines to conflict copies (MemoryIndex).
+    private static byte[] Synced(string path, byte[] content) => path == MemoryIndex.FileName ? MemoryIndex.Synced(content) : content;
+
+    private static string? SyncedHashOf(string path, string fullPath)
+    {
+        if (path != MemoryIndex.FileName)
+            return HashOf(fullPath);
+        try
+        {
+            return Convert.ToHexStringLower(SHA256.HashData(MemoryIndex.Synced(File.ReadAllBytes(fullPath))));
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return null;
         }
     }
 

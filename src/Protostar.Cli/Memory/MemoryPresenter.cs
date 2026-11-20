@@ -68,16 +68,18 @@ internal static class MemoryPresenter
         }
 
         var pending = result.Folders.Where(f => f.Pending > 0).ToList();
-        if (pending.Count > 0)
+        var conflicted = result.Folders.Where(f => f.Conflicts.Count > 0).ToList();
+        if (pending.Count + conflicted.Count > 0)
         {
             var table = new Table().Border(TableBorder.Rounded);
             table.AddColumn("Folder");
-            table.AddColumn("Not backed up");
-            foreach (var f in pending)
+            table.AddColumn("Not backed up, or to resolve");
+            foreach (var f in result.Folders.Where(f => f.Pending > 0 || f.Conflicts.Count > 0))
             {
                 var lines = f.New.Select(p => $"{Markup.Escape(p)} [grey](new)[/]")
                     .Concat(f.Changed.Select(p => $"{Markup.Escape(p)} [grey](changed)[/]"))
-                    .Concat(f.Deleted.Select(p => $"{Markup.Escape(p)} [grey](deleted here)[/]"));
+                    .Concat(f.Deleted.Select(p => $"{Markup.Escape(p)} [grey](deleted here)[/]"))
+                    .Concat(f.Conflicts.Select(p => $"{Markup.Escape(p)} [yellow](conflict: merge it into the file it is beside, then delete it)[/]"));
                 table.AddRow(Markup.Escape(f.Directory), string.Join('\n', lines));
             }
             AnsiConsole.Write(table);
@@ -86,9 +88,11 @@ internal static class MemoryPresenter
         RenderProblems(result.Folders.SelectMany(f => f.Oversized.Select(o => (f.Folder, o))), result.Skipped);
 
         var files = result.Folders.Sum(f => f.Pending + f.UpToDate);
+        var conflicts = conflicted.Sum(f => f.Conflicts.Count);
         AnsiConsole.MarkupLine(
             $"Memory for {SessionsPresenter.Count(result.Folders.Count, "project")} on this machine, {SessionsPresenter.Count(files, "file")}. " +
-            (pending.Count == 0 ? "[green]All backed up.[/]" : $"[yellow]{SessionsPresenter.Count(pending.Sum(f => f.Pending), "file")} not backed up yet.[/] Run `protostar memory push`."));
+            (pending.Count == 0 ? "[green]All backed up.[/]" : $"[yellow]{SessionsPresenter.Count(pending.Sum(f => f.Pending), "file")} not backed up yet.[/] Run `protostar memory push`.") +
+            (conflicts > 0 ? $" [yellow]{SessionsPresenter.Count(conflicts, "conflict")} to resolve.[/]" : ""));
         return result.FullySynced ? 0 : 1;
     }
 
@@ -115,12 +119,12 @@ internal static class MemoryPresenter
         if (result.Projects == 0)
             return ["No memory in the registry yet."];
 
-        var kept = result.Folders.Sum(f => f.Notes.Count(n => n.Kind == MemoryPullNoteKind.DiffersFromRegistry));
+        var conflicted = result.Folders.Sum(f => f.Notes.Count(n => n.Kind == MemoryPullNoteKind.Conflicted));
         var lines = new List<string>
         {
             $"Pulled memory for {SessionsPresenter.Count(result.Folders.Select(f => f.ProjectName).Distinct().Count(), "project")}: " +
-            $"{result.Written} written, {result.Folders.Sum(f => f.UpToDate)} already here" +
-            (kept > 0 ? $", [yellow]{kept} kept because they differ from the registry[/]" : "") +
+            $"{result.Written} written, {result.Updated} updated, {result.Folders.Sum(f => f.UpToDate)} already here" +
+            (conflicted > 0 ? $", [yellow]{conflicted} conflicted[/]" : "") +
             (result.NotHere.Count > 0 ? $", [grey]{SessionsPresenter.Count(result.NotHere.Count, "project")} not on this machine[/]" : "") + ".",
         };
 
@@ -130,7 +134,7 @@ internal static class MemoryPresenter
                 $"  [aqua]{Markup.Escape(folder.ProjectName)}[/] [grey]{Markup.Escape(folder.Directory)}[/]: " +
                 (folder.Error is { } error
                     ? $"[red]{Markup.Escape(error)}[/]"
-                    : $"{folder.Written} written, {folder.UpToDate} already here [grey]({Markup.Escape(folder.MemoryFolder)})[/]"));
+                    : $"{folder.Written} written, {folder.Updated} updated, {folder.UpToDate} already here [grey]({Markup.Escape(folder.MemoryFolder)})[/]"));
             foreach (var note in folder.Notes)
                 lines.Add($"    {Markup.Escape(note.Path)}: {Describe(note)}");
         }
@@ -142,12 +146,21 @@ internal static class MemoryPresenter
 
     private static string Describe(MemoryPullNote note) => note.Kind switch
     {
-        MemoryPullNoteKind.DiffersFromRegistry => "[yellow]differs from the registry; kept as it is here.[/]",
+        MemoryPullNoteKind.Conflicted =>
+            $"[yellow]conflicted (here and on {Machines(note)})[/]. Kept this machine's; {Machines(note)}'s is beside it as " +
+            $"{Markup.Escape(note.Detail ?? "")}, listed in {MemoryIndex.FileName}. Merge it by hand, then delete the copy.",
+        MemoryPullNoteKind.Merged => $"changed here and on {Machines(note)}; merged line by line, {SessionsPresenter.Count(int.Parse(note.Detail ?? "0", System.Globalization.CultureInfo.InvariantCulture), "line")} added.",
+        MemoryPullNoteKind.Restored => $"[yellow]deleted here, then changed on {Machines(note)}; brought back with that change.[/]",
+        MemoryPullNoteKind.IndexTooLong =>
+            $"[yellow]{Markup.Escape(note.Detail ?? "")} lines; Claude Code loads only the first {MemoryIndex.LoadedLines} lines " +
+            $"({MemoryIndex.LoadedBytes / 1024} KB), so trim it.[/]",
         MemoryPullNoteKind.DeletedHere => "[grey]deleted here; not brought back.[/]",
         MemoryPullNoteKind.DeletedEverywhere => "[grey]deleted on every machine; not written.[/]",
-        MemoryPullNoteKind.DeletedElsewhere => $"[yellow]deleted on {Markup.Escape(string.Join(", ", note.Machines))}; kept here.[/]",
+        MemoryPullNoteKind.DeletedElsewhere => $"[yellow]deleted on {Machines(note)}; kept here.[/]",
         _ => "[red]refused: its path or content failed a safety check; not written.[/]",
     };
+
+    private static string Machines(MemoryPullNote note) => Markup.Escape(string.Join(", ", note.Machines));
 
     private static void RenderProblems(IEnumerable<(string Folder, OversizedMemoryFile File)> oversized, IReadOnlyList<SkippedMemoryFolder> skipped)
     {
