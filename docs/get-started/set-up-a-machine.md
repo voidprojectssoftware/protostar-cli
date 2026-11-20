@@ -13,7 +13,8 @@ $ protostar setup
 ```
 
 It runs these steps in order and prints one line for each: **done**,
-**already done**, **skipped** (with the reason), or **failed**.
+**already done**, **needs a decision** (skills only), **skipped** (with the
+reason), or **failed**.
 
 | Step | What it does | Same as |
 |---|---|---|
@@ -32,12 +33,37 @@ other machines instead of being held back as a local change. When the registry
 refuses a push because that skill also changed on another machine since you
 last synced it, nothing is overwritten on either side. The step reports the
 skill as changed here and in the registry, keeps your copy, and setup still
-finishes; `protostar skills remote` shows how to keep yours, theirs, or both.
+finishes.
 
 Running setup again never undoes a rename or delete made on another machine. A
 skill deleted in the registry is not pushed back, and a copy of a renamed skill
 is renamed here to match when you have not edited it. A copy you edited, or a
 deleted skill's copy, is kept and reported, never deleted.
+
+## Skills that need a decision
+
+Some skills only you can settle, and running setup again does not change them:
+a skill changed here and in the registry, a copy kept although the skill was
+deleted or renamed in the registry, local changes that were not backed up, and
+a conflict with a folder that is not the skill. When any are found, the skills
+step reads **needs a decision** and names each one with its way out, and the
+closing line says how many are left instead of "already set up":
+
+```console
+$ protostar setup
+Sign-in: already done. Signed in to https://localhost:7443 as alice.
+Hooks: already done. Claude Code: capture hooks already up to date (~/.claude/settings.json)
+Skills: needs a decision. Pushed: 0 backed up, 2 already backed up, 1 not pushed because they changed here and in the registry, 1 not pushed because they were deleted or renamed in the registry. Pulled: 0 installed, 0 updated, 2 already up to date, 1 kept because they changed here and in the registry, 1 kept although deleted or renamed in the registry.
+  brew: kept: changed here and in the registry
+    Keep yours: protostar skills push brew --force; theirs: protostar skills pull brew --force; both: protostar skills push brew --as NEW-NAME.
+  tidy: kept, removed from the registry: Deleted from the registry (at v1) after this copy last synced. This copy is kept: remove it if you no longer want it, or run `protostar skills push tidy --force` to restore it.
+Configuration: skipped. Not available yet: syncing harness configuration is still to come.
+Sessions: already done. All 3 transcripts backed up.
+  The capture hooks back up new activity from here on.
+Set up, but 2 skills need a decision. The Skills step above says how to settle each one.
+```
+
+Once you have settled them, the next run says the machine is already set up.
 
 ```console
 $ protostar setup --yes
@@ -85,8 +111,8 @@ Sessions: already done. All 3 transcripts backed up.
 This machine is already set up. Nothing changed.
 ```
 
-Setup exits `0` when no step failed (a skipped step is not a failure) and `1`
-otherwise. Steps that need the registry are skipped when sign-in fails, and the
+Setup exits `0` when no step failed (a skipped step, or a skill that needs a
+decision, is not a failure) and `1` otherwise. Steps that need the registry are skipped when sign-in fails, and the
 rest still run, so one run tells you everything that needs attention.
 
 ## Options

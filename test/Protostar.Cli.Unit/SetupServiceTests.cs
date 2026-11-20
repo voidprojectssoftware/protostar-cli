@@ -87,16 +87,63 @@ public sealed class SetupServiceTests
     }
 
     [Fact]
-    public async Task A_push_refused_as_stale_is_reported_and_does_not_fail_setup()
+    public async Task A_push_refused_as_stale_needs_a_decision_and_does_not_fail_setup()
     {
+        _signIn.Verification = SessionVerification.Verified;
+        _hooks.Change = HookChange.Unchanged;
         _push.Status = SkillPushStatus.Stale;
         _skills.Status = SkillPullStatus.ChangedBoth;
 
         var result = await Run(yes: true);
 
-        Assert.Equal(SetupOutcome.AlreadyDone, result.Steps[2].Outcome);
+        Assert.Equal(SetupOutcome.NeedsDecision, result.Steps[2].Outcome);
         Assert.Equal(SkillPushStatus.Stale, Assert.Single(result.Steps[2].SkillPush!.Entries).Outcome.Status);
+        Assert.Equal("greet", Assert.Single(result.Steps[2].SkillDecisions).Name);
         Assert.True(result.Succeeded);
+        Assert.False(result.NothingChanged);
+        Assert.Equal(1, result.SkillDecisions);
+    }
+
+    [Theory]
+    [InlineData(nameof(SkillPullStatus.ChangedBoth))]
+    [InlineData(nameof(SkillPullStatus.RemovedInRegistry))]
+    [InlineData(nameof(SkillPullStatus.LocalChanges))]
+    [InlineData(nameof(SkillPullStatus.Conflict))]
+    public async Task A_skill_only_the_user_can_settle_makes_the_step_need_a_decision_without_failing(string status)
+    {
+        _skills.Status = Enum.Parse<SkillPullStatus>(status);
+
+        var result = await Run(yes: true);
+
+        Assert.Equal(SetupOutcome.NeedsDecision, result.Steps[2].Outcome);
+        Assert.True(result.Succeeded);
+        Assert.Equal(1, result.SkillDecisions);
+    }
+
+    [Fact]
+    public async Task A_decision_outranks_skills_installed_in_the_same_run_and_every_one_is_counted()
+    {
+        _skills.Status = SkillPullStatus.Installed;
+        _skills.Others.AddRange([SkillPullStatus.ChangedBoth, SkillPullStatus.UpToDate, SkillPullStatus.RemovedInRegistry]);
+
+        var result = await Run(yes: true);
+
+        Assert.Equal(SetupOutcome.NeedsDecision, result.Steps[2].Outcome);
+        Assert.Equal(["other0", "other2"], result.Steps[2].SkillDecisions.Select(e => e.Name));
+        Assert.Equal(2, result.SkillDecisions);
+    }
+
+    [Fact]
+    public async Task A_skill_that_failed_to_pull_fails_the_step_even_beside_a_decision()
+    {
+        _skills.Status = SkillPullStatus.Failed;
+        _skills.Others.Add(SkillPullStatus.ChangedBoth);
+
+        var result = await Run(yes: true);
+
+        Assert.Equal(SetupOutcome.Failed, result.Steps[2].Outcome);
+        Assert.False(result.Succeeded);
+        Assert.Equal(1, result.SkillDecisions);
     }
 
     [Fact]
@@ -266,16 +313,6 @@ public sealed class SetupServiceTests
     }
 
     [Fact]
-    public async Task A_skill_conflict_fails_the_skills_step_and_local_changes_do_not()
-    {
-        _skills.Status = SkillPullStatus.Conflict;
-        Assert.Equal(SetupOutcome.Failed, (await Run(yes: true)).Steps[2].Outcome);
-
-        _skills.Status = SkillPullStatus.LocalChanges;
-        Assert.Equal(SetupOutcome.AlreadyDone, (await Run(yes: true)).Steps[2].Outcome);
-    }
-
-    [Fact]
     public async Task No_harness_skips_hooks_and_skills()
     {
         _hooks.NoHarness = true;
@@ -409,6 +446,9 @@ public sealed class SetupServiceTests
     {
         public List<string> Calls { get; set; } = [];
         public SkillPullStatus Status { get; set; } = SkillPullStatus.Installed;
+
+        /// <summary>The statuses of more skills in the same pull, after "greet".</summary>
+        public List<SkillPullStatus> Others { get; } = [];
         public SkillPullRunFailure Failure { get; set; } = SkillPullRunFailure.None;
 
         public Task<SkillRemoteResult> CompareAsync(SkillRemoteRequest request, CancellationToken cancellationToken) => throw new NotSupportedException();
@@ -421,7 +461,11 @@ public sealed class SetupServiceTests
             var registry = new Uri(Registry);
             return Task.FromResult(Failure != SkillPullRunFailure.None
                 ? SkillPullRunResult.Fail(Failure, null, registry)
-                : new SkillPullRunResult(SkillPullRunFailure.None, null, registry, [new SkillPullEntry(Harness, "greet", Status, 1, "/harness/skills/greet", null)]));
+                : new SkillPullRunResult(SkillPullRunFailure.None, null, registry,
+                [
+                    new SkillPullEntry(Harness, "greet", Status, 1, "/harness/skills/greet", null),
+                    .. Others.Select((status, i) => new SkillPullEntry(Harness, $"other{i}", status, 1, $"/harness/skills/other{i}", null)),
+                ]));
         }
     }
 
