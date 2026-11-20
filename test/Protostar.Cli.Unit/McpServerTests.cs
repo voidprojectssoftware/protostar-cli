@@ -77,6 +77,35 @@ public sealed class McpServerTests
     }
 
     [Fact]
+    public async Task get_session_full_nests_a_subagent_under_the_call_that_ran_it_not_a_result_that_mentions_its_id()
+    {
+        // #121: a Bash result that merely prints the subagent's id, then the Task call that really ran it.
+        _registry.Content =
+        [
+            """{"type":"user","message":{"content":"Find the agent ids in the logs, then summarise"}}""",
+            """{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t0","name":"Bash","input":{"command":"grep agentId log.txt"}}]}}""",
+            """{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t0","content":"log.txt:3: agentId: a1b2"}]}}""",
+            """{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"Task","input":{"description":"Summarise","subagent_type":"general-purpose"}}]}}""",
+            """{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1","content":"A demo."}]},"toolUseResult":{"agentId":"a1b2"}}""",
+        ];
+        _registry.Subagent = ("a1b2",
+        [
+            """{"type":"user","isSidechain":true,"message":{"content":"Summarise"}}""",
+            """{"type":"assistant","isSidechain":true,"message":{"content":[{"type":"text","text":"A demo."}]}}""",
+        ]);
+
+        var result = await Sut().GetSessionAsync(SessionId, full: true);
+
+        var messages = Body(result)["messages"]!.AsArray().Select(m => m!.AsObject()).ToList();
+        Assert.Equal(
+            ["prompt", "toolCall", "toolResult", "toolCall", "toolResult", "subagentStart", "prompt", "reply", "subagentEnd"],
+            messages.Select(m => m["type"]!.GetValue<string>()));
+        Assert.False(messages[2].ContainsKey("agentId"));
+        Assert.Equal("a1b2", messages[4]["agentId"]!.GetValue<string>());
+        Assert.Equal(("general-purpose", true), (messages[5]["agentType"]!.GetValue<string>(), messages[5]["linked"]!.GetValue<bool>()));
+    }
+
+    [Fact]
     public async Task get_session_on_a_registry_that_does_not_list_redacted_read_is_refused_before_anything_is_read()
     {
         _registry.Capabilities = ["sessions", "search"];
@@ -247,6 +276,12 @@ public sealed class McpServerTests
         public string[]? Capabilities { get; set; } = ["sessions", "session-skills", "redacted-read", "memory", "memory-content", "search", "memory-redacted-read"];
         public bool Down { get; set; }
 
+        /// <summary>The session's content lines; a prompt and a reply when not set.</summary>
+        public string[]? Content { get; set; }
+
+        /// <summary>A subagent of the session, as its agent id and content lines.</summary>
+        public (string AgentId, string[] Lines)? Subagent { get; set; }
+
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             if (Down)
@@ -257,20 +292,23 @@ public sealed class McpServerTests
             if (Capabilities is not null)
                 meta["capabilities"] = new JsonArray([.. Capabilities.Select(c => (JsonNode)c)]);
             var transcript = new JsonObject { ["harness"] = "claude-code", ["key"] = SessionId, ["kind"] = "session", ["title"] = "Migration" };
+            var subagentKey = Subagent is { } sub ? $"{SessionId}.agent-{sub.AgentId}" : null;
+            var subagents = subagentKey is null
+                ? new JsonArray()
+                : new JsonArray(new JsonObject { ["harness"] = "claude-code", ["key"] = subagentKey, ["kind"] = "subagent", ["parentKey"] = SessionId });
             var unknownFile = new JsonObject { ["type"] = "https://protostar.dev/problems/unknown-memory-file", ["title"] = "No such file.", ["status"] = 404 };
 
             return Task.FromResult(url.AbsolutePath switch
             {
                 "/v1/meta" => Json(meta),
                 "/v1/transcripts" => Json(new JsonArray(transcript.DeepClone())),
-                $"/v1/transcripts/claude-code/{SessionId}" => Json(new JsonObject { ["transcript"] = transcript, ["subagents"] = new JsonArray() }),
-                $"/v1/transcripts/claude-code/{SessionId}/content" => new HttpResponseMessage(HttpStatusCode.OK)
-                {
-                    Content = new StringContent(
-                        """{"type":"user","message":{"content":"Add a migration"}}""" + "\n" +
-                        """{"type":"assistant","message":{"content":[{"type":"text","text":"Added."}]}}""" + "\n",
-                        Encoding.UTF8, "application/x-ndjson"),
-                },
+                $"/v1/transcripts/claude-code/{SessionId}" => Json(new JsonObject { ["transcript"] = transcript, ["subagents"] = subagents }),
+                $"/v1/transcripts/claude-code/{SessionId}/content" => Lines(Content ??
+                [
+                    """{"type":"user","message":{"content":"Add a migration"}}""",
+                    """{"type":"assistant","message":{"content":[{"type":"text","text":"Added."}]}}""",
+                ]),
+                var path when subagentKey is not null && path == $"/v1/transcripts/claude-code/{subagentKey}/content" => Lines(Subagent!.Value.Lines),
                 $"/v1/transcripts/claude-code/{SessionId}/skills" => Json(new JsonObject
                 {
                     ["harness"] = "claude-code", ["key"] = SessionId,
@@ -301,6 +339,9 @@ public sealed class McpServerTests
                 _ => new HttpResponseMessage(HttpStatusCode.NotFound),
             });
         }
+
+        private static HttpResponseMessage Lines(string[] lines) =>
+            new(HttpStatusCode.OK) { Content = new StringContent(string.Concat(lines.Select(l => l + "\n")), Encoding.UTF8, "application/x-ndjson") };
 
         private static HttpResponseMessage Json(JsonNode body, HttpStatusCode status = HttpStatusCode.OK, string type = "application/json") =>
             new(status) { Content = new StringContent(body.ToJsonString(), Encoding.UTF8, type) };

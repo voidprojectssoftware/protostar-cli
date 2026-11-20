@@ -330,6 +330,90 @@ public sealed class SessionReaderTests
         Assert.False(((SubagentStartEntry)shown[^4].Entry).Linked);
     }
 
+    // #121: a Bash result that merely prints a subagent's id, then the Task call that really ran it.
+    private static readonly string[] MentionThenTask =
+    [
+        """{"type":"user","message":{"content":"Find the agent ids in the logs, then summarise"}}""",
+        """{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t0","name":"Bash","input":{"command":"grep agentId log.txt"}}]}}""",
+        """{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t0","content":"log.txt:3: agentId: a1b2"}]},"toolUseResult":{"stdout":"log.txt:3: agentId: a1b2"}}""",
+        """{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"Task","input":{"description":"Summarise","subagent_type":"general-purpose"}}]}}""",
+        """{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1","content":"A demo."}]},"toolUseResult":{"agentId":"a1b2"}}""",
+    ];
+
+    [Fact]
+    public async Task A_result_that_only_mentions_an_agent_id_neither_takes_the_subagent_nor_carries_the_id()
+    {
+        _api.Add(Session(SessionId), MentionThenTask, (SubagentId, SubagentLines));
+
+        var shown = await ReadAll(full: true);
+
+        Assert.Equal(
+            ["prompt", "call:Bash", "result", "call:Task", "result", "start:general-purpose", "prompt", "reply", "end"],
+            shown.Select(Describe));
+        var bash = (ToolResultEntry)shown[2].Entry;
+        Assert.Null(bash.AgentId);
+        Assert.False(SessionsJson.ShowRecord(shown[2], "claude-code", full: true).AsObject().ContainsKey("agentId"));
+        Assert.Equal("a1b2", ((ToolResultEntry)shown[4].Entry).AgentId);
+        var start = (SubagentStartEntry)shown[5].Entry;
+        Assert.Equal(("general-purpose", "Summarise", true), (start.AgentType, start.Description, start.Linked));
+    }
+
+    [Fact]
+    public async Task A_structured_agent_id_on_a_result_of_a_call_that_ran_no_subagent_links_nothing()
+    {
+        string[] lines =
+        [
+            """{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t0","name":"Bash","input":{"command":"true"}}]}}""",
+            """{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t0","content":"ok"}]},"toolUseResult":{"agentId":"a1b2"}}""",
+        ];
+        _api.Add(Session(SessionId), lines, (SubagentId, SubagentLines));
+
+        var shown = await ReadAll(full: true);
+
+        Assert.Equal(["call:Bash", "result", "start:", "prompt", "reply", "end"], shown.Select(Describe));
+        Assert.Null(((ToolResultEntry)shown[1].Entry).AgentId);
+        Assert.False(((SubagentStartEntry)shown[2].Entry).Linked);
+    }
+
+    [Fact]
+    public async Task On_an_older_harness_the_agent_id_ending_a_subagent_calls_result_text_still_links_it()
+    {
+        string[] lines =
+        [
+            """{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"Task","input":{"description":"Summarise","subagent_type":"general-purpose"}}]}}""",
+            """{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1","content":"Found agentId: zz99 in a log.\nagentId: a1b2 (for resuming)"}]}}""",
+        ];
+        _api.Add(Session(SessionId), lines, (SubagentId, SubagentLines));
+
+        var shown = await ReadAll(full: true);
+
+        Assert.Equal(["call:Task", "result", "start:general-purpose", "prompt", "reply", "end"], shown.Select(Describe));
+        Assert.Equal("a1b2", ((ToolResultEntry)shown[1].Entry).AgentId);
+        Assert.True(((SubagentStartEntry)shown[2].Entry).Linked);
+    }
+
+    [Fact]
+    public async Task The_conversation_drawn_from_a_mention_then_the_real_call_nests_the_subagent_under_the_call()
+    {
+        _api.Add(Session(SessionId), MentionThenTask, (SubagentId, SubagentLines));
+        var reader = Sut();
+        var opened = await reader.OpenAsync(Registry, null, SessionId, CancellationToken.None);
+        var output = new StringWriter();
+        var console = Spectre.Console.AnsiConsole.Create(new Spectre.Console.AnsiConsoleSettings { Out = new Spectre.Console.AnsiConsoleOutput(new StringWriter()) });
+
+        var exit = await SessionShowPresenter.RenderAsync(
+            opened.Session!, reader.ReadAsync(opened.Session!, full: true, CancellationToken.None), full: true, json: false,
+            new ConversationWriter(console, output, plain: true));
+
+        Assert.Equal(0, exit);
+        var text = output.ToString();
+        var bash = text.IndexOf("▸ Bash", StringComparison.Ordinal);
+        var task = text.IndexOf("▸ Task", StringComparison.Ordinal);
+        var subagent = text.IndexOf("┌ Subagent general-purpose: Summarise", StringComparison.Ordinal);
+        Assert.True(bash >= 0 && bash < task && task < subagent, text);
+        Assert.DoesNotContain("not linked", text);
+    }
+
     [Fact]
     public async Task Every_download_asks_for_redacted_content()
     {
