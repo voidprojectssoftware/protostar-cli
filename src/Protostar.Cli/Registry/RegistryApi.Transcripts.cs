@@ -158,6 +158,18 @@ internal sealed partial class RegistryApi : ITranscriptApi
         }
     }
 
+    /// <inheritdoc />
+    public async Task<ApiResult<IReadOnlyList<SessionSkill>>> GetSkillsAsync(Uri registry, string accessToken, string harness, string key, CancellationToken cancellationToken)
+    {
+        using var request = Request(HttpMethod.Get, registry, $"{TranscriptPath(harness, key)}/skills", accessToken);
+        return await SendAsync<IReadOnlyList<SessionSkill>>(
+            request,
+            async response => (await response.Content.ReadFromJsonAsync<SkillsBody>(TranscriptJson.Options, cancellationToken))?.Skills ?? [],
+            cancellationToken);
+    }
+
+    private sealed record SkillsBody(IReadOnlyList<SessionSkill>? Skills);
+
     // The response body, which ends the response when disposed.
     private sealed class ResponseStream(Stream body, HttpResponseMessage response) : Stream
     {
@@ -209,6 +221,8 @@ internal sealed partial class RegistryApi : ITranscriptApi
                 return ApiResult<T>.UnknownMachine(problem!.Title!);
             if (IsUnknownTranscript(response, problem))
                 return ApiResult<T>.UnknownTranscript(problem!.Title ?? "No such transcript.");
+            if (response.StatusCode == HttpStatusCode.NotFound && problem?.Type is UnknownProjectType or UnknownMemoryFileType)
+                return ApiResult<T>.UnknownMemory(problem.Title ?? "No such project or memory file.");
             return ApiResult<T>.Fail(problem?.Title ?? Describe(response.StatusCode));
         }
         catch (Exception ex) when (ex is HttpRequestException or JsonException or TaskCanceledException && !cancellationToken.IsCancellationRequested)
@@ -252,6 +266,8 @@ internal sealed partial class RegistryApi : ITranscriptApi
 
     private const string UnknownMachineType = "https://protostar.dev/problems/unknown-machine";
     private const string UnknownTranscriptType = "https://protostar.dev/problems/unknown-transcript";
+    private const string UnknownProjectType = "https://protostar.dev/problems/unknown-project";
+    private const string UnknownMemoryFileType = "https://protostar.dev/problems/unknown-memory-file";
 
     private static string Describe(HttpStatusCode status) => status == HttpStatusCode.Unauthorized
         ? "The registry rejected the session. Run `protostar auth login`."

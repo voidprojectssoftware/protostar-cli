@@ -8,6 +8,7 @@ using Protostar.Cli.Harness;
 using Protostar.Cli.Harness.ClaudeCode;
 using Protostar.Cli.Hooks;
 using Protostar.Cli.Infrastructure;
+using Protostar.Cli.Mcp;
 using Protostar.Cli.Memory;
 using Protostar.Cli.Projects;
 using Protostar.Cli.Registry;
@@ -53,6 +54,7 @@ services.AddSingleton<ISetupService, SetupService>();
 services.AddSingleton<ISyncStatusService, SyncStatusService>();
 services.AddSingleton<ISearchApi>(sp => sp.GetRequiredService<RegistryApi>());
 services.AddSingleton<ISearchService, SearchService>();
+services.AddSingleton<IAgentHistoryService, AgentHistoryService>();
 
 // Harnesses and their collaborators live in the container too: register one IHarness per harness
 // (the extension point) plus the catalog that exposes them and the ClaudeCode skill parser/mapper.
@@ -130,6 +132,9 @@ app.Configure(config =>
         .WithDescription("Search your backed-up sessions and memory, from every machine. Secrets are redacted by the registry.")
         .WithExample("search", "\"parentUuid ordering\"")
         .WithExample("search", "DNS", "--kind", "memory", "--project", ".");
+
+    config.AddCommand<McpCommand>(Named("mcp"))
+        .WithDescription("Serve your backed-up sessions and memory to coding agents as read-only MCP tools, on stdio. Register it with `claude mcp add protostar -- protostar mcp`.");
 
     config.AddBranch(Named("memory"), memory =>
     {

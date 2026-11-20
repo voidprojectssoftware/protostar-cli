@@ -1364,6 +1364,9 @@ public sealed class SessionSyncServiceTests : IDisposable
         public Task<ApiResult<TranscriptDetail>> GetAsync(Uri registry, string accessToken, string harness, string key, CancellationToken cancellationToken) =>
             throw new NotSupportedException();
 
+        public Task<ApiResult<IReadOnlyList<SessionSkill>>> GetSkillsAsync(Uri registry, string accessToken, string harness, string key, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
         public Task<ApiResult<Stream>> OpenRedactedContentAsync(Uri registry, string accessToken, string harness, string key, CancellationToken cancellationToken) =>
             throw new NotSupportedException();
 

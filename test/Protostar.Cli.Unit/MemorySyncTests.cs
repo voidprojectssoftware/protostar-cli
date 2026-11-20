@@ -909,6 +909,11 @@ public sealed class MemorySyncTests : IDisposable
             return Task.FromResult(ApiResult<RemoteMemoryContent>.Success(new RemoteMemoryContent { ProjectId = projectId, ProjectName = name, Files = files }));
         }
 
+        // A pull never reads redacted memory; only protostar mcp does.
+        public Task<ApiResult<RemoteMemoryContent>> GetRedactedMemoryContentAsync(
+            Uri registry, string accessToken, Guid projectId, string? path, CancellationToken cancellationToken) =>
+            throw new InvalidOperationException("A pull must read the stored bytes, never redacted memory.");
+
         public Task<ApiResult<RemoteProject>> ResolveProjectAsync(Uri registry, string accessToken, Guid machineId, ProjectFacts facts, CancellationToken cancellationToken)
         {
             Calls++;
@@ -1007,6 +1012,9 @@ public sealed class MemorySyncTests : IDisposable
             throw new NotSupportedException();
 
         public Task<ApiResult<TranscriptDetail>> GetAsync(Uri registry, string accessToken, string harness, string key, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
+        public Task<ApiResult<IReadOnlyList<SessionSkill>>> GetSkillsAsync(Uri registry, string accessToken, string harness, string key, CancellationToken cancellationToken) =>
             throw new NotSupportedException();
 
         public Task<ApiResult<Stream>> OpenRedactedContentAsync(Uri registry, string accessToken, string harness, string key, CancellationToken cancellationToken) =>

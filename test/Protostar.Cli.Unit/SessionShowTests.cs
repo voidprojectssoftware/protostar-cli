@@ -351,6 +351,9 @@ public sealed class SessionReaderTests
             return Task.FromResult(ApiResult<IReadOnlyList<RemoteTranscript>>.Success(page));
         }
 
+        public Task<ApiResult<IReadOnlyList<SessionSkill>>> GetSkillsAsync(Uri registry, string accessToken, string harness, string key, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
         public Task<ApiResult<Stream>> OpenRedactedContentAsync(Uri registry, string accessToken, string harness, string key, CancellationToken cancellationToken)
         {
             Downloads.Add(key);

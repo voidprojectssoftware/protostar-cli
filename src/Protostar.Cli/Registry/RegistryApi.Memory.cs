@@ -53,5 +53,17 @@ internal sealed partial class RegistryApi : IMemoryApi
             : result;
     }
 
+    /// <inheritdoc />
+    public async Task<ApiResult<RemoteMemoryContent>> GetRedactedMemoryContentAsync(
+        Uri registry, string accessToken, Guid projectId, string? path, CancellationToken cancellationToken)
+    {
+        var query = "redacted=true" + (path is null ? "" : "&path=" + Uri.EscapeDataString(path));
+        using var request = Request(HttpMethod.Get, registry, $"/v1/memory/{projectId}/content?{query}", accessToken);
+        return await SendAsync(
+            request,
+            async response => await response.Content.ReadFromJsonAsync<RemoteMemoryContent>(TranscriptJson.Options) ?? throw new System.Text.Json.JsonException("Empty response."),
+            cancellationToken);
+    }
+
     private const string TooOldToPull = "This registry cannot bring memory to this machine yet. Update the registry.";
 }

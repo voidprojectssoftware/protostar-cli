@@ -68,21 +68,30 @@ internal static class SessionsJson
 
     /// <summary>Writes <paramref name="records"/> to standard output as one JSON array on one line.</summary>
     public static void WriteArray(IEnumerable<JsonNode> records) =>
-        Console.Out.WriteLine(new JsonArray([.. records]).ToJsonString(Output));
+        Console.Out.WriteLine(Serialize(new JsonArray([.. records])));
 
     /// <summary>Writes <paramref name="record"/> to standard output as one JSON object on one line, for a command that reports one thing.</summary>
-    public static void WriteObject(JsonNode record) => Console.Out.WriteLine(record.ToJsonString(Output));
+    public static void WriteObject(JsonNode record) => Console.Out.WriteLine(Serialize(record));
 
     /// <summary>Writes the error object to standard error and returns <paramref name="exitCode"/>.</summary>
     /// <param name="extra">More fields for the error object, such as the candidates for an ambiguous id; <c>null</c> for none.</param>
     public static int Error(string code, string message, int exitCode = 1, JsonObject? extra = null)
     {
+        Console.Error.WriteLine(Serialize(ErrorObject(code, message, extra)));
+        return exitCode;
+    }
+
+    /// <summary>The error object, <c>{"error":{"code":...,"message":...}}</c>, with <paramref name="extra"/>'s fields added to <c>error</c>.</summary>
+    public static JsonObject ErrorObject(string code, string message, JsonObject? extra = null)
+    {
         var error = new JsonObject { ["code"] = code, ["message"] = message };
         foreach (var (name, value) in extra ?? [])
             error[name] = value?.DeepClone();
-        Console.Error.WriteLine(new JsonObject { ["error"] = error }.ToJsonString(Output));
-        return exitCode;
+        return new JsonObject { ["error"] = error };
     }
+
+    /// <summary><paramref name="node"/> as one line of JSON, written as every <c>--json</c> output is.</summary>
+    public static string Serialize(JsonNode node) => node.ToJsonString(Output);
 
     /// <summary>A <c>sessions list</c> row: the registry's record with <c>id</c> added, and <c>pending</c> when not fully backed up.</summary>
     /// <remarks>The registry's own fields (<c>key</c> among them) stay as <c>sessions list --json</c> has always printed them.</remarks>

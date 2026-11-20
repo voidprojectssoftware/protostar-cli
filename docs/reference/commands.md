@@ -847,6 +847,27 @@ $ protostar search '"DNS records"' --kind memory --project homelab --json
 [{"kind":"memory","path":"dns.md","projectId":"ecb56db5-bb0f-41d1-8a7f-4b476620727c","project":"github.com/example/homelab","machineId":"178aa838-787d-4a5c-82e3-009c277ccec5","machineName":"vm-dev-01","date":"2026-11-20T07:08:23.134151+00:00","snippet":"«DNS»\n\n«DNS» «records» are added with the Technitium API, never by editing zone files"}]
 ```
 
+## `protostar mcp`
+
+Serve your backed-up sessions and memory to coding agents as MCP tools, over
+standard input and output. Register it with your agent rather than running it
+yourself:
+
+```console
+$ claude mcp add --scope user protostar -- protostar mcp
+```
+
+It serves five read-only tools, `search`, `list_sessions`, `get_session`,
+`get_session_skills` and `get_memory`, with no tool that changes anything. Everything they return is
+redacted by the registry, and one result is at most 80,000 characters, with long
+sessions paged. It uses the stored sign-in, resolved on every call, and keeps
+standard output for the protocol alone. See
+[Let your agents search your history](../guides/agents-search-history.md).
+
+| Option | Description |
+|---|---|
+| `--registry <URL>` | Registry to use. Defaults to `PROTOSTAR_REGISTRY_URL`, then the saved default, then `https://localhost:7443`. |
+
 ## `protostar project`
 
 See which [project](../guides/projects.md) a folder belongs to, and link or unlink
