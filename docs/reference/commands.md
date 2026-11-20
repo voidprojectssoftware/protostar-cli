@@ -510,6 +510,73 @@ $ protostar sessions list --json -n 1
 [{"harness":"claude-code","key":"00000000-0000-0000-0000-000000001113","kind":"session","title":"hello 2","firstPrompt":"hello 2","projectId":"84ae7ab4-363a-4328-b80c-81c5f6495764","project":"github.com/example/demo-app","workingDirectory":"/home/alice/src/demo-app","machineId":"e43c5bac-e1ac-4493-b2fb-21abbca63a1b","machineName":"vm-dev-01","sourcePath":"/home/alice/.claude/projects/-home-alice-src-demo-app/00000000-0000-0000-0000-000000001113.jsonl","userMessages":1,"assistantMessages":1,"length":2511,"subagentCount":0}]
 ```
 
+## `protostar memory`
+
+Back up the memory your agents keep about each project. Claude Code keeps it in
+`<config root>/projects/<folder>/memory/`, one markdown file per note plus a
+`MEMORY.md` index. Each memory folder is filed under the
+[project](../guides/projects.md) of the checkout it belongs to, found from the
+working directory a session transcript in the same folder records (the folder's
+name is never decoded), so memory and sessions share a project. `protostar memory`
+on its own prints its help.
+
+Both commands take:
+
+| Option | Description |
+|---|---|
+| `--registry <URL>` | Registry to use. Defaults to `PROTOSTAR_REGISTRY_URL`, then the saved default, then `https://localhost:7443`. |
+| `--harness-home <DIR>` | Override the harness config root. |
+
+Some memory folders are reported as skipped rather than backed up:
+
+- a folder whose transcripts record no working directory (or that has none), since
+  its project cannot be known. A folder with no transcript of its own borrows one
+  from a worktree or subfolder session only when that session's checkout is the
+  one the folder is named after;
+- a second memory folder of the same checkout: worktrees share their main
+  worktree's memory, which is backed up once;
+- any file over 256 KiB. Memory notes are a few KiB; the limit only stops something
+  that is not a note.
+
+### `protostar memory push`
+
+Back up the memory files that are new, changed or deleted since the last backup.
+An unchanged file costs a stat and no network call, so a second push sends
+nothing. A changed file becomes a new version in the registry and the earlier
+versions are kept. A file deleted on this machine is never deleted from the
+registry: it is marked deleted on this machine and keeps its versions.
+
+```console
+$ protostar memory push
+╭─────────┬────────────────────────┬──────────┬─────────┬───────────╮
+│ Project │ Folder                 │ Uploaded │ Deleted │ Result    │
+├─────────┼────────────────────────┼──────────┼─────────┼───────────┤
+│ alpha   │ /home/alice/src/alpha  │        3 │       0 │ backed up │
+│ beta    │ /home/alice/src/beta   │        2 │       0 │ backed up │
+╰─────────┴────────────────────────┴──────────┴─────────┴───────────╯
+Skipped memory folder -tmp-scratch: No transcript records the folder it belongs
+to, so its project is unknown.
+Backed up 5 files for 2 projects from vm-dev-01. Registry: https://localhost:7443.
+```
+
+The exit code is `0` when every memory folder that could be backed up was, and `1`
+otherwise. Skipped folders and files are reported but do not fail the push.
+
+The capture hooks' background push (see [`capture`](#protostar-capture)) also backs
+up the memory of the session's project, so memory goes up as agents write it.
+
+### `protostar memory status`
+
+Show which memory files are not backed up. It works offline: it compares the files
+on disk with what this machine last recorded as sent.
+
+```console
+$ protostar memory status
+Memory for 2 projects on this machine, 5 files. All backed up.
+```
+
+The exit code is `0` when nothing is pending and `1` while anything is.
+
 ## `protostar project`
 
 See which [project](../guides/projects.md) a folder belongs to, and link or unlink
@@ -637,7 +704,8 @@ logged once and remembered: later uses of the same content are not sent again, a
 
 On `Stop` (after each reply) and `SessionEnd`, `capture` starts a background
 `protostar sessions push` for that session and returns at once, without waiting for
-the upload. A `Stop` push is skipped when the session's last push started less
+the upload. The same background push then backs up the memory of the session's
+project (its own folder and its main worktree's), sending only files that changed. A `Stop` push is skipped when the session's last push started less
 than 30 seconds ago; `SessionEnd` always pushes. Only one push of a transcript
 runs at a time. A background push that fails (registry unreachable, not signed in)
 marks its session in the local ledger; the next background push of any session

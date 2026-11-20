@@ -8,6 +8,7 @@ using Protostar.Cli.Harness;
 using Protostar.Cli.Harness.ClaudeCode;
 using Protostar.Cli.Hooks;
 using Protostar.Cli.Infrastructure;
+using Protostar.Cli.Memory;
 using Protostar.Cli.Projects;
 using Protostar.Cli.Registry;
 using Protostar.Cli.Sessions;
@@ -35,6 +36,9 @@ services.AddSingleton<IProjectFactsResolver, ProjectFactsResolver>();
 services.AddSingleton<ISessionSyncService, SessionSyncService>();
 services.AddSingleton<IProjectApi>(sp => sp.GetRequiredService<RegistryApi>());
 services.AddSingleton<IProjectService, ProjectService>();
+services.AddSingleton<IMemoryApi>(sp => sp.GetRequiredService<RegistryApi>());
+services.AddSingleton<IMemoryLedger, MemoryLedger>();
+services.AddSingleton<IMemorySyncService, MemorySyncService>();
 services.AddSingleton<ISkillLedger, SkillLedger>();
 services.AddSingleton<ISkillPushService, SkillPushService>();
 services.AddSingleton<ISkillPullService, SkillPullService>();
@@ -110,6 +114,15 @@ app.Configure(config =>
             .WithDescription("Show what is and is not backed up on this machine. Works offline; exits 1 while anything is pending.");
         sessions.AddCommand<SessionsListCommand>("list")
             .WithDescription("List sessions backed up from every machine.");
+    });
+
+    config.AddBranch(Named("memory"), memory =>
+    {
+        memory.SetDescription("Back up the memory your agents keep about each project, and see what is not backed up.");
+        memory.AddCommand<MemoryPushCommand>("push")
+            .WithDescription("Back up the agent memory on this machine to the registry: only what changed, and deletions as markers.");
+        memory.AddCommand<MemoryStatusCommand>("status")
+            .WithDescription("Show which memory files are not backed up. Works offline; exits 1 while anything is pending.");
     });
 
     // Not AddBranch<ProjectSettings>: branch settings bind only before the subcommand, so `project link x --dir y`
