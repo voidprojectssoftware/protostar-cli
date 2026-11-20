@@ -16,6 +16,9 @@ internal interface IMemorySyncService
 
     /// <summary>Compares the memory on disk with the ledger, without contacting the registry.</summary>
     MemoryStatusResult Status(string? registry, string? harnessHome);
+
+    /// <summary>Writes the registry's memory into the memory folder of each local checkout of its project, never over a local file.</summary>
+    Task<MemoryPullResult> PullAsync(MemoryPullRequest request, CancellationToken cancellationToken);
 }
 
 /// <summary>What to back up.</summary>
@@ -105,7 +108,7 @@ internal sealed record MemoryPushResult(
 /// </para>
 /// <para><b>Privacy.</b> Contents go only to the signed-in user's registry, and nothing here logs them: outcomes carry paths and counts.</para>
 /// </remarks>
-internal sealed class MemorySyncService : IMemorySyncService
+internal sealed partial class MemorySyncService : IMemorySyncService
 {
     /// <summary>The largest memory file backed up, the registry's own limit.</summary>
     /// <remarks>Memory is short markdown notes; see the registry's <c>MemoryFileSizePolicy</c> for why 256 KiB.</remarks>
@@ -133,11 +136,13 @@ internal sealed class MemorySyncService : IMemorySyncService
     private readonly IMemoryLedger _ledger;
     private readonly IMachineIdentity _machine;
     private readonly IProjectFactsResolver _projects;
+    private readonly IProjectApi _projectApi;
 
     public MemorySyncService(
         IHarnessCatalog catalog, IAccessTokenProvider tokens, IRegistryApi meta, ITranscriptApi machines, IMemoryApi api,
-        IMemoryLedger ledger, IMachineIdentity machine, IProjectFactsResolver projects)
+        IMemoryLedger ledger, IMachineIdentity machine, IProjectFactsResolver projects, IProjectApi projectApi)
     {
+        _projectApi = projectApi;
         _catalog = catalog;
         _tokens = tokens;
         _meta = meta;

@@ -26,20 +26,21 @@ public sealed class MemorySyncTests : IDisposable
     public void Dispose() => Directory.Delete(_root, recursive: true);
 
     private IMemorySyncService Sut() => new MemorySyncService(
-        new FakeCatalog(_harness), new FakeTokens(() => SessionLookups.Of(_token)), _registry, _registry, _registry, _ledger, new FakeMachine(), _projects);
+        new FakeCatalog(_harness), new FakeTokens(() => SessionLookups.Of(_token)), _registry, _registry, _registry, _ledger, new FakeMachine(), _projects, _registry);
 
     private Task<MemoryPushResult> Push(string? sessionPath = null) =>
         Sut().PushAsync(new MemoryPushRequest(Registry, _root, sessionPath), CancellationToken.None);
 
     private string Folder(string directory) => Path.Combine(_root, "projects", _harness.ProjectFolderName(directory));
 
-    // A project folder for `directory`, holding a session transcript that records `cwd` (none when null).
+    // A project folder for `directory`, holding a session transcript that records `cwd` (none when null). The line is
+    // serialised, as Claude Code writes it, so a Windows path's backslashes are escaped and the transcript stays JSON.
     private string Project(string directory, string? cwd)
     {
         var folder = Folder(directory);
         Directory.CreateDirectory(folder);
         if (cwd is not null)
-            File.WriteAllText(Path.Combine(folder, Guid.NewGuid() + ".jsonl"), $"{{\"type\":\"user\",\"cwd\":\"{cwd}\"}}\n");
+            File.WriteAllText(Path.Combine(folder, Guid.NewGuid() + ".jsonl"), System.Text.Json.JsonSerializer.Serialize(new { type = "user", cwd }) + "\n");
         return folder;
     }
 
@@ -279,6 +280,250 @@ public sealed class MemorySyncTests : IDisposable
         Assert.Equal(2, _registry.MachineRegistrations);
     }
 
+    // ── pull ───────────────────────────────────────────────────────────────────────
+
+    private Task<MemoryPullResult> Pull(params string[] scan) =>
+        Sut().PullAsync(new MemoryPullRequest(Registry, _root, scan), CancellationToken.None);
+
+    // A real folder for a checkout, since a pull only resolves folders that exist.
+    private string Checkout(string name)
+    {
+        var directory = Path.Combine(_root, "checkouts", name);
+        Directory.CreateDirectory(directory);
+        return directory;
+    }
+
+    private string MemoryFile(string directory, string path) => Path.Combine(Folder(directory), "memory", path);
+
+    [Fact]
+    public async Task Pull_writes_a_projects_memory_into_the_folder_encoded_from_the_local_checkout_a_transcript_records()
+    {
+        var here = Checkout("protostar");
+        Project(here, here);
+        var project = _registry.RemoteProject("protostar", here, ("MEMORY.md", "index"), ("notes/port.md", "port 1234"));
+
+        var result = await Pull();
+
+        Assert.True(result.Complete);
+        Assert.Equal(2, result.Written);
+        Assert.Equal("index", File.ReadAllText(MemoryFile(here, "MEMORY.md")));
+        Assert.Equal("port 1234", File.ReadAllText(MemoryFile(here, "notes/port.md")));
+        Assert.Equal(project, _registry.ContentAsked.Single());
+    }
+
+    [Fact]
+    public async Task A_push_after_a_pull_sends_nothing_back()
+    {
+        var here = Checkout("protostar");
+        Project(here, here);
+        _registry.RemoteProject("protostar", here, ("MEMORY.md", "index"));
+        await Pull();
+        _registry.Calls = 0;
+
+        var push = await Push();
+
+        Assert.Empty(_registry.Pushes);
+        Assert.Equal(0, _registry.Calls);
+        Assert.Equal(1, Assert.Single(push.Folders).UpToDate);
+    }
+
+    [Fact]
+    public async Task A_project_with_no_checkout_here_is_reported_and_nothing_is_written_for_it()
+    {
+        var here = Checkout("alpha");
+        Project(here, here);
+        _registry.RemoteProject("alpha", here, ("MEMORY.md", "alpha"));
+        _registry.RemoteProject("beta", "/elsewhere/beta", ("MEMORY.md", "beta"));
+
+        var result = await Pull();
+
+        Assert.Equal("beta", Assert.Single(result.NotHere).ProjectName);
+        Assert.Equal("alpha", Assert.Single(result.Folders).ProjectName);
+        Assert.False(Directory.Exists(Folder("/elsewhere/beta")));
+    }
+
+    [Fact]
+    public async Task A_local_file_that_differs_from_the_registry_is_left_as_it_is_and_reported()
+    {
+        var here = Checkout("alpha");
+        var folder = Project(here, here);
+        Memory(folder, "MEMORY.md", "mine, newer");
+        _registry.RemoteProject("alpha", here, ("MEMORY.md", "theirs"), ("port.md", "1234"));
+
+        var result = await Pull();
+
+        Assert.Equal("mine, newer", File.ReadAllText(MemoryFile(here, "MEMORY.md")));
+        Assert.Equal("1234", File.ReadAllText(MemoryFile(here, "port.md")));
+        var note = Assert.Single(Assert.Single(result.Folders).Notes);
+        Assert.Equal(("MEMORY.md", MemoryPullNoteKind.DiffersFromRegistry), (note.Path, note.Kind));
+        Assert.True(result.Complete);
+    }
+
+    [Fact]
+    public async Task A_differing_local_file_is_still_backed_up_by_the_next_push_since_the_registry_never_confirmed_it()
+    {
+        var here = Checkout("alpha");
+        var folder = Project(here, here);
+        Memory(folder, "MEMORY.md", "mine");
+        _registry.RemoteProject("alpha", here, ("MEMORY.md", "theirs"));
+        await Pull();
+
+        await Push();
+
+        Assert.Equal(["MEMORY.md"], Assert.Single(_registry.Pushes).Files);
+    }
+
+    [Fact]
+    public async Task A_file_already_here_with_the_registrys_content_is_counted_and_recorded()
+    {
+        var here = Checkout("alpha");
+        var folder = Project(here, here);
+        Memory(folder, "MEMORY.md", "same");
+        _registry.RemoteProject("alpha", here, ("MEMORY.md", "same"));
+
+        var result = await Pull();
+        await Push();
+
+        Assert.Equal(1, Assert.Single(result.Folders).UpToDate);
+        Assert.Empty(_registry.Pushes);
+    }
+
+    [Fact]
+    public async Task Deletions_are_reported_and_never_applied_here()
+    {
+        var here = Checkout("alpha");
+        var folder = Project(here, here);
+        Memory(folder, "kept.md", "still here");
+        var project = _registry.RemoteProject("alpha", here, ("kept.md", "still here"), ("gone.md", "everywhere"), ("mine.md", "deleted here"));
+        _registry.MarkDeleted(project, "kept.md", "laptop", everywhere: false);
+        _registry.MarkDeleted(project, "gone.md", "laptop", everywhere: true);
+        _ledger.Save(new Uri(Registry), Path.GetFullPath(Path.Combine(folder, "memory")),
+            new Dictionary<string, MemoryLedgerEntry> { ["mine.md"] = new("x", 1, DateTimeOffset.UnixEpoch, 1, DateTimeOffset.UnixEpoch) });
+
+        var result = await Pull();
+
+        Assert.Equal("still here", File.ReadAllText(MemoryFile(here, "kept.md")));
+        Assert.False(File.Exists(MemoryFile(here, "gone.md")));
+        Assert.False(File.Exists(MemoryFile(here, "mine.md")));
+        var notes = Assert.Single(result.Folders).Notes.Select(n => (n.Path, n.Kind)).ToList();
+        Assert.Equal(
+            [("gone.md", MemoryPullNoteKind.DeletedEverywhere), ("kept.md", MemoryPullNoteKind.DeletedElsewhere), ("mine.md", MemoryPullNoteKind.DeletedHere)],
+            notes);
+        Assert.Equal(["laptop"], Assert.Single(result.Folders).Notes.Single(n => n.Path == "kept.md").Machines);
+    }
+
+    [Fact]
+    public async Task Two_checkouts_of_one_project_each_get_its_memory()
+    {
+        var first = Checkout("one");
+        var second = Checkout("two");
+        Project(first, first);
+        Project(second, second);
+        var project = _registry.RemoteProject("repo", first, ("MEMORY.md", "index"));
+        _registry.SameProject(second, project);
+
+        var result = await Pull();
+
+        Assert.Equal(2, result.Folders.Count);
+        Assert.True(File.Exists(MemoryFile(first, "MEMORY.md")));
+        Assert.True(File.Exists(MemoryFile(second, "MEMORY.md")));
+        Assert.Single(_registry.ContentAsked);
+    }
+
+    [Fact]
+    public async Task Memory_goes_to_the_main_worktrees_folder_when_the_transcript_is_from_a_linked_worktree()
+    {
+        var main = Checkout("beta");
+        var worktree = Checkout("beta-wt");
+        _projects.Worktree(worktree, main);
+        Project(worktree, worktree);
+        _registry.RemoteProject("beta", main, ("MEMORY.md", "beta"));
+
+        await Pull();
+
+        Assert.True(File.Exists(MemoryFile(main, "MEMORY.md")));
+        Assert.False(Directory.Exists(Path.Combine(Folder(worktree), "memory")));
+    }
+
+    [Fact]
+    public async Task A_transcript_of_a_folder_that_no_longer_exists_is_not_a_checkout()
+    {
+        var gone = Path.Combine(_root, "checkouts", "deleted");
+        Project(gone, gone);
+        _registry.RemoteProject("deleted", gone, ("MEMORY.md", "x"));
+
+        var result = await Pull();
+
+        Assert.Single(result.NotHere);
+        Assert.DoesNotContain(gone, _projects.Asked);
+    }
+
+    [Fact]
+    public async Task Scan_finds_a_checkout_the_harness_has_never_opened()
+    {
+        var parent = Path.Combine(_root, "src");
+        var repo = Path.Combine(parent, "gamma");
+        Directory.CreateDirectory(Path.Combine(repo, ".git"));
+        Directory.CreateDirectory(Path.Combine(parent, "not-a-repo"));
+        _registry.RemoteProject("gamma", repo, ("MEMORY.md", "gamma"));
+
+        var result = await Pull(parent);
+
+        Assert.Equal(1, result.Written);
+        Assert.True(File.Exists(MemoryFile(repo, "MEMORY.md")));
+        Assert.DoesNotContain(Path.Combine(parent, "not-a-repo"), _projects.Asked);
+    }
+
+    [Fact]
+    public async Task A_path_that_leaves_the_memory_folder_or_content_that_fails_its_hash_is_refused()
+    {
+        var here = Checkout("alpha");
+        Project(here, here);
+        var project = _registry.RemoteProject("alpha", here, ("../escape.md", "x"), ("ok.md", "fine"), ("tampered.md", "y"));
+        _registry.Tamper(project, "tampered.md");
+
+        var result = await Pull();
+
+        Assert.False(File.Exists(Path.Combine(Folder(here), "escape.md")));
+        Assert.False(File.Exists(MemoryFile(here, "tampered.md")));
+        Assert.True(File.Exists(MemoryFile(here, "ok.md")));
+        Assert.Equal(
+            [("../escape.md", MemoryPullNoteKind.Refused), ("tampered.md", MemoryPullNoteKind.Refused)],
+            Assert.Single(result.Folders).Notes.Select(n => (n.Path, n.Kind)));
+    }
+
+    [Fact]
+    public async Task A_memory_folder_that_is_a_symbolic_link_is_never_written_through()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+        var here = Checkout("alpha");
+        var folder = Project(here, here);
+        var elsewhere = Directory.CreateDirectory(Path.Combine(_root, "elsewhere")).FullName;
+        Directory.CreateSymbolicLink(Path.Combine(folder, "memory"), elsewhere);
+        _registry.RemoteProject("alpha", here, ("MEMORY.md", "x"));
+
+        var result = await Pull();
+
+        Assert.NotNull(Assert.Single(result.Folders).Error);
+        Assert.Empty(Directory.GetFiles(elsewhere));
+        Assert.False(result.Complete);
+    }
+
+    [Fact]
+    public async Task Pull_signed_out_fails_before_writing_anything()
+    {
+        var here = Checkout("alpha");
+        Project(here, here);
+        _registry.RemoteProject("alpha", here, ("MEMORY.md", "x"));
+        _token = null;
+
+        var result = await Pull();
+
+        Assert.Equal(SessionSyncFailure.NotLoggedIn, result.Failure);
+        Assert.False(File.Exists(MemoryFile(here, "MEMORY.md")));
+    }
+
     [Theory]
     [InlineData("/home/me/src/protostar", "-home-me-src-protostar")]
     [InlineData(@"C:\Users\Blake\source\repos\protostar", "C--Users-Blake-source-repos-protostar")]
@@ -288,9 +533,69 @@ public sealed class MemorySyncTests : IDisposable
 
     // ── fakes ──────────────────────────────────────────────────────────────────────
 
-    private sealed class FakeRegistry : IRegistryApi, ITranscriptApi, IMemoryApi
+    private sealed class FakeRegistry : IRegistryApi, ITranscriptApi, IMemoryApi, IProjectApi
     {
         private readonly Dictionary<(string Folder, string Path), (List<string> Versions, bool Deleted)> _files = [];
+        private readonly Dictionary<Guid, (string Name, List<RemoteMemoryFile> Files)> _remote = [];
+        private readonly Dictionary<string, Guid> _folders = new(StringComparer.Ordinal);
+
+        public List<Guid> ContentAsked { get; } = [];
+
+        /// <summary>A project with memory whose checkouts resolve by <paramref name="folder"/> (their main worktree).</summary>
+        public Guid RemoteProject(string name, string folder, params (string Path, string Text)[] files)
+        {
+            var id = Guid.NewGuid();
+            _remote[id] = (name, [.. files.Select(f =>
+            {
+                var bytes = Encoding.UTF8.GetBytes(f.Text);
+                return new RemoteMemoryFile { Path = f.Path, Version = 1, Sha256 = Convert.ToHexString(SHA256.HashData(bytes)), Content = bytes };
+            })]);
+            _folders[folder] = id;
+            return id;
+        }
+
+        public void SameProject(string folder, Guid project) => _folders[folder] = project;
+
+        public void MarkDeleted(Guid project, string path, string machine, bool everywhere) =>
+            Replace(project, path, f => f with { DeletedEverywhere = everywhere, DeletedOn = [new RemoteMemoryCopy { MachineName = machine, Folder = "/laptop/repo" }] });
+
+        public void Tamper(Guid project, string path) => Replace(project, path, f => f with { Content = [.. f.Content, (byte)'!'] });
+
+        private void Replace(Guid project, string path, Func<RemoteMemoryFile, RemoteMemoryFile> change)
+        {
+            var files = _remote[project].Files;
+            var index = files.FindIndex(f => f.Path == path);
+            files[index] = change(files[index]);
+        }
+
+        public Task<ApiResult<IReadOnlyList<RemoteMemoryProject>>> ListMemoryProjectsAsync(Uri registry, string accessToken, CancellationToken cancellationToken)
+        {
+            Calls++;
+            return Task.FromResult(ApiResult<IReadOnlyList<RemoteMemoryProject>>.Success(
+                [.. _remote.Select(r => new RemoteMemoryProject { ProjectId = r.Key, ProjectName = r.Value.Name, Files = r.Value.Files.Count })]));
+        }
+
+        public Task<ApiResult<RemoteMemoryContent>> GetMemoryContentAsync(Uri registry, string accessToken, Guid projectId, CancellationToken cancellationToken)
+        {
+            Calls++;
+            ContentAsked.Add(projectId);
+            var (name, files) = _remote[projectId];
+            return Task.FromResult(ApiResult<RemoteMemoryContent>.Success(new RemoteMemoryContent { ProjectId = projectId, ProjectName = name, Files = files }));
+        }
+
+        public Task<ApiResult<RemoteProject>> ResolveProjectAsync(Uri registry, string accessToken, Guid machineId, ProjectFacts facts, CancellationToken cancellationToken)
+        {
+            Calls++;
+            var folder = facts.MainWorktree ?? facts.Directory;
+            return Task.FromResult(ApiResult<RemoteProject>.Success(
+                new RemoteProject { ProjectId = _folders.TryGetValue(folder, out var id) ? id : null, Folder = folder }));
+        }
+
+        public Task<ApiResult<ProjectLinkChange>> LinkFolderAsync(Uri registry, string accessToken, Guid machineId, ProjectFacts facts, string project, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
+        public Task<ApiResult<ProjectLinkChange>> UnlinkFolderAsync(Uri registry, string accessToken, Guid machineId, ProjectFacts facts, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
 
         public int Calls { get; set; }
         public int MachineRegistrations { get; private set; }

@@ -31,8 +31,9 @@ $ protostar --version, -v   # print the version (e.g. 0.1.0)
 ## `protostar setup`
 
 Set up this machine in one step: sign in, install capture hooks, back up this
-machine's skills and then pull the registry's, and offer to back up existing
-sessions. Prints one line per step (done, already
+machine's skills and then pull the registry's, bring your agents' memory to the
+projects checked out here (as [`memory pull`](#protostar-memory-pull) does), and
+offer to back up existing sessions. Prints one line per step (done, already
 done, skipped, or failed) and is safe to run again. Exits `0` unless a step
 failed.
 
@@ -512,7 +513,8 @@ $ protostar sessions list --json -n 1
 
 ## `protostar memory`
 
-Back up the memory your agents keep about each project. Claude Code keeps it in
+Back up the memory your agents keep about each project, and bring it to the same
+project on another machine. Claude Code keeps it in
 `<config root>/projects/<folder>/memory/`, one markdown file per note plus a
 `MEMORY.md` index. Each memory folder is filed under the
 [project](../guides/projects.md) of the checkout it belongs to, found from the
@@ -520,7 +522,7 @@ working directory a session transcript in the same folder records (the folder's
 name is never decoded), so memory and sessions share a project. `protostar memory`
 on its own prints its help.
 
-Both commands take:
+Every subcommand takes:
 
 | Option | Description |
 |---|---|
@@ -576,6 +578,54 @@ Memory for 2 projects on this machine, 5 files. All backed up.
 ```
 
 The exit code is `0` when nothing is pending and `1` while anything is.
+
+### `protostar memory pull`
+
+Bring the registry's memory to each project checked out on this machine, so a new
+agent session there starts with what was learned elsewhere, even at a different
+path or on another OS.
+
+The registry knows a project by its facts (root commit, remotes), not by where it
+is on this machine, so pull looks for local checkouts in two places only:
+
+- the working directories your harness's session transcripts record (every folder
+  you have opened in Claude Code here);
+- folders you name with `--scan <DIR>` (repeatable), and their direct subfolders
+  that are git checkouts. No deeper, and the disk is never crawled.
+
+Each checkout is matched to a project the same way its sessions are (see
+[projects](../guides/projects.md)). Memory is written to the memory folder of the
+checkout's main worktree, named by encoding its path the way Claude Code does, and
+created when Claude Code has never opened the project here. Two checkouts of one
+project at different paths each get the memory.
+
+Pull never overwrites or deletes a local file:
+
+- a file already here with other content is left as it is and reported as
+  differing from the registry;
+- a file you deleted here is not brought back;
+- a file deleted on every machine is not written; one deleted on another machine
+  but present here is kept and reported.
+
+Files are written through a temporary file and a move, never through a symbolic
+link, and only inside the memory folder. Each file written is recorded as backed
+up, so the next `memory push` does not send it back. Projects with memory but no
+checkout here are listed as skipped.
+
+```console
+$ protostar memory pull
+Pulled memory for 1 project: 2 written, 0 already here, 1 kept because they differ from the registry, 1 project not on this machine.
+  alpha /home/alice/work/alpha: 2 written, 0 already here (/home/alice/.claude/projects/-home-alice-work-alpha/memory)
+    MEMORY.md: differs from the registry; kept as it is here.
+  Skipped beta: not on this machine. Clone it, open it in your harness or name its folder with --scan, then pull again.
+```
+
+| Option | Description |
+|---|---|
+| `--scan <DIR>` | Also look for checkouts in this folder and its direct subfolders. Repeatable. |
+
+The exit code is `0` unless a memory folder could not be written. Kept files and
+skipped projects do not fail the pull.
 
 ## `protostar project`
 

@@ -118,11 +118,13 @@ app.Configure(config =>
 
     config.AddBranch(Named("memory"), memory =>
     {
-        memory.SetDescription("Back up the memory your agents keep about each project, and see what is not backed up.");
+        memory.SetDescription("Back up the memory your agents keep about each project, bring it to this machine, and see what is not backed up.");
         memory.AddCommand<MemoryPushCommand>("push")
             .WithDescription("Back up the agent memory on this machine to the registry: only what changed, and deletions as markers.");
         memory.AddCommand<MemoryStatusCommand>("status")
             .WithDescription("Show which memory files are not backed up. Works offline; exits 1 while anything is pending.");
+        memory.AddCommand<MemoryPullCommand>("pull")
+            .WithDescription("Bring the registry's memory to the checkouts of each project on this machine, never over a local file.");
     });
 
     // Not AddBranch<ProjectSettings>: branch settings bind only before the subcommand, so `project link x --dir y`

@@ -1,26 +1,28 @@
 using Protostar.Cli.Auth;
 using Protostar.Cli.Hooks;
+using Protostar.Cli.Memory;
 using Protostar.Cli.Sessions;
 using Protostar.Cli.Skills;
 
 namespace Protostar.Cli.Setup;
 
-/// <summary>Gets a machine ready in one run: sign in, install hooks, push and pull skills, and back up sessions.</summary>
+/// <summary>Gets a machine ready in one run: sign in, install hooks, push and pull skills, pull memory, and back up sessions.</summary>
 /// <remarks>
 /// Backs <c>protostar setup</c>. Each step calls the same service its own command does (<see cref="ISignInService"/>,
 /// <see cref="IHookInstallService"/>, <see cref="ISkillPushService"/> and <see cref="ISkillPullService"/>,
-/// <see cref="ISessionSyncService"/>), so setup has
+/// <see cref="IMemorySyncService"/>, <see cref="ISessionSyncService"/>), so setup has
 /// no second implementation of any of them. Every step is idempotent, so running setup again changes nothing and says so.
 /// </remarks>
 internal interface ISetupService
 {
     /// <summary>Runs every step in order, reporting each through <paramref name="interaction"/> as it finishes.</summary>
     /// <remarks>
-    /// The order is fixed: sign-in, hooks, skills, configuration, sessions. Hooks go in before skills are pulled so a
+    /// The order is fixed: sign-in, hooks, skills, memory, configuration, sessions. Hooks go in before skills are pulled so a
     /// skill used the moment it lands is already captured; the pull records each skill in the ledger, so that capture
     /// recognises it as unchanged and does not push it straight back. Within the skills step this machine's skills are
     /// pushed before the registry's are pulled, so a skill changed here is backed up rather than kept back by the pull
-    /// as a local change. A step that needs the registry is skipped when
+    /// as a local change. Memory is pulled after hooks for the same reason as skills: the pull records each file it
+    /// writes in the memory ledger, so the hooks' background push does not send it back. A step that needs the registry is skipped when
     /// sign-in did not succeed. Every step runs even when an earlier one failed, so one run reports everything.
     /// </remarks>
     Task<SetupResult> RunAsync(SetupRequest request, SetupInteraction interaction, CancellationToken cancellationToken);
@@ -51,6 +53,9 @@ internal enum SetupStep
     SignIn,
     Hooks,
     Skills,
+
+    /// <summary>Bringing the registry's memory to this machine's checkouts.</summary>
+    Memory,
 
     /// <summary>Harness configuration sync (epic E4); not available yet, so always skipped.</summary>
     Configuration,
@@ -129,6 +134,9 @@ internal sealed record SetupStepResult(SetupStep Step, SetupOutcome Outcome, Set
 
     /// <summary>The skill pull, for <see cref="SetupStep.Skills"/>.</summary>
     public SkillPullRunResult? Skills { get; init; }
+
+    /// <summary>The memory pull, for <see cref="SetupStep.Memory"/> when signed in.</summary>
+    public MemoryPullResult? MemoryPull { get; init; }
 
     /// <summary>The offline backup status, for <see cref="SetupStep.Sessions"/>.</summary>
     public SessionStatusResult? SessionStatus { get; init; }

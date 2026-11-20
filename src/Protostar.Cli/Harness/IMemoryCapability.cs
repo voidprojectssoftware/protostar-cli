@@ -23,6 +23,10 @@ internal interface IMemoryCapability
     /// <summary>The name the harness gives the project folder of <paramref name="directory"/>.</summary>
     /// <remarks>Encodes forward only. Used to check that a folder belongs to a known path, never to turn a name back into one.</remarks>
     string ProjectFolderName(string directory);
+
+    /// <summary>The memory folder the harness would use for <paramref name="directory"/> under <paramref name="location"/>, whether or not it exists yet.</summary>
+    /// <remarks>Built by encoding forward with <see cref="ProjectFolderName"/>; pass the main worktree for git, as the harness keys memory by it.</remarks>
+    string MemoryFolderFor(HarnessLocation location, string directory);
 }
 
 /// <summary>One of a harness's per-project folders.</summary>

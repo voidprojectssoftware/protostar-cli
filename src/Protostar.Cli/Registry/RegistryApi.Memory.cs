@@ -25,4 +25,33 @@ internal sealed partial class RegistryApi : IMemoryApi
             ? ApiResult<MemoryPushResponse>.Fail("This registry cannot back up memory yet. Update the registry.")
             : result;
     }
+
+    /// <inheritdoc />
+    public async Task<ApiResult<IReadOnlyList<RemoteMemoryProject>>> ListMemoryProjectsAsync(Uri registry, string accessToken, CancellationToken cancellationToken)
+    {
+        using var request = Request(HttpMethod.Get, registry, "/v1/memory", accessToken);
+        var result = await SendAsync<IReadOnlyList<RemoteMemoryProject>>(
+            request,
+            async response => await response.Content.ReadFromJsonAsync<RemoteMemoryProject[]>(TranscriptJson.Options) ?? [],
+            cancellationToken);
+        return result.Error == Describe(System.Net.HttpStatusCode.NotFound)
+            ? ApiResult<IReadOnlyList<RemoteMemoryProject>>.Fail(TooOldToPull)
+            : result;
+    }
+
+    /// <inheritdoc />
+    public async Task<ApiResult<RemoteMemoryContent>> GetMemoryContentAsync(Uri registry, string accessToken, Guid projectId, CancellationToken cancellationToken)
+    {
+        using var request = Request(HttpMethod.Get, registry, $"/v1/memory/{projectId}/content", accessToken);
+        var result = await SendAsync(
+            request,
+            async response => await response.Content.ReadFromJsonAsync<RemoteMemoryContent>(TranscriptJson.Options) ?? throw new System.Text.Json.JsonException("Empty response."),
+            cancellationToken);
+        // An unknown project carries a problem title; only a registry without the route answers a bare 404.
+        return result.Error == Describe(System.Net.HttpStatusCode.NotFound)
+            ? ApiResult<RemoteMemoryContent>.Fail(TooOldToPull)
+            : result;
+    }
+
+    private const string TooOldToPull = "This registry cannot bring memory to this machine yet. Update the registry.";
 }
