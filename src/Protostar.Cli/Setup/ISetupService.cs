@@ -66,6 +66,14 @@ internal enum SetupOutcome
     /// <summary>Nothing needed changing.</summary>
     AlreadyDone,
 
+    /// <summary>The step ran, but something it found is left for the user to choose; see <see cref="SetupStepResult.SkillDecisions"/>.</summary>
+    /// <remarks>
+    /// Not a failure: running setup again cannot settle it, only the user's choice can, so it does not change the exit code.
+    /// It takes precedence over <see cref="Done"/> and <see cref="AlreadyDone"/>, so the step never reads as finished while
+    /// a choice is open.
+    /// </remarks>
+    NeedsDecision,
+
     /// <summary>Not run; see <see cref="SetupStepResult.Skip"/>.</summary>
     Skipped,
 
@@ -130,6 +138,15 @@ internal sealed record SetupStepResult(SetupStep Step, SetupOutcome Outcome, Set
 
     /// <summary>The backup, for <see cref="SetupStep.Sessions"/> when one ran.</summary>
     public SessionSyncResult? Backup { get; init; }
+
+    /// <summary>The skills the pull kept or left alone that only the user can settle, in pull order; empty for other steps.</summary>
+    /// <remarks>
+    /// Changed here and in the registry, deleted or renamed in the registry but kept here, kept for local changes the push
+    /// did not back up, and a conflict with a folder or a same-name twin. None of them changes on a second run.
+    /// </remarks>
+    public IReadOnlyList<SkillPullEntry> SkillDecisions =>
+        Skills?.Entries.Where(e => e.Status is SkillPullStatus.ChangedBoth or SkillPullStatus.RemovedInRegistry
+            or SkillPullStatus.LocalChanges or SkillPullStatus.Conflict).ToList() ?? [];
 }
 
 /// <summary>Every step's outcome, in order.</summary>
@@ -140,6 +157,9 @@ internal sealed record SetupResult(Uri? Registry, string? InvalidRegistry, IRead
     /// <summary>True when the run went ahead and no step failed. A skipped step is not a failure.</summary>
     public bool Succeeded => InvalidRegistry is null && Steps.All(s => s.Outcome != SetupOutcome.Failed);
 
-    /// <summary>True when the run changed nothing: no step did any work and none failed.</summary>
-    public bool NothingChanged => Succeeded && Steps.All(s => s.Outcome is not SetupOutcome.Done);
+    /// <summary>True when the run changed nothing and left nothing open: every step was already done or skipped.</summary>
+    public bool NothingChanged => Succeeded && Steps.All(s => s.Outcome is SetupOutcome.AlreadyDone or SetupOutcome.Skipped);
+
+    /// <summary>How many skills need the user's decision, across every step.</summary>
+    public int SkillDecisions => Steps.Sum(s => s.SkillDecisions.Count);
 }

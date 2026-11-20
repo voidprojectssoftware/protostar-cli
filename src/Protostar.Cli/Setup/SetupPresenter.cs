@@ -10,7 +10,7 @@ namespace Protostar.Cli.Setup;
 
 /// <summary>The console face of <see cref="ISetupService"/>: one line per step as it finishes, the backup prompt and progress, and the closing line.</summary>
 /// <remarks>
-/// Each step line reads "Label: done", "already done", "skipped" or "failed", then what happened. Failure wording comes
+/// Each step line reads "Label: done", "already done", "needs a decision", "skipped" or "failed", then what happened. Failure wording comes
 /// from the presenters of the commands each step shares a service with, so a failure reads the same either way.
 /// </remarks>
 internal static class SetupPresenter
@@ -36,6 +36,7 @@ internal static class SetupPresenter
         (harnessHome is { Length: > 0 } ? $" --harness-home {Quote(harnessHome)}" : string.Empty);
 
     /// <summary>Prints the closing line and returns the exit code: 0 when no step failed, otherwise 1.</summary>
+    /// <remarks>A skill that needs a decision leaves the exit code at 0, like a skipped step, but the line never says the machine is already set up while one does.</remarks>
     public static int Render(SetupResult result)
     {
         if (result.InvalidRegistry is { } invalid)
@@ -47,9 +48,13 @@ internal static class SetupPresenter
         var failed = result.Steps.Count(s => s.Outcome == SetupOutcome.Failed);
         // Configuration is skipped on every run until it exists, so it does not make a run "partly set up".
         var skipped = result.Steps.Count(s => s.Outcome == SetupOutcome.Skipped && s.Skip != SetupSkip.NotAvailableYet);
+        var decisions = result.SkillDecisions;
+        var needDecision = decisions == 1 ? "1 skill needs a decision" : $"{decisions} skills need a decision";
+        var alsoDecisions = decisions > 0 ? $" [yellow]{needDecision}[/]; the Skills step says how to settle {(decisions == 1 ? "it" : "each")}." : "";
         AnsiConsole.MarkupLine(
-            failed > 0 ? $"[red]Setup finished with {failed} failed step{(failed == 1 ? "" : "s")}.[/] Fix it and run `protostar setup` again; finished steps are not repeated."
-            : skipped > 0 ? $"[yellow]Setup finished; {skipped} step{(skipped == 1 ? " was" : "s were")} skipped.[/] See above for how to finish {(skipped == 1 ? "it" : "them")}."
+            failed > 0 ? $"[red]Setup finished with {failed} failed step{(failed == 1 ? "" : "s")}.[/] Fix it and run `protostar setup` again; finished steps are not repeated.{alsoDecisions}"
+            : skipped > 0 ? $"[yellow]Setup finished; {skipped} step{(skipped == 1 ? " was" : "s were")} skipped.[/] See above for how to finish {(skipped == 1 ? "it" : "them")}.{alsoDecisions}"
+            : decisions > 0 ? $"[yellow]Set up, but {needDecision}.[/] The Skills step above says how to settle {(decisions == 1 ? "it" : "each one")}."
             : result.NothingChanged ? "[green]This machine is already set up.[/] Nothing changed."
             : "[green]This machine is set up.[/] Running `protostar setup` again changes nothing.");
         return failed > 0 ? 1 : 0;
@@ -69,6 +74,7 @@ internal static class SetupPresenter
         {
             SetupOutcome.Done => "[green]done[/]",
             SetupOutcome.AlreadyDone => "[green]already done[/]",
+            SetupOutcome.NeedsDecision => "[yellow]needs a decision[/]",
             SetupOutcome.Skipped => "[yellow]skipped[/]",
             _ => "[red]failed[/]",
         };
@@ -151,21 +157,42 @@ internal static class SetupPresenter
             (Of(SkillPullStatus.FollowedRename) is > 0 and var followed ? $", {followed} renamed here to follow the registry" : "") +
             (Of(SkillPullStatus.RemovedInRegistry) is > 0 and var gone ? $", [yellow]{gone} kept although deleted or renamed in the registry[/]" : "") + ".";
 
-        // Condensed: one line per skill that changed or needs attention. Up-to-date and other projects' skills are only counted.
+        // Condensed: one line per skill that changed, capped. Up-to-date and other projects' skills are only counted.
+        // Every skill that needs a decision is listed, uncapped, with its way out, since setup cannot settle it.
         var showHarness = result.Entries.Select(e => e.Harness.Id).Distinct().Count() > 1;
-        var notable = result.Entries.Where(e => e.Status is not (SkillPullStatus.UpToDate or SkillPullStatus.OtherProject)).ToList();
+        string Line(SkillPullEntry e) =>
+            (showHarness ? $"[grey]{Markup.Escape(e.Harness.Id)}[/] " : "") +
+            Markup.Escape(e.Project is { } project ? $"{e.Name} ({project})" : e.Name) + ": " + SkillPullPresenter.Describe(e);
+        var decisions = step.SkillDecisions;
+        var changed = result.Entries.Where(e => e.Status is not (SkillPullStatus.UpToDate or SkillPullStatus.OtherProject) && !decisions.Contains(e)).ToList();
         var lines = new List<string> { $"{pushed} {summary}" };
         lines.AddRange(pushLines);
-        lines.AddRange(notable.Take(MaxSkillLines).Select(e =>
-            (showHarness ? $"[grey]{Markup.Escape(e.Harness.Id)}[/] " : "") +
-            Markup.Escape(e.Project is { } project ? $"{e.Name} ({project})" : e.Name) + ": " + SkillPullPresenter.Describe(e)));
-        if (notable.Count > MaxSkillLines)
-            lines.Add($"[grey]... and {notable.Count - MaxSkillLines} more. `protostar skills remote` lists them all.[/]");
-        if (Of(SkillPullStatus.LocalChanges) > 0)
-            lines.Add("[grey]Back up local changes with `protostar skills push`, or overwrite them with `protostar skills pull --force`.[/]");
-        if (Of(SkillPullStatus.ChangedBoth) > 0 || step.SkillPush!.Entries.Any(e => e.Outcome.Status == SkillPushStatus.Stale))
-            lines.Add("[grey]`protostar skills remote` shows how to keep yours, theirs, or both.[/]");
+        lines.AddRange(changed.Take(MaxSkillLines).Select(Line));
+        if (changed.Count > MaxSkillLines)
+            lines.Add($"[grey]... and {changed.Count - MaxSkillLines} more. `protostar skills remote` lists them all.[/]");
+        foreach (var decision in decisions)
+        {
+            lines.Add(Line(decision));
+            if (WayOut(decision) is { } wayOut)
+                lines.Add($"  {wayOut}");
+        }
         return lines;
+    }
+
+    // The way out of a decision whose pull message does not already give it. A conflict's and a removed skill's
+    // message say what to do; changed both ways and local changes come with no message.
+    private static string? WayOut(SkillPullEntry entry)
+    {
+        var name = Markup.Escape(entry.Name.Any(char.IsWhiteSpace) ? $"\"{entry.Name}\"" : entry.Name);
+        return entry.Status switch
+        {
+            SkillPullStatus.ChangedBoth =>
+                $"Keep yours: [blue]protostar skills push {name} --force[/]; theirs: [blue]protostar skills pull {name} --force[/]; " +
+                $"both: [blue]protostar skills push {name} --as NEW-NAME[/].",
+            SkillPullStatus.LocalChanges =>
+                $"Back it up: [blue]protostar skills push {name}[/]; or overwrite it: [blue]protostar skills pull {name} --force[/].",
+            _ => null,
+        };
     }
 
     // The push's summary sentence, and one line per skill it pushed or could not back up. A skill refused as changed here
