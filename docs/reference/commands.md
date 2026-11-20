@@ -22,8 +22,9 @@ $ protostar --version, -v   # print the version (e.g. 0.1.0)
 
 ## `protostar setup`
 
-Set up this machine in one step: sign in, install capture hooks, pull skills,
-and offer to back up existing sessions. Prints one line per step (done, already
+Set up this machine in one step: sign in, install capture hooks, back up this
+machine's skills and then pull the registry's, and offer to back up existing
+sessions. Prints one line per step (done, already
 done, skipped, or failed) and is safe to run again. Exits `0` unless a step
 failed.
 

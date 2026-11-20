@@ -60,7 +60,7 @@ app.Configure(config =>
     config.SetApplicationVersion(CliInfo.Version);
 
     config.AddCommand<SetupCommand>("setup")
-        .WithDescription("Set up this machine in one step: sign in, install hooks, pull skills, and back up sessions. Safe to run again.");
+        .WithDescription("Set up this machine in one step: sign in, install hooks, push and pull skills, and back up sessions. Safe to run again.");
     config.AddCommand<InstallCommand>("install")
         .WithDescription("Install protostar to a per-user directory and add it to PATH.");
     config.AddCommand<UninstallCommand>("uninstall")

@@ -19,6 +19,7 @@ public sealed class SetupServiceTests
 
     private readonly FakeSignIn _signIn = new();
     private readonly FakeHooks _hooks = new();
+    private readonly FakePush _push = new();
     private readonly FakeSkills _skills = new();
     private readonly FakeSessions _sessions = new();
     private readonly FakeDefaultRegistry _defaultRegistry = new();
@@ -29,7 +30,7 @@ public sealed class SetupServiceTests
 
     public SetupServiceTests()
     {
-        _signIn.Calls = _hooks.Calls = _skills.Calls = _sessions.Calls = _calls;
+        _signIn.Calls = _hooks.Calls = _push.Calls = _skills.Calls = _sessions.Calls = _calls;
     }
 
     [Fact]
@@ -61,10 +62,61 @@ public sealed class SetupServiceTests
     }
 
     [Fact]
+    public async Task This_machines_skills_are_pushed_before_the_registrys_are_pulled()
+    {
+        await Run(yes: true);
+
+        Assert.True(_calls.IndexOf("push") < _calls.IndexOf("pull"), string.Join(", ", _calls));
+        var request = Assert.Single(_push.Requests);
+        Assert.Empty(request.Names);
+        Assert.False(request.Force);
+        Assert.False(request.FromHook);
+        Assert.Equal("/harness", request.HarnessHome);
+    }
+
+    [Fact]
+    public async Task A_pushed_skill_alone_makes_the_skills_step_done()
+    {
+        _push.Status = SkillPushStatus.Created;
+        _skills.Status = SkillPullStatus.UpToDate;
+
+        var result = await Run(yes: true);
+
+        Assert.Equal(SetupOutcome.Done, result.Steps[2].Outcome);
+        Assert.Equal(SkillPushStatus.Created, Assert.Single(result.Steps[2].SkillPush!.Entries).Outcome.Status);
+    }
+
+    [Fact]
+    public async Task A_push_refused_as_stale_is_reported_and_does_not_fail_setup()
+    {
+        _push.Status = SkillPushStatus.Stale;
+        _skills.Status = SkillPullStatus.ChangedBoth;
+
+        var result = await Run(yes: true);
+
+        Assert.Equal(SetupOutcome.AlreadyDone, result.Steps[2].Outcome);
+        Assert.Equal(SkillPushStatus.Stale, Assert.Single(result.Steps[2].SkillPush!.Entries).Outcome.Status);
+        Assert.True(result.Succeeded);
+    }
+
+    [Fact]
+    public async Task A_push_that_could_not_run_fails_the_skills_step_but_the_pull_still_runs()
+    {
+        _push.Failure = SkillPushRunFailure.RegistryUnreachable;
+
+        var result = await Run(yes: true);
+
+        Assert.Equal(SetupOutcome.Failed, result.Steps[2].Outcome);
+        Assert.Contains("pull", _calls);
+        Assert.NotNull(result.Steps[2].Skills);
+    }
+
+    [Fact]
     public async Task A_second_run_reports_every_step_already_done_and_changes_nothing()
     {
         _signIn.Verification = SessionVerification.Verified;
         _hooks.Change = HookChange.Unchanged;
+        _push.Status = SkillPushStatus.Unchanged;
         _skills.Status = SkillPullStatus.UpToDate;
         _sessions.Pending(("s1", TranscriptKind.Session, null, 0));
 
@@ -114,6 +166,7 @@ public sealed class SetupServiceTests
         Assert.Equal((SetupOutcome.Skipped, SetupSkip.NotSignedIn), (result.Steps[2].Outcome, result.Steps[2].Skip));
         Assert.Equal((SetupOutcome.Skipped, SetupSkip.NotSignedIn), (result.Steps[4].Outcome, result.Steps[4].Skip));
         Assert.DoesNotContain("pull", _calls);
+        Assert.DoesNotContain("push", _calls);
         Assert.DoesNotContain("sync", _calls);
         Assert.False(result.Succeeded);
     }
@@ -224,7 +277,7 @@ public sealed class SetupServiceTests
     [Fact]
     public async Task An_invalid_registry_stops_before_any_step()
     {
-        var service = new SetupService(_signIn, _hooks, _skills, _sessions, _defaultRegistry);
+        var service = new SetupService(_signIn, _hooks, _push, _skills, _sessions, _defaultRegistry);
         var request = new SetupRequest("not a url", null, new SignInOptions(null, false, TimeSpan.FromMinutes(5)), true, false, null);
 
         var result = await service.RunAsync(request, Interaction(), CancellationToken.None);
@@ -239,7 +292,7 @@ public sealed class SetupServiceTests
     {
         _calls.Clear();
         _reported.Clear();
-        var service = new SetupService(_signIn, _hooks, _skills, _sessions, _defaultRegistry);
+        var service = new SetupService(_signIn, _hooks, _push, _skills, _sessions, _defaultRegistry);
         var request = new SetupRequest(Registry, "/harness", new SignInOptions("dev", true, TimeSpan.FromMinutes(5)), yes, canAsk, null);
         return await service.RunAsync(request, Interaction(), CancellationToken.None);
     }
@@ -317,6 +370,25 @@ public sealed class SetupServiceTests
         }
 
         public HookRunResult Uninstall(HookInstallOptions opts, HarnessSelector? select = null) => throw new NotSupportedException();
+    }
+
+    private sealed class FakePush : ISkillPushService
+    {
+        public List<string> Calls { get; set; } = [];
+        public List<SkillPushRequest> Requests { get; } = [];
+        public SkillPushStatus Status { get; set; } = SkillPushStatus.Unchanged;
+        public SkillPushRunFailure Failure { get; set; } = SkillPushRunFailure.None;
+
+        public Task<SkillPushRunResult> PushAsync(SkillPushRequest request, CancellationToken cancellationToken)
+        {
+            Calls.Add("push");
+            Requests.Add(request);
+            var registry = new Uri(Registry);
+            var skill = new DiscoveredSkill { Name = "greet", Scope = SkillScope.Global, Path = "/harness/skills/greet" };
+            return Task.FromResult(Failure != SkillPushRunFailure.None
+                ? SkillPushRunResult.Fail(Failure, null, registry)
+                : new SkillPushRunResult(SkillPushRunFailure.None, null, registry, [new SkillPushEntry(skill, new SkillPushOutcome(Status, 1, null))]));
+        }
     }
 
     private sealed class FakeSkills : ISkillPullService

@@ -8,7 +8,7 @@ using Spectre.Console.Cli;
 
 namespace Protostar.Cli.Commands;
 
-/// <summary><c>protostar setup</c>: signs in, installs hooks, pulls skills and backs up sessions, idempotently.</summary>
+/// <summary><c>protostar setup</c>: signs in, installs hooks, pushes and pulls skills and backs up sessions, idempotently.</summary>
 /// <remarks>The steps are in <see cref="SetupService"/> and the output in <see cref="SetupPresenter"/>.</remarks>
 internal sealed class SetupCommand : AsyncCommand<SetupCommand.Settings>
 {

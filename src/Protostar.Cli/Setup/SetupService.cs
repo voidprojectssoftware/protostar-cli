@@ -1,29 +1,33 @@
 using Protostar.Cli.Auth;
 using Protostar.Cli.Harness;
 using Protostar.Cli.Hooks;
+using Protostar.Cli.Registry;
 using Protostar.Cli.Sessions;
 using Protostar.Cli.Skills;
 
 namespace Protostar.Cli.Setup;
 
-/// <summary>Production <see cref="ISetupService"/>: composes the sign-in, hook, skill-pull and session services.</summary>
+/// <summary>Production <see cref="ISetupService"/>: composes the sign-in, hook, skill push and pull, and session services.</summary>
 /// <remarks>
-/// Each step only classifies the result of the service it calls: <see cref="SetupOutcome.Done"/> when that result
+/// Each step only classifies the result of the services it calls: <see cref="SetupOutcome.Done"/> when that result
 /// shows a change, <see cref="SetupOutcome.AlreadyDone"/> when it shows none. Hooks are installed into every detected
-/// harness without prompting, as <c>install-hooks --yes</c> does, and skills are pulled with the same conflict and
-/// local-changes rules as <c>skills pull</c> (never <c>--force</c>).
+/// harness without prompting, as <c>install-hooks --yes</c> does. Skills are pushed and then pulled with the same rules
+/// as <c>skills push</c> and <c>skills pull</c> (never <c>--force</c>), so a refused push or a conflict is reported and
+/// left for the user to resolve, never overwritten.
 /// </remarks>
 internal sealed class SetupService : ISetupService
 {
     private readonly ISignInService _signIn;
     private readonly IHookInstallService _hooks;
+    private readonly ISkillPushService _push;
     private readonly ISkillPullService _skills;
     private readonly ISessionSyncService _sessions;
     private readonly IDefaultRegistryStore _defaultRegistry;
 
-    public SetupService(ISignInService signIn, IHookInstallService hooks, ISkillPullService skills, ISessionSyncService sessions,
-        IDefaultRegistryStore defaultRegistry)
+    public SetupService(ISignInService signIn, IHookInstallService hooks, ISkillPushService push, ISkillPullService skills,
+        ISessionSyncService sessions, IDefaultRegistryStore defaultRegistry)
     {
+        _push = push;
         _signIn = signIn;
         _defaultRegistry = defaultRegistry;
         _hooks = hooks;
@@ -58,7 +62,7 @@ internal sealed class SetupService : ISetupService
         Finish(InstallHooks(request.HarnessHome));
 
         Finish(signedIn
-            ? await PullSkillsAsync(request, cancellationToken)
+            ? await SyncSkillsAsync(request, cancellationToken)
             : new SetupStepResult(SetupStep.Skills, SetupOutcome.Skipped, SetupSkip.NotSignedIn));
 
         Finish(new SetupStepResult(SetupStep.Configuration, SetupOutcome.Skipped, SetupSkip.NotAvailableYet));
@@ -112,20 +116,30 @@ internal sealed class SetupService : ISetupService
         };
     }
 
-    private async Task<SetupStepResult> PullSkillsAsync(SetupRequest request, CancellationToken cancellationToken)
+    // Push before pull, so a skill changed here is backed up before the pull compares it: otherwise the pull would
+    // keep it as "local changes" and leave it un-backed-up. A push the registry refused as stale is recorded by the push
+    // service, so the pull that follows shows the copy as changed here and in the registry and keeps it. That, a
+    // same-name conflict and a refusal are reported, not failures: running setup again would not change them.
+    private async Task<SetupStepResult> SyncSkillsAsync(SetupRequest request, CancellationToken cancellationToken)
     {
-        var pull = new SkillPullRequest([], null, request.HarnessHome, request.Registry, Force: false, request.ProjectStart);
-        var result = await _skills.PullAsync(pull, cancellationToken);
-        var outcome = result switch
+        var push = await _push.PushAsync(
+            new SkillPushRequest([], null, request.HarnessHome, request.ProjectStart, request.Registry), cancellationToken);
+        var pull = await _skills.PullAsync(
+            new SkillPullRequest([], null, request.HarnessHome, request.Registry, Force: false, request.ProjectStart), cancellationToken);
+
+        var outcome = pull switch
         {
             { Failure: SkillPullRunFailure.NoHarness } => SetupOutcome.Skipped,
             { Succeeded: false } => SetupOutcome.Failed,
-            _ when result.Entries.Any(e => e.Status is SkillPullStatus.Installed or SkillPullStatus.Updated) => SetupOutcome.Done,
+            _ when push.Failure != SkillPushRunFailure.None || push.Entries.Any(e => e.Outcome.Status == SkillPushStatus.Failed) => SetupOutcome.Failed,
+            _ when push.Entries.Any(e => e.Outcome.Status == SkillPushStatus.Created) ||
+                pull.Entries.Any(e => e.Status is SkillPullStatus.Installed or SkillPullStatus.Updated) => SetupOutcome.Done,
             _ => SetupOutcome.AlreadyDone,
         };
         return new SetupStepResult(SetupStep.Skills, outcome, outcome == SetupOutcome.Skipped ? SetupSkip.NoHarness : SetupSkip.None)
         {
-            Skills = result,
+            SkillPush = push,
+            Skills = pull,
         };
     }
 

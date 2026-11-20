@@ -1,6 +1,7 @@
 using Protostar.Cli.Auth;
 using Protostar.Cli.Harness;
 using Protostar.Cli.Hooks;
+using Protostar.Cli.Registry;
 using Protostar.Cli.Sessions;
 using Protostar.Cli.Skills;
 using Spectre.Console;
@@ -128,15 +129,16 @@ internal static class SetupPresenter
         if (step.Skip == SetupSkip.NotSignedIn)
             return ["Needs sign-in."];
 
+        // The push ran first; its line comes first, then the pull's.
+        var (pushed, pushLines) = Pushed(step.SkillPush!, catalog);
         var result = step.Skills!;
         if (SkillPullPresenter.FailureMessage(result.Failure, result.Detail, result.Registry, catalog) is { } failure)
-            return [Markup.Escape(failure)];
-        if (result.Entries.Count == 0)
-            return ["No skills in the registry yet."];
+            return [$"{pushed} Pull: [red]{Markup.Escape(failure)}[/]", .. pushLines];
 
         int Of(SkillPullStatus status) => result.Entries.Count(e => e.Status == status);
-        var summary =
-            $"{Of(SkillPullStatus.Installed)} installed, {Of(SkillPullStatus.Updated)} updated, {Of(SkillPullStatus.UpToDate)} already up to date" +
+        var summary = result.Entries.Count == 0
+            ? "Pulled: no skills in the registry yet."
+            : $"Pulled: {Of(SkillPullStatus.Installed)} installed, {Of(SkillPullStatus.Updated)} updated, {Of(SkillPullStatus.UpToDate)} already up to date" +
             (Of(SkillPullStatus.LocalChanges) is > 0 and var held ? $", [yellow]{held} kept because of local changes[/]" : "") +
             (Of(SkillPullStatus.ChangedBoth) is > 0 and var both ? $", [yellow]{both} kept because they changed here and in the registry[/]" : "") +
             (Of(SkillPullStatus.Conflict) is > 0 and var conflicts ? $", [red]{conflicts} skipped as conflicts[/]" : "") +
@@ -146,7 +148,8 @@ internal static class SetupPresenter
         // Condensed: one line per skill that changed or needs attention. Up-to-date and other projects' skills are only counted.
         var showHarness = result.Entries.Select(e => e.Harness.Id).Distinct().Count() > 1;
         var notable = result.Entries.Where(e => e.Status is not (SkillPullStatus.UpToDate or SkillPullStatus.OtherProject)).ToList();
-        var lines = new List<string> { summary };
+        var lines = new List<string> { $"{pushed} {summary}" };
+        lines.AddRange(pushLines);
         lines.AddRange(notable.Take(MaxSkillLines).Select(e =>
             (showHarness ? $"[grey]{Markup.Escape(e.Harness.Id)}[/] " : "") +
             Markup.Escape(e.Project is { } project ? $"{e.Name} ({project})" : e.Name) + ": " + SkillPullPresenter.Describe(e)));
@@ -154,9 +157,35 @@ internal static class SetupPresenter
             lines.Add($"[grey]... and {notable.Count - MaxSkillLines} more. `protostar skills remote` lists them all.[/]");
         if (Of(SkillPullStatus.LocalChanges) > 0)
             lines.Add("[grey]Back up local changes with `protostar skills push`, or overwrite them with `protostar skills pull --force`.[/]");
-        if (Of(SkillPullStatus.ChangedBoth) > 0)
+        if (Of(SkillPullStatus.ChangedBoth) > 0 || step.SkillPush!.Entries.Any(e => e.Outcome.Status == SkillPushStatus.Stale))
             lines.Add("[grey]`protostar skills remote` shows how to keep yours, theirs, or both.[/]");
         return lines;
+    }
+
+    // The push's summary sentence, and one line per skill it pushed or could not back up. A skill refused as changed here
+    // and in the registry is only counted: the pull that follows lists it as kept for that reason.
+    private static (string Summary, List<string> Lines) Pushed(SkillPushRunResult push, IHarnessCatalog catalog)
+    {
+        if (SkillPushPresenter.FailureMessage(push, catalog) is { } failure)
+            return ($"Push: [red]{Markup.Escape(failure)}[/]", []);
+        if (push.Entries.Count == 0)
+            return ("Pushed: no skills on this machine.", []);
+
+        int Of(SkillPushStatus status) => push.Entries.Count(e => e.Outcome.Status == status);
+        var problems = push.Entries.Count(e => e.Outcome.Status is SkillPushStatus.Refused or SkillPushStatus.Conflict or SkillPushStatus.Failed);
+        var summary = $"Pushed: {Of(SkillPushStatus.Created)} backed up, {Of(SkillPushStatus.Unchanged)} already backed up" +
+            (Of(SkillPushStatus.Stale) is > 0 and var stale ? $", [yellow]{stale} not pushed because they changed here and in the registry[/]" : "") +
+            (problems > 0 ? $", [red]{problems} not backed up[/]" : "") + ".";
+
+        var notable = push.Entries
+            .Where(e => e.Outcome.Status is not (SkillPushStatus.Unchanged or SkillPushStatus.Skipped or SkillPushStatus.Stale))
+            .ToList();
+        var lines = notable.Take(MaxSkillLines).Select(e =>
+            Markup.Escape(e.Outcome.ProjectName is { } project ? $"{e.Skill.Name} ({project})" : e.Skill.Name) + ": " +
+            SkillPushPresenter.Describe(e.Outcome)).ToList();
+        if (notable.Count > MaxSkillLines)
+            lines.Add($"[grey]... and {notable.Count - MaxSkillLines} more pushed. `protostar skills remote` lists them all.[/]");
+        return (summary, lines);
     }
 
     private static List<string> Sessions(SetupStepResult step, IHarnessCatalog catalog, string pushCommand)

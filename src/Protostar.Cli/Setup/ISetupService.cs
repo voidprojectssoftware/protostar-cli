@@ -5,10 +5,11 @@ using Protostar.Cli.Skills;
 
 namespace Protostar.Cli.Setup;
 
-/// <summary>Gets a machine ready in one run: sign in, install hooks, pull skills, and back up sessions.</summary>
+/// <summary>Gets a machine ready in one run: sign in, install hooks, push and pull skills, and back up sessions.</summary>
 /// <remarks>
 /// Backs <c>protostar setup</c>. Each step calls the same service its own command does (<see cref="ISignInService"/>,
-/// <see cref="IHookInstallService"/>, <see cref="ISkillPullService"/>, <see cref="ISessionSyncService"/>), so setup has
+/// <see cref="IHookInstallService"/>, <see cref="ISkillPushService"/> and <see cref="ISkillPullService"/>,
+/// <see cref="ISessionSyncService"/>), so setup has
 /// no second implementation of any of them. Every step is idempotent, so running setup again changes nothing and says so.
 /// </remarks>
 internal interface ISetupService
@@ -17,7 +18,9 @@ internal interface ISetupService
     /// <remarks>
     /// The order is fixed: sign-in, hooks, skills, configuration, sessions. Hooks go in before skills are pulled so a
     /// skill used the moment it lands is already captured; the pull records each skill in the ledger, so that capture
-    /// recognises it as unchanged and does not push it straight back. A step that needs the registry is skipped when
+    /// recognises it as unchanged and does not push it straight back. Within the skills step this machine's skills are
+    /// pushed before the registry's are pulled, so a skill changed here is backed up rather than kept back by the pull
+    /// as a local change. A step that needs the registry is skipped when
     /// sign-in did not succeed. Every step runs even when an earlier one failed, so one run reports everything.
     /// </remarks>
     Task<SetupResult> RunAsync(SetupRequest request, SetupInteraction interaction, CancellationToken cancellationToken);
@@ -29,7 +32,7 @@ internal interface ISetupService
 /// <param name="SignIn">How to run the browser sign-in when one is needed.</param>
 /// <param name="Yes">Back up pending sessions without asking.</param>
 /// <param name="CanAsk">Whether there is a terminal to ask on; without one and without <paramref name="Yes"/>, the backup is skipped.</param>
-/// <param name="ProjectStart">The folder whose project skills are pulled, as <c>skills pull</c> does; <c>null</c> pulls global skills only.</param>
+/// <param name="ProjectStart">The folder whose project skills are pushed and pulled, as <c>skills push</c> and <c>skills pull</c> do; <c>null</c> syncs global skills only.</param>
 internal sealed record SetupRequest(
     string? Registry, string? HarnessHome, SignInOptions SignIn, bool Yes, bool CanAsk, string? ProjectStart);
 
@@ -109,6 +112,9 @@ internal sealed record SetupStepResult(SetupStep Step, SetupOutcome Outcome, Set
 
     /// <summary>The hook install, for <see cref="SetupStep.Hooks"/>.</summary>
     public HookRunResult? Hooks { get; init; }
+
+    /// <summary>The push of this machine's skills, for <see cref="SetupStep.Skills"/> when signed in; it runs before <see cref="Skills"/>.</summary>
+    public SkillPushRunResult? SkillPush { get; init; }
 
     /// <summary>The skill pull, for <see cref="SetupStep.Skills"/>.</summary>
     public SkillPullRunResult? Skills { get; init; }

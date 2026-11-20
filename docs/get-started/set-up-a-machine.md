@@ -19,12 +19,20 @@ It runs these steps in order and prints one line for each: **done**,
 |---|---|---|
 | Sign-in | Signs you in to the registry in your browser, unless you already have a session the registry accepts | `protostar auth login` |
 | Hooks | Installs capture hooks into every harness it finds, so your skill use and sessions are captured | `protostar install-hooks --yes` |
-| Skills | Installs or updates your skills from the registry | `protostar skills pull` |
+| Skills | Backs up this machine's skills, then installs or updates your skills from the registry | `protostar skills push`, then `protostar skills pull` |
 | Configuration | Not available yet: syncing harness configuration is still to come, so this step always says so | |
 | Sessions | Offers to back up the sessions already on this machine | `protostar sessions push` |
 
 Hooks go in before skills are pulled, so a skill you use the moment it arrives
 is already captured, and it is not pushed straight back as a change.
+
+Within the skills step, this machine's skills are pushed before the registry's
+are pulled. A skill you changed here is backed up first, so it reaches your
+other machines instead of being held back as a local change. When the registry
+refuses a push because that skill also changed on another machine since you
+last synced it, nothing is overwritten on either side. The step reports the
+skill as changed here and in the registry, keeps your copy, and setup still
+finishes; `protostar skills remote` shows how to keep yours, theirs, or both.
 
 ```console
 $ protostar setup --yes
@@ -32,7 +40,8 @@ Opening your browser to sign in. If it doesn't open, use the URL below, then ret
 https://localhost:7443/connect/authorize?...
 Sign-in: done. Signed in to https://localhost:7443 as alice.
 Hooks: done. Claude Code: wrote capture hooks (~/.claude/settings.json)
-Skills: done. 2 installed, 0 updated, 0 already up to date.
+Skills: done. Pushed: 1 backed up, 0 already backed up. Pulled: 2 installed, 0 updated, 1 already up to date.
+  brew: new version v1
   greet-user: installed v1
   tidy-imports: installed v1
 Configuration: skipped. Not available yet: syncing harness configuration is still to come.
@@ -64,7 +73,7 @@ Every step is safe to repeat. A second run changes nothing and says so:
 $ protostar setup
 Sign-in: already done. Signed in to https://localhost:7443 as alice.
 Hooks: already done. Claude Code: capture hooks already up to date (~/.claude/settings.json)
-Skills: already done. 0 installed, 0 updated, 2 already up to date.
+Skills: already done. Pushed: 0 backed up, 3 already backed up. Pulled: 0 installed, 0 updated, 3 already up to date.
 Configuration: skipped. Not available yet: syncing harness configuration is still to come.
 Sessions: already done. All 3 transcripts backed up.
   The capture hooks back up new activity from here on.
@@ -85,9 +94,9 @@ rest still run, so one run tells you everything that needs attention.
 | `--provider <NAME>` | Skip the registry's sign-in chooser and go straight to this provider (for example `github`). |
 | `--harness-home <DIR>` | Use a non-default harness config root, as [install-hooks](./connect-your-harness.md#pointing-at-a-non-default-harness-location) does. |
 
-Project skills are pulled the same way `skills pull` pulls them: only those of
-the project the current folder belongs to. Run setup from your home folder to
-pull global skills only.
+Project skills are pushed and pulled the same way `skills push` and `skills pull`
+handle them: only those of the project the current folder belongs to. Run setup
+from your home folder to sync global skills only.
 
 The pages that follow explain each step on its own, for when you want to run one
 by itself.
