@@ -14,12 +14,16 @@ internal interface IAgentHistoryService
     /// <summary>Finds a session by id or id prefix, as <c>sessions show</c> does, once the registry is known to redact what it serves.</summary>
     /// <remarks>
     /// A registry that does not list the <c>redacted-read</c> capability is refused before anything is read: it would
-    /// ignore <c>redacted=true</c> and serve the stored lines, secrets included.
+    /// ignore <c>redacted=true</c> and serve the stored lines, secrets included. The refusal is
+    /// <see cref="ISessionReader.OpenAsync"/>'s, so <c>sessions show</c> makes the same one.
     /// </remarks>
     Task<SessionOpenResult> OpenSessionAsync(string? registry, string id, CancellationToken cancellationToken);
 
     /// <summary>Finds a session by id or id prefix and lists the skills it and its subagents used, with the versions the registry infers.</summary>
-    /// <remarks>A registry that does not list the <c>session-skills</c> capability is refused, saying it needs updating.</remarks>
+    /// <remarks>
+    /// A registry that does not list the <c>session-skills</c> capability is refused, saying it needs updating; finding
+    /// the session needs <c>redacted-read</c> too, as <see cref="OpenSessionAsync"/> does.
+    /// </remarks>
     Task<SessionSkillsResult> GetSessionSkillsAsync(string? registry, string id, CancellationToken cancellationToken);
 
     /// <summary>A project's memory files, or the one at <paramref name="path"/>, with secrets redacted by the registry.</summary>
@@ -68,9 +72,6 @@ internal sealed record MemoryReadResult(
 /// </remarks>
 internal sealed class AgentHistoryService : IAgentHistoryService
 {
-    /// <summary>The capability that makes a transcript download honour <c>redacted=true</c> (registry#72).</summary>
-    internal const string RedactedRead = RegistryCapability.RedactedRead;
-
     /// <summary>The capability that makes a memory download honour <c>redacted=true</c>.</summary>
     internal const string MemoryRedactedRead = RegistryCapability.MemoryRedactedRead;
 
@@ -106,13 +107,8 @@ internal sealed class AgentHistoryService : IAgentHistoryService
     }
 
     /// <inheritdoc />
-    public async Task<SessionOpenResult> OpenSessionAsync(string? registry, string id, CancellationToken cancellationToken)
-    {
-        var connection = await ConnectAsync(registry, RedactedRead, cancellationToken);
-        return connection.Failure != SessionSyncFailure.None
-            ? SessionOpenResult.Fail(connection.Failure, connection.Detail, connection.Registry)
-            : await _reader.OpenAsync(registry, null, id, cancellationToken);
-    }
+    public Task<SessionOpenResult> OpenSessionAsync(string? registry, string id, CancellationToken cancellationToken) =>
+        _reader.OpenAsync(registry, null, id, cancellationToken);
 
     /// <inheritdoc />
     public async Task<SessionSkillsResult> GetSessionSkillsAsync(string? registry, string id, CancellationToken cancellationToken)
@@ -198,5 +194,6 @@ internal sealed class AgentHistoryService : IAgentHistoryService
     // Strict: a registry too old to list capabilities is refused, not asked. The redacted reads must never be assumed,
     // because a registry that ignores `redacted=true` serves the stored lines, secrets included, and refusing is the
     // lesser harm. Session skills came after the list itself, so a registry without the list cannot have them.
-    private static bool Strict(string capability) => capability is RedactedRead or MemoryRedactedRead or SessionSkills;
+    // (redacted-read is checked by ISessionReader.OpenAsync, for sessions show too.)
+    private static bool Strict(string capability) => capability is MemoryRedactedRead or SessionSkills;
 }

@@ -13,6 +13,8 @@ internal interface ISessionReader
     /// <remarks>
     /// A whole key is found directly, subagent keys included. Anything else is matched, ignoring case, against the
     /// start of the session keys in the registry; one match is opened, several are refused with the candidates.
+    /// A registry that does not list <c>redacted-read</c> is refused before anything is asked, a registry too old to
+    /// list capabilities included, since every read of the session is requested redacted and must come back so.
     /// </remarks>
     Task<SessionOpenResult> OpenAsync(string? registry, string? harnessId, string id, CancellationToken cancellationToken);
 
@@ -146,7 +148,12 @@ internal sealed class SessionReader : ISessionReader
             return SessionOpenResult.Fail(SessionSyncService.SessionFailure(lookup.State), null, registry);
         var token = stored.AccessToken;
 
+        // Sessions as leniently as every command; redaction strictly, as the MCP tools do: a registry that cannot list
+        // redacted-read may ignore redacted=true and serve the stored lines, secrets included, and agents run
+        // `sessions show --json` through a shell (#122). /v1/meta is read once, so the second check asks nothing.
         var check = await _capabilities.RequireAsync(registry, cancellationToken, RegistryCapability.Sessions);
+        if (check.Ok)
+            check = await _capabilities.RequireListedAsync(registry, cancellationToken, RegistryCapability.RedactedRead);
         if (!check.Ok)
             return SessionOpenResult.Fail(SessionSyncService.CheckFailure(check), check.Detail, registry);
 

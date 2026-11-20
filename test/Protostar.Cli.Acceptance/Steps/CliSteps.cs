@@ -119,6 +119,14 @@ public sealed partial class CliSteps : IDisposable
         GivenAStoredSession(_registry.Url, "current");
     }
 
+    // A registry from before the capability list (registry#15): its /v1/meta has no capabilities at all.
+    [Given("I am signed in to a registry that lists no capabilities")]
+    public void GivenARegistryWithoutCapabilities()
+    {
+        _registry.Start(new JsonObject { ["service"] = "protostar-registry", ["apiMajors"] = new JsonArray(1) }.ToJsonString());
+        GivenAStoredSession(_registry.Url, "current");
+    }
+
     [Then("the registry was asked only for its capabilities")]
     public void ThenTheRegistryWasAskedOnlyForMeta() =>
         Assert.All(_registry.Requests, r => Assert.StartsWith("GET /v1/meta ", r, StringComparison.Ordinal));

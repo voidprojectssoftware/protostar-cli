@@ -99,19 +99,23 @@ What each command needs:
 | `skills push` without `--force` | `stale-skill-push` (see below) |
 | `skills rename`, `skills delete` | `skill-rename`, `skill-delete` |
 | `project` | `projects` |
-| `sessions push`, `list`, `show` | `sessions` |
+| `sessions push`, `list` | `sessions` |
+| `sessions show` (and `--json`) | `sessions`, `redacted-read` |
 | `sessions status --verify` | `sessions`, `transcript-lookup` |
 | `memory push` | `memory` |
 | `memory pull` | `memory`, `memory-content` (`memory-base-versions` is used when listed) |
 | `search` | `search` |
-| MCP `get_session`, `get_session_skills`, `get_memory` | `redacted-read`, `session-skills`, `memory-redacted-read` |
+| MCP `get_session` | `redacted-read` |
+| MCP `get_session_skills` | `session-skills`, `redacted-read` |
+| MCP `get_memory` | `memory-redacted-read` |
 
 A registry from before the list sends no `capabilities` at all. That counts as
 **unknown**: commands go ahead as they always did, and a 404 gets the same
-message. The exception is the MCP tools: they refuse a registry that cannot list
-`redacted-read`, `memory-redacted-read` or `session-skills`, because a registry
-that ignores the request to redact would serve secrets to an agent, and refusing
-is the lesser harm.
+message. The exceptions are `sessions show` and the MCP tools: they refuse a
+registry that cannot list `redacted-read`, `memory-redacted-read` or
+`session-skills`, because a registry that ignores the request to redact would
+serve secrets (agents run `sessions show --json` through a shell too), and
+refusing is the lesser harm.
 
 A registry that lists capabilities without `stale-skill-push` cannot tell when a
 push would replace a newer version pushed from another machine. `skills push`

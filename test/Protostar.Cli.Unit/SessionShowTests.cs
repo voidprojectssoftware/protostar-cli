@@ -141,13 +141,16 @@ public sealed class SessionReaderTests
         """{"type":"assistant","isSidechain":true,"message":{"content":[{"type":"text","text":"A demo."}]}}""",
     ];
 
-    // A registry from before the capability list (registry#15), which cannot look a prefix up.
+    // A registry from before the capability list (registry#15), which cannot say it redacts what it serves.
     private static RegistryMeta BeforeCapabilities => new() { ApiMajors = [1] };
+
+    // A registry that serves sessions redacted but cannot look a prefix up.
+    private static RegistryMeta WithoutPrefixLookup => new() { ApiMajors = [1], Capabilities = [RegistryCapability.Sessions, RegistryCapability.RedactedRead] };
 
     [Fact]
     public async Task A_whole_id_is_looked_up_directly_on_a_registry_without_prefix_lookup()
     {
-        _meta.Meta = BeforeCapabilities;
+        _meta.Meta = WithoutPrefixLookup;
         _api.Add(Session(SessionId), Conversation);
 
         var opened = await Open(SessionId);
@@ -223,6 +226,23 @@ public sealed class SessionReaderTests
         Assert.Equal((0, 0), (_api.Lists, _api.Gets));
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_registry_that_does_not_list_redacted_read_is_refused_before_anything_is_asked(bool listsCapabilities)
+    {
+        // Lenient for sessions, strict for redaction: a registry too old to list it might ignore redacted=true (#122).
+        _meta.Meta = listsCapabilities ? new RegistryMeta { ApiMajors = [1], Capabilities = [RegistryCapability.Sessions] } : BeforeCapabilities;
+        _api.Add(Session(SessionId), Conversation);
+
+        var opened = await Open(SessionId);
+
+        Assert.Equal((SessionOpenOutcome.Failed, SessionSyncFailure.Incompatible), (opened.Outcome, opened.Failure));
+        Assert.Equal("This registry is too old for serving sessions with secrets redacted. Update the registry.", opened.Detail);
+        Assert.Equal((0, 0), (_api.Lists, _api.Gets));
+        Assert.Empty(_api.Downloads);
+    }
+
     [Fact]
     public async Task An_unambiguous_prefix_opens_its_session_ignoring_case()
     {
@@ -251,7 +271,7 @@ public sealed class SessionReaderTests
     [Fact]
     public async Task A_prefix_is_matched_on_every_page_of_the_list_on_a_registry_without_prefix_lookup()
     {
-        _meta.Meta = BeforeCapabilities;
+        _meta.Meta = WithoutPrefixLookup;
         for (var i = 0; i < 250; i++)
             _api.Add(Session($"{i:x8}-0000-4000-8000-000000000000", minute: 1000 - i), []);
         _api.Add(Session(SessionId, minute: 0), Conversation);

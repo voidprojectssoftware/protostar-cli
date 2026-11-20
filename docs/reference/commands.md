@@ -758,7 +758,10 @@ Assistant 04:00
 ```
 
 Secrets the registry recognises (tokens, keys, passwords) are shown as
-`[redacted:<type>]`. The backup itself keeps the original bytes.
+`[redacted:<type>]`. The backup itself keeps the original bytes. A registry that
+does not list the `redacted-read` capability, including one too old to list
+capabilities at all, is refused rather than trusted to redact (see
+[troubleshooting](troubleshooting.md#registry-too-old)).
 
 **Skills used** lists the skills the session ran (its subagents' too), with how
 many times. The version is the registry's guess, marked `?`: the newest version
