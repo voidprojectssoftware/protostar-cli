@@ -777,7 +777,9 @@ $ protostar sessions show 7d3c9a52 --full
 ```
 
 A session is shown as it downloads, so even a very large one starts at once and
-uses little memory. An id that matches nothing says so and suggests
+uses little memory. When standard output is a file or a pipe rather than a
+terminal, the conversation is written as plain text: no colour, and long lines
+are left whole instead of wrapped at 80 columns. An id that matches nothing says so and suggests
 `protostar sessions list`. A prefix that matches several sessions lists them,
 and you give more of the id. Either way the exit code is `1`. A prefix of 4
 characters or more is looked up in one request on a registry that lists
