@@ -56,7 +56,7 @@ services.AddSingleton<IHarnessCatalog, HarnessCatalog>();
 // container above.
 var app = new CommandApp<DefaultCommand>(new TypeRegistrar(services));
 
-// The top-level command and branch names, collected as they are registered below, for OptionPlacementGuard.CheckRoot.
+// The top-level command and branch names, collected as they are registered below, for OptionGuard.CheckRoot.
 var commandNames = new List<string>();
 string Named(string name)
 {
@@ -70,8 +70,9 @@ app.Configure(config =>
     config.SetApplicationVersion(CliInfo.Version);
 
     // Every option belongs to a subcommand; one typed before it (`skills --global-only push`) is refused with the
-    // command line that puts it after, instead of being silently dropped. See OptionPlacementGuard.
-    config.SetInterceptor(new OptionPlacementGuard());
+    // command line that puts it after, and one the command does not declare (`skills pull --forse`) is refused with
+    // the closest real one, instead of either being silently dropped. See OptionGuard.
+    config.SetInterceptor(new OptionGuard());
 
     config.AddCommand<SetupCommand>(Named("setup"))
         .WithDescription("Set up this machine in one step: sign in, install hooks, push and pull skills, and back up sessions. Safe to run again.");
@@ -138,7 +139,7 @@ app.Configure(config =>
 });
 
 // Spectre fails on an option before the first command while parsing, before the interceptor could run.
-if (OptionPlacementGuard.CheckRoot(args, commandNames) is { } misplaced)
+if (OptionGuard.CheckRoot(args, commandNames) is { } misplaced)
 {
     AnsiConsole.MarkupLine($"[red]Error:[/] {Markup.Escape(misplaced)}");
     return -1;
