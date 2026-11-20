@@ -33,13 +33,14 @@ public sealed class MemorySyncTests : IDisposable
 
     private string Folder(string directory) => Path.Combine(_root, "projects", _harness.ProjectFolderName(directory));
 
-    // A project folder for `directory`, holding a session transcript that records `cwd` (none when null).
+    // A project folder for `directory`, holding a session transcript that records `cwd` (none when null). The line is
+    // serialised, as Claude Code writes it, so a Windows path's backslashes are escaped and the transcript stays JSON.
     private string Project(string directory, string? cwd)
     {
         var folder = Folder(directory);
         Directory.CreateDirectory(folder);
         if (cwd is not null)
-            File.WriteAllText(Path.Combine(folder, Guid.NewGuid() + ".jsonl"), $"{{\"type\":\"user\",\"cwd\":\"{cwd}\"}}\n");
+            File.WriteAllText(Path.Combine(folder, Guid.NewGuid() + ".jsonl"), System.Text.Json.JsonSerializer.Serialize(new { type = "user", cwd }) + "\n");
         return folder;
     }
 
