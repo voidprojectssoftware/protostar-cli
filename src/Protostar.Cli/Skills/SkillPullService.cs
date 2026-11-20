@@ -80,7 +80,7 @@ internal sealed class SkillPullService : ISkillPullService
             var inScope = InScope(target, context.Skills);
             var matches = MatchAll(target, inScope, inScope, out var leftovers);
             foreach (var match in matches)
-                comparisons.Add(Compare(target, match, context.Registry!));
+                comparisons.Add(await CompareAsync(target, match, context, cancellationToken));
 
             foreach (var leftover in leftovers)
                 comparisons.Add(new SkillComparison(target.Harness, leftover.Name, SkillSyncState.LocalOnly, null, leftover.Path, null, Project: target.ProjectName));
@@ -118,7 +118,7 @@ internal sealed class SkillPullService : ISkillPullService
         {
             foreach (var match in MatchAll(target, InScope(target, selected), InScope(target, context.Skills), out _))
             {
-                var comparison = Compare(target, match, registry);
+                var comparison = await CompareAsync(target, match, context, cancellationToken);
                 entries.Add(await PullOneAsync(target, comparison, registry, context.AccessToken!, request.Force, cancellationToken));
             }
 
@@ -225,8 +225,9 @@ internal sealed class SkillPullService : ISkillPullService
         return $"{whose}, not this folder's; {go}.";
     }
 
-    private SkillComparison Compare(Target target, Match match, Uri registry)
+    private async Task<SkillComparison> CompareAsync(Target target, Match match, Context context, CancellationToken cancellationToken)
     {
+        var registry = context.Registry!;
         var (remote, installed, conflict, conflictPath) = match;
         var harness = target.Harness;
         if (conflict is not null)
@@ -237,8 +238,10 @@ internal sealed class SkillPullService : ISkillPullService
 
         // A record only speaks for the registry skill it was synced as: the same name and the same project. A
         // record from before names were kept is trusted only when the local skill's name is exactly the
-        // registry's; one from before projects were kept was synced as a global skill.
-        var recorded = _ledger.Get(registry, installed.Path);
+        // registry's; one from before projects were kept was synced as a global skill. A record of the same skill
+        // under the project it was in before a link moved it follows it first.
+        var recorded = await MovedSkillLedger.FollowAsync(
+            _registry, _ledger, registry, context.AccessToken!, installed.Path, _ledger.Get(registry, installed.Path), remote, context.Skills, cancellationToken);
         if (recorded is not null &&
             (!string.Equals(recorded.Name ?? installed.Name, remote.Name, StringComparison.Ordinal) || recorded.ProjectId != remote.ProjectId))
         {

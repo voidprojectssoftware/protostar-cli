@@ -1,6 +1,7 @@
 using Protostar.Cli.Auth;
 using Protostar.Cli.Registry;
 using Protostar.Cli.Sessions;
+using Protostar.Cli.Skills;
 
 namespace Protostar.Cli.Projects;
 
@@ -15,6 +16,10 @@ internal interface IProjectService
     Task<ProjectShowResult> ShowAsync(string? registry, string directory, CancellationToken cancellationToken);
 
     /// <summary>Links the folder of <paramref name="directory"/> on this machine to <paramref name="project"/>, an id or exact name.</summary>
+    /// <remarks>
+    /// The folder's project skills may move with it; this machine's skill ledger records of them then name their new
+    /// project (<see cref="MovedSkillLedger.Follow"/>). The same holds for <see cref="UnlinkAsync"/>.
+    /// </remarks>
     Task<ProjectLinkResult> LinkAsync(string? registry, string directory, string project, CancellationToken cancellationToken);
 
     /// <summary>Unlinks the folder of <paramref name="directory"/> on this machine.</summary>
@@ -56,13 +61,15 @@ internal sealed class ProjectService : IProjectService
     private readonly IAccessTokenProvider _tokens;
     private readonly IProjectApi _api;
     private readonly IMachineIdentity _machine;
+    private readonly ISkillLedger _ledger;
 
-    public ProjectService(IProjectFactsResolver facts, IAccessTokenProvider tokens, IProjectApi api, IMachineIdentity machine)
+    public ProjectService(IProjectFactsResolver facts, IAccessTokenProvider tokens, IProjectApi api, IMachineIdentity machine, ISkillLedger ledger)
     {
         _facts = facts;
         _tokens = tokens;
         _api = api;
         _machine = machine;
+        _ledger = ledger;
     }
 
     /// <inheritdoc />
@@ -96,10 +103,17 @@ internal sealed class ProjectService : IProjectService
         if (failure != ProjectFailure.None)
             return new ProjectLinkResult(facts, uri, null, failure, detail);
 
-        var changed = await change(uri!, token!, _machine.Get().Id, facts);
-        return changed.Ok
-            ? new ProjectLinkResult(facts, uri, changed.Value, ProjectFailure.None, null)
-            : new ProjectLinkResult(facts, uri, null, ProjectFailure.Failed, changed.Error);
+        // Where the folder belongs before the change, so this machine's records of the skills that move with it can
+        // follow them. If the registry cannot say, the records are left for the next `skills remote` or `pull` to fix.
+        var machine = _machine.Get().Id;
+        var before = await _api.ResolveProjectAsync(uri!, token!, machine, facts, cancellationToken);
+        var changed = await change(uri!, token!, machine, facts);
+        if (!changed.Ok)
+            return new ProjectLinkResult(facts, uri, null, ProjectFailure.Failed, changed.Error);
+
+        if (changed.Value!.MovedSkills.Count > 0 && before.Value?.ProjectId is { } from && changed.Value.Project.ProjectId is { } to)
+            MovedSkillLedger.Follow(_ledger, uri!, changed.Value.MovedSkills, from, to);
+        return new ProjectLinkResult(facts, uri, changed.Value, ProjectFailure.None, null);
     }
 
     private async Task<(Uri? Registry, string? Token, ProjectFailure Failure, string? Detail)> ConnectAsync(string? registry, CancellationToken cancellationToken)

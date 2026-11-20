@@ -77,7 +77,8 @@ internal sealed partial class SkillChangeService : ISkillChangeService
             return SkillTargetResult.Fail(SkillPullRunFailure.SkillNotFound, NotFound(request, registry, named, hereProblem), registry);
 
         return new SkillTargetResult(SkillPullRunFailure.None, null, registry,
-            new SkillTarget(registry, session.AccessToken, skill, CopiesOf(registry, skill), skill.ProjectId is null ? null : facts));
+            new SkillTarget(registry, session.AccessToken, skill,
+                await CopiesOfAsync(registry, session.AccessToken, skill, skills, cancellationToken), skill.ProjectId is null ? null : facts));
     }
 
     /// <inheritdoc />
@@ -173,13 +174,18 @@ internal sealed partial class SkillChangeService : ISkillChangeService
         return copy.Recorded with { Name = newName, ContentHash = hash, Version = version };
     }
 
-    // The copies the ledger records as synced with exactly this registry skill (name and project), that still exist.
-    private List<LocalSkillCopy> CopiesOf(Uri registry, RegistrySkill skill)
+    // The copies the ledger records as synced with exactly this registry skill (name and project), that still exist,
+    // including those recorded under the project a link moved the skill out of, once their record follows it.
+    private async Task<List<LocalSkillCopy>> CopiesOfAsync(
+        Uri registry, string accessToken, RegistrySkill skill, IReadOnlyList<RegistrySkill> skills, CancellationToken cancellationToken)
     {
         var copies = new List<LocalSkillCopy>();
-        foreach (var (path, recorded) in _ledger.Entries(registry).OrderBy(e => e.Key, StringComparer.Ordinal))
+        foreach (var (path, entry) in _ledger.Entries(registry).OrderBy(e => e.Key, StringComparer.Ordinal))
         {
-            if (!string.Equals(recorded.Name, skill.Name, StringComparison.Ordinal) || recorded.ProjectId != skill.ProjectId || !Directory.Exists(path))
+            if (!string.Equals(entry.Name, skill.Name, StringComparison.Ordinal) || !Directory.Exists(path))
+                continue;
+            var recorded = await MovedSkillLedger.FollowAsync(_registry, _ledger, registry, accessToken, path, entry, skill, skills, cancellationToken);
+            if (recorded!.ProjectId != skill.ProjectId)
                 continue;
 
             try

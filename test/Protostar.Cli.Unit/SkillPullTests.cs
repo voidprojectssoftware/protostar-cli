@@ -728,6 +728,106 @@ public sealed class SkillPullServiceTests : IDisposable
         Assert.False(Directory.Exists(Path.Combine(config, "skills")));
     }
 
+    // ----- a link moved the skill to this folder's project (cli#70) -----
+
+    // The checkout's copy of `notes` as an earlier pull left it: synced as version 1 under another project.
+    private (string Path, Guid OldProject) CopySyncedBeforeTheMove(string checkout, string body = "v1")
+    {
+        var path = ProjectSkill(checkout, "notes");
+        Directory.CreateDirectory(path);
+        File.WriteAllText(Path.Combine(path, "SKILL.md"), Manifest("notes", body));
+        var old = Guid.NewGuid();
+        _ledger.Record(RegistryUri, path, new SkillLedgerEntry(SkillFileReader.Hash(SkillFileReader.Read(path)), 1, "notes", old));
+        return (path, old);
+    }
+
+    // `notes` now in the checkout's project at version 2, carrying its version 1 (`v1Body`) with it.
+    private void MovedHereAndUpdated(string checkout, string v1Body = "v1")
+    {
+        PublishProject(checkout, "notes", 2, "v2");
+        var text = Manifest("notes", v1Body);
+        var bytes = Encoding.UTF8.GetBytes(text);
+        var file = new RegistrySkillFile("SKILL.md", Convert.ToHexString(SHA256.HashData(bytes)), bytes);
+        var hash = SkillFileReader.RegistryHash([new SkillUploadFile("SKILL.md", bytes)]);
+        _api.History[$"{FakeRegistryApi.Key("notes", ProjectOf(checkout))}@1"] = new RegistrySkillContent("notes", 1, hash, [file]);
+    }
+
+    [Fact]
+    public async Task A_record_from_before_a_link_moved_the_skill_follows_it_when_the_content_proves_it_is_the_same_skill()
+    {
+        var a = Repo("a");
+        var (path, _) = CopySyncedBeforeTheMove(a);
+        MovedHereAndUpdated(a);
+
+        var remote = await Build().CompareAsync(Remote() with { ProjectStart = a }, CancellationToken.None);
+
+        Assert.Equal(SkillSyncState.UpdateAvailable, Assert.Single(remote.Skills).State);
+        var recorded = _ledger.Get(RegistryUri, path)!;
+        Assert.Equal(ProjectOf(a), recorded.ProjectId);
+        Assert.Equal(1, recorded.Version);
+    }
+
+    [Fact]
+    public async Task Following_a_move_never_makes_an_edited_copy_look_untouched()
+    {
+        var a = Repo("a");
+        var (path, _) = CopySyncedBeforeTheMove(a);
+        File.WriteAllText(Path.Combine(path, "SKILL.md"), Manifest("notes", "my edit"));
+        MovedHereAndUpdated(a);
+
+        var remote = await Build().CompareAsync(Remote() with { ProjectStart = a }, CancellationToken.None);
+        var pull = await Build().PullAsync(Pull() with { ProjectStart = a }, CancellationToken.None);
+
+        Assert.Equal(SkillSyncState.LocalChanges, Assert.Single(remote.Skills).State);
+        Assert.Equal(SkillPullStatus.LocalChanges, Assert.Single(pull.Entries).Status);
+        Assert.Equal(Manifest("notes", "my edit"), File.ReadAllText(Path.Combine(path, "SKILL.md")));
+        Assert.Equal(ProjectOf(a), _ledger.Get(RegistryUri, path)!.ProjectId);
+    }
+
+    [Fact]
+    public async Task A_record_is_not_followed_on_a_name_match_alone()
+    {
+        var a = Repo("a");
+        var (path, old) = CopySyncedBeforeTheMove(a);
+        MovedHereAndUpdated(a, v1Body: "another skill's first version");
+
+        var remote = await Build().CompareAsync(Remote() with { ProjectStart = a }, CancellationToken.None);
+
+        Assert.Equal(SkillSyncState.LocalChanges, Assert.Single(remote.Skills).State);
+        Assert.Equal(old, _ledger.Get(RegistryUri, path)!.ProjectId);
+    }
+
+    [Fact]
+    public async Task A_record_is_not_followed_while_its_project_still_has_the_skill()
+    {
+        var a = Repo("a");
+        var (path, old) = CopySyncedBeforeTheMove(a);
+        MovedHereAndUpdated(a);
+        _api.Skills.Add(new RegistrySkill("notes", "d", 1, "ABC", DateTimeOffset.UtcNow, old, "elsewhere"));
+
+        await Build().CompareAsync(Remote() with { ProjectStart = a }, CancellationToken.None);
+
+        Assert.Equal(old, _ledger.Get(RegistryUri, path)!.ProjectId);
+        Assert.DoesNotContain(FakeRegistryApi.Key("notes", ProjectOf(a)), _api.Downloaded);
+    }
+
+    [Fact]
+    public async Task A_record_from_before_projects_were_kept_is_never_followed()
+    {
+        var a = Repo("a");
+        var path = ProjectSkill(a, "notes");
+        Directory.CreateDirectory(path);
+        File.WriteAllText(Path.Combine(path, "SKILL.md"), Manifest("notes", "v1"));
+        var legacy = new SkillLedgerEntry(SkillFileReader.Hash(SkillFileReader.Read(path)), 1, "notes");
+        _ledger.Record(RegistryUri, path, legacy);
+        MovedHereAndUpdated(a);
+
+        var remote = await Build().CompareAsync(Remote() with { ProjectStart = a }, CancellationToken.None);
+
+        Assert.Equal(SkillSyncState.LocalChanges, Assert.Single(remote.Skills).State);
+        Assert.Equal(legacy, _ledger.Get(RegistryUri, path));
+    }
+
     /// <summary>Resolves a folder to the project <see cref="FakeRegistryApi.ProjectIdOf"/> gives it, named after its main worktree.</summary>
     private sealed class FakeProjectApi : IProjectApi
     {

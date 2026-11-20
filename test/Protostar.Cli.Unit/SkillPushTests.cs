@@ -468,11 +468,16 @@ public sealed class SkillPushServiceTests : IDisposable
         public Task<RegistrySkillList> ListSkillsAsync(Uri registry, string accessToken, CancellationToken cancellationToken) =>
             Task.FromResult(ListError is null ? new RegistrySkillList(Skills, null) : new RegistrySkillList(null, ListError));
 
+        /// <summary>Earlier versions, served when a download names a version: keyed <c>&lt;key&gt;@&lt;version&gt;</c>.</summary>
+        public Dictionary<string, RegistrySkillContent> History { get; } = new(StringComparer.Ordinal);
+
         public Task<RegistrySkillDownload> GetSkillFilesAsync(
             Uri registry, string accessToken, string name, Guid? projectId, int? version, CancellationToken cancellationToken)
         {
             Downloaded.Add(Key(name, projectId));
-            return Task.FromResult(Contents.TryGetValue(Key(name, projectId), out var content)
+            if (version is { } v && History.TryGetValue($"{Key(name, projectId)}@{v}", out var earlier))
+                return Task.FromResult(new RegistrySkillDownload(earlier, null));
+            return Task.FromResult(Contents.TryGetValue(Key(name, projectId), out var content) && (version is null || content.Version == version)
                 ? new RegistrySkillDownload(content, null)
                 : new RegistrySkillDownload(null, "not found"));
         }
