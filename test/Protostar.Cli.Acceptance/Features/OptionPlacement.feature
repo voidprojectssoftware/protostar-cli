@@ -16,6 +16,31 @@ Feature: Options typed before a subcommand are refused
       | project --dir {harnessHome} show                       | --dir          | project show --dir                                     |
       | auth --registry https://localhost:1 status             | --registry     | auth status --registry https://localhost:1             |
 
+  Scenario Outline: An option before the first command is refused with where it goes
+    When I run protostar with "<typed>"
+    Then the exit code is not 0
+    And the output contains "<option> goes after the subcommand"
+    And the output does not contain "Did you mean"
+    And the output, with line breaks joined, contains "Run: protostar <corrected>"
+
+    Examples:
+      | typed                                                  | option         | corrected                                              |
+      | --registry https://localhost:1 skills remote           | --registry     | skills remote --registry https://localhost:1           |
+      | --harness-home {harnessHome} sessions status           | --harness-home | sessions status --harness-home                         |
+      | --registry https://localhost:1 auth status             | --registry     | auth status --registry https://localhost:1             |
+      | --yes setup                                            | --yes          | setup --yes                                            |
+
+  Scenario Outline: Version and help still work at the root
+    When I run protostar with "<typed>"
+    Then the exit code is 0
+    And the output contains "<shown>"
+
+    Examples:
+      | typed     | shown   |
+      | --version | .       |
+      | -v        | .       |
+      | --help    | USAGE:  |
+
   Scenario: Several misplaced options are all named
     When I run protostar with "skills --project x --global-only push"
     Then the exit code is not 0

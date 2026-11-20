@@ -68,4 +68,44 @@ public sealed class OptionPlacementGuardTests
         Assert.Null(OptionPlacementGuard.Check(["skills", "--global-only"], "__default_command"));
         Assert.Null(OptionPlacementGuard.Check(["project", "--dir", "push"], "__default_command"));
     }
+
+    private static readonly string[] Commands = ["setup", "install-hooks", "capture", "skills", "sessions", "project", "auth"];
+
+    [Fact]
+    public void Refuses_an_option_before_a_branch_and_moves_it_after_the_subcommand()
+    {
+        var error = OptionPlacementGuard.CheckRoot(["--registry", "X", "skills", "remote"], Commands);
+
+        Assert.NotNull(error);
+        Assert.StartsWith("--registry goes after the subcommand", error);
+        Assert.EndsWith("protostar skills remote --registry X", error);
+    }
+
+    [Fact]
+    public void Refuses_a_flag_whose_next_token_is_the_command()
+    {
+        // Spectre would take "setup" as the flag's value and quietly run the default command.
+        Assert.EndsWith("protostar setup --yes", OptionPlacementGuard.CheckRoot(["--yes", "setup"], Commands));
+    }
+
+    [Fact]
+    public void Names_every_option_before_the_command_and_keeps_the_rest_in_order()
+    {
+        var error = OptionPlacementGuard.CheckRoot(["--registry=X", "--harness-home", "/my home", "project", "link", "demo"], Commands);
+
+        Assert.StartsWith("--registry=X, --harness-home go after the subcommand", error);
+        Assert.EndsWith("protostar project link demo --registry=X --harness-home \"/my home\"", error);
+    }
+
+    [Theory]
+    [InlineData("--version")]
+    [InlineData("-v skills")]
+    [InlineData("--help")]
+    [InlineData("--unknown")]
+    [InlineData("skills --registry X remote")]
+    [InlineData("capture --hook Stop")]
+    public void Leaves_lines_without_an_option_before_the_first_command_to_spectre(string line)
+    {
+        Assert.Null(OptionPlacementGuard.CheckRoot(line.Split(' '), Commands));
+    }
 }
