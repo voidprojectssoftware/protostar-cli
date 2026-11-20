@@ -410,7 +410,7 @@ internal static class SessionsPresenter
     };
 
     // Session ids are long UUIDs; the first 8 characters identify one in practice, plus the agent for subagents.
-    private static string Short(string key)
+    internal static string Short(string key)
     {
         var dot = key.IndexOf('.');
         return dot < 0 ? key[..Math.Min(8, key.Length)] : $"{key[..Math.Min(8, dot)]}.{key[(dot + 1)..]}";
@@ -418,7 +418,7 @@ internal static class SessionsPresenter
 
     internal static string Count(int n, string noun) => n == 1 ? $"1 {noun}" : $"{n} {noun}s";
 
-    private static string Truncate(string text, int max) => text.Length <= max ? text : text[..(max - 3)] + "...";
+    internal static string Truncate(string text, int max) => text.Length <= max ? text : text[..(max - 3)] + "...";
 
     // Keeps the end, where a path's file name is.
     private static string TruncateStart(string text, int max) => text.Length <= max ? text : "..." + text[^(max - 3)..];
