@@ -36,6 +36,19 @@ dotnet test protostar.sln          # unit + acceptance
 # with --harness-home and PROTOSTAR_CONFIG_DIR pointed at a temp folder, never the real ~/.claude
 ```
 
+When the change needs a live registry, run your own stack rather than queueing behind someone else's
+on 7443. Agents run in parallel, each in its own worktree, and each registry worktree already has its
+own database and object store:
+
+- Pick a free port per worktree (`ss -ltn | grep :7543` prints nothing when 7543 is free).
+- Run the stack with it: `PROTOSTAR_API_PORT=7543 dotnet run` in the registry worktree's
+  `src/Protostar.Registry.AppHost`. The API URL is printed once it is ready.
+- Pass `--registry https://localhost:7543` to the CLI (or set `PROTOSTAR_REGISTRY_URL`).
+- The GitHub sign-in only works on 7443, the port its OAuth callback names. Use the dev provider on
+  other ports: `protostar auth login --provider dev --no-browser --registry https://localhost:7543`,
+  then `curl -sk -L` the printed URL.
+- Never stop a stack you did not start. Find your own processes by your worktree path.
+
 Then exercise the change the way the real user would. Stop anything you started (AppHost, API
 processes) before you finish. Disk on the dev VM is limited: `dotnet clean` your worktree after the
 last build.
