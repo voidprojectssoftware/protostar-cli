@@ -437,6 +437,14 @@ internal sealed partial class SessionSyncService : ISessionSyncService
         }
     }
 
+    // Why a run that needs the registry stops when there is no current session.
+    private static SessionSyncFailure SessionFailure(SessionState session) => session switch
+    {
+        SessionState.None => SessionSyncFailure.NotLoggedIn,
+        SessionState.RegistryUnreachable => SessionSyncFailure.RegistryUnreachable,
+        _ => SessionSyncFailure.SessionExpired,
+    };
+
     private static string SessionKey(LocalTranscript transcript) => transcript.ParentKey ?? transcript.Key;
 
     // When each transcript's session was marked failed, for status; read once, since status walks every transcript.
@@ -740,11 +748,9 @@ internal sealed partial class SessionSyncService : ISessionSyncService
     private async Task<(SessionSyncFailure Failure, string? Detail, Session? Session)> ConnectAsync(
         Uri registry, CancellationToken cancellationToken, bool registerMachine = true)
     {
-        var stored = await _tokens.GetSessionAsync(registry, cancellationToken);
-        if (stored is null)
-            return (SessionSyncFailure.NotLoggedIn, null, null);
-        if (stored.IsExpired)
-            return (SessionSyncFailure.SessionExpired, null, null);
+        var lookup = await _tokens.GetSessionAsync(registry, cancellationToken);
+        if (lookup is not { State: SessionState.Current, Session: { } stored })
+            return (SessionFailure(lookup.State), null, null);
 
         var meta = await _meta.GetMetaAsync(registry, cancellationToken);
         if (meta is null)

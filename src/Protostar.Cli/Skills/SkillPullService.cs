@@ -518,11 +518,9 @@ internal sealed class SkillPullService : ISkillPullService
         if (targets.Count == 0)
             return Context.Fail(SkillPullRunFailure.NoHarness, harnessId, registry);
 
-        var session = await _tokens.GetSessionAsync(registry, cancellationToken);
-        if (session is null)
-            return Context.Fail(SkillPullRunFailure.NotLoggedIn, null, registry);
-        if (session.IsExpired)
-            return Context.Fail(SkillPullRunFailure.SessionExpired, null, registry);
+        var lookup = await _tokens.GetSessionAsync(registry, cancellationToken);
+        if (lookup is not { State: SessionState.Current, Session: { } session })
+            return Context.Fail(SkillPullService.Failure(lookup.State), null, registry);
 
         var meta = await _registry.GetMetaAsync(registry, cancellationToken);
         if (meta is null)
@@ -559,6 +557,14 @@ internal sealed class SkillPullService : ISkillPullService
             ? new Here(resolved.Value!.ProjectId, resolved.Value.Name, root, null)
             : new Here(null, null, null, resolved.Error);
     }
+
+    // Why a command that lists the registry's skills stops when there is no current session; shared with SkillChangeService.
+    internal static SkillPullRunFailure Failure(SessionState session) => session switch
+    {
+        SessionState.None => SkillPullRunFailure.NotLoggedIn,
+        SessionState.RegistryUnreachable => SkillPullRunFailure.RegistryUnreachable,
+        _ => SkillPullRunFailure.SessionExpired,
+    };
 
     private static void AddGlobalTarget(IHarness harness, string? harnessHome, List<Target> targets)
     {

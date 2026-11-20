@@ -160,11 +160,17 @@ internal sealed class SkillPushService : ISkillPushService
         if (pending.Count == 0 && !mustList)
             return new SkillPushRunResult(SkillPushRunFailure.None, null, registry, entries.Select(e => e!).ToList());
 
-        var session = await _tokens.GetSessionAsync(registry, cancellationToken);
-        if (session is null)
-            return SkillPushRunResult.Fail(SkillPushRunFailure.NotLoggedIn, null, registry);
-        if (session.IsExpired)
-            return SkillPushRunResult.Fail(SkillPushRunFailure.SessionExpired, null, registry);
+        var lookup = await _tokens.GetSessionAsync(registry, cancellationToken);
+        if (lookup is not { State: SessionState.Current, Session: { } session })
+        {
+            var failure = lookup.State switch
+            {
+                SessionState.None => SkillPushRunFailure.NotLoggedIn,
+                SessionState.RegistryUnreachable => SkillPushRunFailure.RegistryUnreachable,
+                _ => SkillPushRunFailure.SessionExpired,
+            };
+            return SkillPushRunResult.Fail(failure, null, registry);
+        }
 
         var gone = new HashSet<int>();
         if (mustList)

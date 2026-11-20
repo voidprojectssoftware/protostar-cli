@@ -86,6 +86,24 @@ public sealed partial class CliSteps : IDisposable
         File.WriteAllText(Path.Combine(dir, "SKILL.md"), $"---\nname: {name}\ndescription: test skill\n---\nBody.\n");
     }
 
+    // Shared by every scenario through the one config dir, so each scenario that stores a session uses its own registry.
+    [Given(@"a stored session for ""(\S+)"" whose access token is (current|expired)")]
+    public void GivenAStoredSession(string registry, string state)
+    {
+        var path = Path.Combine(CliRunner.ConfigDir, "credentials.json");
+        var file = File.Exists(path) ? JsonNode.Parse(File.ReadAllText(path))!.AsObject() : new JsonObject();
+        var registries = file["Registries"] as JsonObject ?? (JsonObject)(file["Registries"] = new JsonObject());
+        registries[registry] = new JsonObject
+        {
+            ["Registry"] = registry,
+            ["AccessToken"] = "access",
+            ["RefreshToken"] = "refresh",
+            ["ExpiresAtUtc"] = DateTimeOffset.UtcNow.AddHours(state == "expired" ? -1 : 1).ToString("O"),
+            ["Login"] = "octocat",
+        };
+        File.WriteAllText(path, file.ToJsonString());
+    }
+
     [Then("the harness settings contain {string}")]
     public void ThenTheHarnessSettingsContain(string text) =>
         Assert.Contains(text, _harness.ReadSettings());
@@ -142,6 +160,10 @@ public sealed partial class CliSteps : IDisposable
     [Then("the output contains {string}")]
     public void ThenTheOutputContains(string text) =>
         Assert.Contains(text, Output);
+
+    [Then("the output does not contain {string}")]
+    public void ThenTheOutputDoesNotContain(string text) =>
+        Assert.DoesNotContain(text, Output);
 
     // Spectre wraps an error at the console width (80 columns when redirected), so a long suggested command line
     // arrives across several lines; joining them lets a scenario assert on the line as typed.

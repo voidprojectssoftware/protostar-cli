@@ -24,20 +24,17 @@ internal sealed class SignInService : ISignInService
     /// <inheritdoc />
     public async Task<SessionCheck> CheckAsync(Uri registry, CancellationToken cancellationToken)
     {
-        var stored = await _sessions.GetSessionAsync(registry, cancellationToken);
-        if (stored is null)
+        var lookup = await _sessions.GetSessionAsync(registry, cancellationToken);
+        if (lookup.Session is not { } stored)
             return new SessionCheck(registry, null, SessionVerification.NoSession, null);
-
-        UserInfoResult info;
-        try
-        {
-            info = await OidcClientFactory.Create(registry).GetUserInfoAsync(stored.AccessToken, cancellationToken);
-        }
-        catch (HttpRequestException)
-        {
+        if (lookup.State == SessionState.RegistryUnreachable)
             return new SessionCheck(registry, stored, SessionVerification.Unreachable, stored.Login);
-        }
 
+        var (oidc, _) = await OidcClientFactory.CreateAsync(registry, browser: null, cancellationToken);
+        if (oidc is null)
+            return new SessionCheck(registry, stored, SessionVerification.Unreachable, stored.Login);
+
+        var info = await oidc.GetUserInfoAsync(stored.AccessToken, cancellationToken);
         if (info.IsError)
             return new SessionCheck(registry, stored, SessionVerification.Rejected, stored.Login);
 
@@ -69,7 +66,9 @@ internal sealed class SignInService : ISignInService
         }
 
         var browser = new LoopbackBrowser(openBrowser: !options.NoBrowser);
-        var oidc = OidcClientFactory.Create(registry, browser);
+        var (oidc, discoveryError) = await OidcClientFactory.CreateAsync(registry, browser, cancellationToken);
+        if (oidc is null)
+            return Fail(SignInFailure.RegistryUnreachable, discoveryError);
 
         var request = new LoginRequest();
         // A provider hint lets the registry skip its chooser and forward straight to that provider.

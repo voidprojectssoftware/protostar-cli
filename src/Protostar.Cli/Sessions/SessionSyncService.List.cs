@@ -1,3 +1,4 @@
+using Protostar.Cli.Auth;
 using Protostar.Cli.Harness;
 using Protostar.Cli.Projects;
 using Protostar.Cli.Registry;
@@ -40,14 +41,10 @@ internal sealed partial class SessionSyncService
         string? detail = null;
         string? token = null;
         IReadOnlyList<RemoteTranscript> remote = [];
-        var stored = await _tokens.GetSessionAsync(registry, cancellationToken);
-        if (stored is null)
+        var lookup = await _tokens.GetSessionAsync(registry, cancellationToken);
+        if (lookup is not { State: SessionState.Current, Session: { } stored })
         {
-            failure = SessionSyncFailure.NotLoggedIn;
-        }
-        else if (stored.IsExpired)
-        {
-            failure = SessionSyncFailure.SessionExpired;
+            failure = SessionFailure(lookup.State);
         }
         else
         {

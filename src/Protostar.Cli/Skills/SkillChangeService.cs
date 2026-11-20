@@ -41,11 +41,9 @@ internal sealed partial class SkillChangeService : ISkillChangeService
             return SkillTargetResult.Fail(SkillPullRunFailure.InvalidRegistry, ex.Message);
         }
 
-        var session = await _tokens.GetSessionAsync(registry, cancellationToken);
-        if (session is null)
-            return SkillTargetResult.Fail(SkillPullRunFailure.NotLoggedIn, null, registry);
-        if (session.IsExpired)
-            return SkillTargetResult.Fail(SkillPullRunFailure.SessionExpired, null, registry);
+        var lookup = await _tokens.GetSessionAsync(registry, cancellationToken);
+        if (lookup is not { State: SessionState.Current, Session: { } session })
+            return SkillTargetResult.Fail(SkillPullService.Failure(lookup.State), null, registry);
 
         var meta = await _registry.GetMetaAsync(registry, cancellationToken);
         if (meta is null)

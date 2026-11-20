@@ -43,11 +43,11 @@ public sealed class SkillPushServiceTests : IDisposable
     private readonly FakeFacts _facts = new();
 
     private (ISkillPushService Sut, FakeRegistryApi Api) Build(
-        IEnumerable<DiscoveredSkill> skills, StoredToken? session = null, FakeRegistryApi? api = null)
+        IEnumerable<DiscoveredSkill> skills, StoredToken? session = null, FakeRegistryApi? api = null, SessionLookup? lookup = null)
     {
         api ??= new FakeRegistryApi();
         api.Skills.AddRange(_inRegistry.Where(r => !api.Skills.Contains(r)));
-        var sut = new SkillPushService(new FakeSkillService(skills.ToList()), new FakeTokens(session), api, _ledger, _facts, new FakeMachine());
+        var sut = new SkillPushService(new FakeSkillService(skills.ToList()), new FakeTokens(lookup ?? SessionLookups.Of(session)), api, _ledger, _facts, new FakeMachine());
         return (sut, api);
     }
 
@@ -333,6 +333,17 @@ public sealed class SkillPushServiceTests : IDisposable
         var result = await sut.PushAsync(Request(), CancellationToken.None);
 
         Assert.Equal(SkillPushRunFailure.SessionExpired, result.Failure);
+        Assert.Empty(api.Pushed);
+    }
+
+    [Fact]
+    public async Task Expired_session_the_registry_could_not_be_reached_to_refresh_reports_the_registry_unreachable()
+    {
+        var (sut, api) = Build([Skill("alpha")], lookup: SessionLookups.Unreachable(Registry));
+
+        var result = await sut.PushAsync(Request(), CancellationToken.None);
+
+        Assert.Equal(SkillPushRunFailure.RegistryUnreachable, result.Failure);
         Assert.Empty(api.Pushed);
     }
 
@@ -871,9 +882,9 @@ public sealed class SkillPushServiceTests : IDisposable
             new(skills, SkillQueryFailure.None, null);
     }
 
-    private sealed class FakeTokens(StoredToken? session) : IAccessTokenProvider
+    private sealed class FakeTokens(SessionLookup session) : IAccessTokenProvider
     {
-        public Task<StoredToken?> GetSessionAsync(Uri registry, CancellationToken cancellationToken) => Task.FromResult(session);
+        public Task<SessionLookup> GetSessionAsync(Uri registry, CancellationToken cancellationToken) => Task.FromResult(session);
     }
 
     internal sealed class FakeRegistryApi : IRegistryApi

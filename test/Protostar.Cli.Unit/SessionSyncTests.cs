@@ -20,6 +20,8 @@ public sealed class SessionSyncServiceTests : IDisposable
     private readonly FakeLedger _ledger = new();
     private readonly FakeProjects _projects = new();
     private readonly FakeMachine _machine = new();
+    // Overrides _token when set, for a lookup a stored token alone cannot give (an unreachable refresh).
+    private SessionLookup? _session;
     private StoredToken? _token = new() { Registry = Registry, AccessToken = "tok", ExpiresAtUtc = DateTimeOffset.UtcNow.AddHours(1) };
 
     public void Dispose() => Directory.Delete(_root, recursive: true);
@@ -39,7 +41,7 @@ public sealed class SessionSyncServiceTests : IDisposable
 
     private ISessionSyncService Sut() => new SessionSyncService(
         new FakeCatalog(new ClaudeCodeHarness(new ClaudeCodeSkillParser(), new ClaudeCodeSkillMapper())),
-        new FakeTokens(() => _token), _registry, _registry, _ledger, _machine, _projects, _registry, TimeProvider.System);
+        new FakeTokens(() => _session ?? SessionLookups.Of(_token)), _registry, _registry, _ledger, _machine, _projects, _registry, TimeProvider.System);
 
     private SessionSyncRequest Request(TimeSpan? budget = null, TimeSpan? throttle = null, string? sessionPath = null) =>
         new(Registry, "claude-code", _root, sessionPath, budget, throttle);
@@ -280,6 +282,17 @@ public sealed class SessionSyncServiceTests : IDisposable
         var result = await Sync();
 
         Assert.Equal(SessionSyncFailure.NotLoggedIn, result.Failure);
+    }
+
+    [Fact]
+    public async Task A_session_the_registry_could_not_be_reached_to_refresh_reports_the_registry_unreachable()
+    {
+        WriteSession("""{"n":1}""");
+        _session = SessionLookups.Unreachable(Registry);
+
+        var result = await Sync();
+
+        Assert.Equal(SessionSyncFailure.RegistryUnreachable, result.Failure);
     }
 
     [Fact]
@@ -812,6 +825,20 @@ public sealed class SessionSyncServiceTests : IDisposable
         var result = await List();
 
         Assert.Equal(SessionSyncFailure.NotLoggedIn, result.Failure);
+        Assert.Equal(2, result.Sessions.Count);
+        Assert.Equal(0, _registry.Calls);
+    }
+
+    [Fact]
+    public async Task Offline_with_an_expired_session_the_pending_sessions_are_listed_and_the_registry_is_unreachable()
+    {
+        await ArrangeHistoryAsync();
+        _session = SessionLookups.Unreachable(Registry);
+        _registry.ResetCounters();
+
+        var result = await List();
+
+        Assert.Equal(SessionSyncFailure.RegistryUnreachable, result.Failure);
         Assert.Equal(2, result.Sessions.Count);
         Assert.Equal(0, _registry.Calls);
     }
@@ -1429,9 +1456,9 @@ public sealed class SessionSyncServiceTests : IDisposable
         public void MarkRegistered(Uri registry) => _registered = true;
     }
 
-    private sealed class FakeTokens(Func<StoredToken?> token) : IAccessTokenProvider
+    private sealed class FakeTokens(Func<SessionLookup> session) : IAccessTokenProvider
     {
-        public Task<StoredToken?> GetSessionAsync(Uri registry, CancellationToken cancellationToken) => Task.FromResult(token());
+        public Task<SessionLookup> GetSessionAsync(Uri registry, CancellationToken cancellationToken) => Task.FromResult(session());
     }
 
     private sealed class FakeCatalog(params IHarness[] harnesses) : IHarnessCatalog

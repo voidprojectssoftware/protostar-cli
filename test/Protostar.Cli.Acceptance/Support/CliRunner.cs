@@ -20,6 +20,9 @@ public static class CliRunner
         return dir;
     });
 
+    /// <summary>The throwaway <c>PROTOSTAR_CONFIG_DIR</c> every run shares, where credentials are stored.</summary>
+    public static string ConfigDir => LazyConfigDir.Value;
+
     /// <summary>Absolute path to the protostar binary under test.</summary>
     public static string BinaryPath => LazyBinary.Value;
 
