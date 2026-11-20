@@ -58,4 +58,7 @@ internal sealed record RegistryMeta
     [JsonPropertyName("service")] public string? Service { get; init; }
     [JsonPropertyName("version")] public string? Version { get; init; }
     [JsonPropertyName("apiMajors")] public int[]? ApiMajors { get; init; }
+
+    /// <summary>The features this registry serves within its API major, by name; <c>null</c> from a registry too old to list them.</summary>
+    [JsonPropertyName("capabilities")] public string[]? Capabilities { get; init; }
 }

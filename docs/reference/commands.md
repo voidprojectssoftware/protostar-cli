@@ -788,6 +788,65 @@ and you give more of the id. Either way the exit code is `1`.
 | `--full` | Also show tool call inputs and results, and subagents' conversations where they ran. |
 | `--json` | Print one JSON record per message (JSON Lines) instead of the conversation. See [JSON output](json-output.md#sessions-show). |
 
+## `protostar search <QUERY>`
+
+Find a session or a memory file by what it says, across everything backed up from
+every machine: "the session where we decided X", or "what did we learn about DNS
+in any project". The registry does the searching. Each hit shows its kind, its
+title (or the memory file's path), its project, machine and date, a session's
+short id, and the text around the match with the matched words highlighted:
+
+```console
+$ protostar search '"parentUuid ordering"'
+memory   replay.md
+         github.com/example/demo-app · vm-dev-01 · 2026-11-20 01:08
+         Replay Transcripts replay in parentUuid ordering, not file order
+
+session  Fix transcript replay order
+         github.com/example/demo-app · vm-dev-01 · 2026-11-19 04:03 · 7d3c9a52
+         token [redacted:github-token] to fetch the branch, then fix it. We
+         decided on parentUuid ordering: each line follows the line its
+         parentUui...
+```
+
+Open a session it finds with `protostar sessions show <id>`. Hits come best match
+first, then most recent; a session and its subagents each count once.
+
+The query uses web search syntax: every word is required, `"quoted words"` must
+appear as a phrase, `or` gives an alternative and `-word` leaves out what has it.
+Words match by their English stem and ignore case. Quote the whole query for your
+shell. Sessions are searched by what you typed, the assistant's replies and the
+names of the tools it called (not tool inputs or results), and memory by each
+file's current version.
+
+Secrets the registry recognises are redacted before anything is searched, so a
+token's value finds nothing and a snippet shows `[redacted:<type>]` in its place.
+
+```console
+$ protostar search kubernetes
+No matches for 'kubernetes'.
+```
+
+No match exits `0`. A registry too old for search says so, and the command exits
+`1`.
+
+| Option | Description |
+|---|---|
+| `-k, --kind <KIND>` | Only `session` (sessions and their subagents) or `memory`. Both by default. |
+| `-p, --project <ID\|NAME\|.>` | Only this project: its id, text in its name (which may match several projects, as in `sessions list`), or `.` for the project this folder belongs to. |
+| `-n, --limit <N>` | How many to show, from 1 to 100. Defaults to 20. |
+| `--json` | Print one JSON array of hits instead of the list. See [JSON output](json-output.md#search). |
+| `--registry <URL>` | Registry to use. Defaults to `PROTOSTAR_REGISTRY_URL`, then the saved default, then `https://localhost:7443`. |
+
+`--project .` resolves this folder the way a backup files its sessions (see
+`protostar project`), and prints which project that is first. A folder with
+nothing backed up yet has no project, so it finds nothing.
+
+```console
+$ protostar search '"DNS records"' --kind memory --project homelab --json
+[{"kind":"memory","path":"dns.md","projectId":"ecb56db5-bb0f-41d1-8a7f-4b476620727c","project":"github.com/example/homelab","machineId":"178aa838-787d-4a5c-82e3-009c277ccec5","machineName":"vm-dev-01","date":"2026-11-20T07:08:23.134151+00:00","snippet":"«DNS»\n\n«DNS» «records» are added with the Technitium API, never by editing zone files"}]
+```
+
 ## `protostar project`
 
 See which [project](../guides/projects.md) a folder belongs to, and link or unlink

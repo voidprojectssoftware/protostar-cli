@@ -5,7 +5,7 @@ title: JSON output for agents and scripts
 
 # JSON output for agents and scripts
 
-The `protostar sessions` commands, and `protostar status`, take `--json`. With it
+The `protostar sessions` commands, `protostar search` and `protostar status` take `--json`. With it
 they print structured records instead of tables, so a coding agent or a script can
 act on the result without parsing text meant for people. This page is the
 contract: what goes where, the field names and types, the error codes and the exit
@@ -17,6 +17,7 @@ codes. The output without `--json` is unchanged.
 | `protostar sessions status` | One JSON array of [transcript records](#sessions-status). |
 | `protostar sessions push` | One JSON array of [backup records](#sessions-push). |
 | `protostar sessions show` | [JSON Lines](#sessions-show): one record per message, one per line, as the session downloads. |
+| `protostar search` | One JSON array of [search hits](#search). |
 | `protostar status` | One JSON object; see [`protostar status`](commands.md#protostar-status). |
 
 ## The rules
@@ -162,6 +163,30 @@ skipped.
 If the download fails part way, the records already printed stand and a
 `registry_unreachable` error object follows on standard error, with exit code `1`.
 
+## `search`
+
+One record per hit, best match first. Every field but the snippet comes from the
+registry's own records, and the title and snippet are redacted by the registry.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `kind` | string | `session` (a session or a subagent) or `memory`, as `--kind` takes them. |
+| `id` | string | For a session, its [id](#ids), which `sessions show` takes. Memory has no `id`: `projectId` and `path` name it. |
+| `harness` | string | For a session, the harness. |
+| `parentId` | string | For a subagent, the `id` of its session. |
+| `title` | string | For a session, its title or first prompt. |
+| `path` | string | For memory, the file's path in the project's memory folder, for example `dns.md`. |
+| `projectId` | string (UUID) | The project. Absent for a session not filed under one yet. |
+| `project` | string | The project's name. |
+| `machineId` | string (UUID) | For a session, the machine it came from; for memory, the machine that sent the version matched. |
+| `machineName` | string | That machine's name. |
+| `date` | time | For a session, its latest activity; for memory, when the file last changed. |
+| `snippet` | string | The text around the match, with each matched word between `«` and `»`. It can hold line breaks. |
+
+No match is an empty array, `[]`, with exit code `0`. A registry that does not
+offer search (it does not list `search` in its `/v1/meta` capabilities, or answers
+`404`) is `registry_incompatible`.
+
 ## Errors
 
 When a command fails, standard error holds one object:
@@ -177,10 +202,10 @@ codes add fields of their own, listed below.
 |---|---|---|
 | `invalid_registry` | The registry URL (from `--registry`, the environment or the saved default) is not usable. | all |
 | `unknown_harness` | `--harness` names no harness that keeps sessions. | `sessions` |
-| `not_signed_in` | No sign-in is stored for the registry. Run `protostar auth login`. | `sessions list`, `show`, `push`, `status --verify` |
+| `not_signed_in` | No sign-in is stored for the registry. Run `protostar auth login`. | `sessions list`, `show`, `push`, `status --verify`; `search` |
 | `session_expired` | The sign-in expired and could not be refreshed. Run `protostar auth login`. | as above |
 | `registry_unreachable` | The registry did not answer, or refused or failed the request. | as above |
-| `registry_incompatible` | The registry speaks an API version this protostar does not. | as above |
+| `registry_incompatible` | The registry speaks an API version this protostar does not, or (for `search`) is too old to offer the feature. | as above |
 | `not_found` | No transcript has that id, and no session id starts with it. Run `protostar sessions list`. | `sessions show` |
 | `ambiguous_id` | More than one session id starts with the id given. The error adds `candidates`: up to 10 objects with `id`, `harness`, `title` and `lastActivityAt`. Give more of the id. | `sessions show` |
 | `incomplete` | The push ran, but some transcripts failed or were left part way; their records say which. | `sessions push` |
@@ -196,7 +221,7 @@ standard error with exit code `255`, whether or not `--json` is given.
 | `0` | Success. For `sessions status`, everything is backed up. |
 | `1` | An error (with an error object), or for `sessions status` and `protostar status`, something pending or needing attention (no error object). |
 | `130` | `sessions push` was stopped with Ctrl+C (`interrupted`). |
-| `255` | The command line was refused (an unknown or misplaced option). |
+| `255` | The command line was refused (an unknown or misplaced option, or an invalid value such as `search --kind other`). |
 
 Check the error object, not only the exit code, to tell a failure from pending
 work.
