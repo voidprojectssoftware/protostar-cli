@@ -251,7 +251,12 @@ On `Stop` (after each reply) and `SessionEnd`, `capture` starts a background
 `protostar sessions push` for that session and returns at once, without waiting for
 the upload. A `Stop` push is skipped when the session's last push started less
 than 30 seconds ago; `SessionEnd` always pushes. Only one push of a transcript
-runs at a time. Other hook events are acknowledged and ignored for now.
+runs at a time. A background push that fails (registry unreachable, not signed in)
+marks its session in the local ledger; the next background push of any session
+that reaches the registry also sends up to three marked sessions, oldest failure
+first, and clears each mark once that session is fully backed up. Sessions that
+were never backed up but never failed are left to `protostar sessions push`.
+Other hook events are acknowledged and ignored for now.
 
 The hook never blocks or fails your session: it gives up after 15 seconds and
 always exits `0`. It writes one line to the session transcript, and problems you

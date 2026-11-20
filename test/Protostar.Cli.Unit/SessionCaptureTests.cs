@@ -96,6 +96,38 @@ public sealed class SessionCaptureTests : IDisposable
         Assert.Contains("protostar sessions push (background): session not backed up: the registry could not be reached", Assert.Single(logged));
     }
 
+    [Fact]
+    public void The_unreachable_line_says_what_will_retry_the_session()
+    {
+        var line = CapturePresenter.DescribeSessions(SessionSyncResult.Fail(SessionSyncFailure.RegistryUnreachable, null));
+
+        Assert.DoesNotContain("next sync", line);
+        Assert.Contains("The next hook backup that reaches it retries this session, or run `protostar sessions push`.", line);
+    }
+
+    [Fact]
+    public void Retried_sessions_are_counted_per_session_and_a_failed_retry_is_logged()
+    {
+        LocalTranscript Of(string key, string? parent = null) =>
+            new("claude-code", key, parent is null ? TranscriptKind.Session : TranscriptKind.Subagent, parent, "/p/" + key + ".jsonl", null);
+        var sync = Sync(new TranscriptSyncOutcome(Transcript(), TranscriptSyncStatus.Uploaded, 10, 0, false, null)) with
+        {
+            Retried =
+            [
+                new(Of("a"), TranscriptSyncStatus.Uploaded, 5, 0, false, null),
+                new(Of("a.agent-1", "a"), TranscriptSyncStatus.UpToDate, 0, 0, false, null),
+                new(Of("b"), TranscriptSyncStatus.Failed, 0, 9, false, "The registry answered 503."),
+            ],
+        };
+        var output = new StringWriter();
+        var logged = new List<string>();
+
+        CapturePresenter.RenderBackgroundPush(sync, output, logged.Add);
+
+        Assert.Contains("Retried 2 earlier sessions whose backup had failed: 1 backed up, 1 failed again (retried later).", output.ToString());
+        Assert.Single(logged);
+    }
+
     // ── how the child is started ─────────────────────────────────────────────────
 
     [Fact]
@@ -196,5 +228,24 @@ public sealed class SessionLedgerLockTests : IDisposable
         using var again = ledger.TryLock(registry, "claude-code", "s");
         Assert.NotNull(again);
         Assert.StartsWith(_dir, Directory.EnumerateFiles(_dir, "*.lock", SearchOption.AllDirectories).Single());
+    }
+
+    [Fact]
+    public void Failure_marks_list_oldest_first_and_a_clear_keeps_a_mark_made_after_the_run_began()
+    {
+        var registry = new Uri("https://registry.test");
+        var ledger = new SessionLedger();
+        var now = DateTimeOffset.UtcNow;
+        ledger.MarkFailed(registry, new FailedBackup("claude-code", "new", "/p/new.jsonl", now));
+        ledger.MarkFailed(registry, new FailedBackup("claude-code", "old", "/p/old.jsonl", now.AddMinutes(-5)));
+
+        Assert.Equal(["old", "new"], ledger.FailedBackups(registry).Select(m => m.Key));
+        Assert.Empty(ledger.FailedBackups(new Uri("https://other.test")));
+
+        ledger.ClearFailed(registry, "claude-code", "old", before: now.AddMinutes(-1));
+        ledger.ClearFailed(registry, "claude-code", "new", before: now.AddMinutes(-1));
+
+        Assert.Equal("new", Assert.Single(ledger.FailedBackups(registry)).Key);
+        Assert.Null(ledger.Get(registry, "claude-code", "new"));
     }
 }

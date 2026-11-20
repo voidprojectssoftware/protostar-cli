@@ -82,10 +82,11 @@ internal static class CapturePresenter
     /// </remarks>
     public static int RenderBackgroundPush(SessionSyncResult result, TextWriter output, Action<string> log)
     {
-        var line = $"protostar sessions push (background): {DescribeSessions(result)}";
+        var line = $"protostar sessions push (background): {DescribeSessions(result)}{DescribeRetries(result.Retried)}";
         output.WriteLine(line);
 
-        if (result.Failure != SessionSyncFailure.None || result.Transcripts.Any(t => t.Status == TranscriptSyncStatus.Failed))
+        if (result.Failure != SessionSyncFailure.None ||
+            result.Transcripts.Concat(result.Retried ?? []).Any(t => t.Status == TranscriptSyncStatus.Failed))
             log($"{DateTimeOffset.UtcNow:O} {line}");
 
         return 0;
@@ -99,7 +100,7 @@ internal static class CapturePresenter
             {
                 SessionSyncFailure.NotLoggedIn => "session not backed up: not signed in. Run `protostar auth login`.",
                 SessionSyncFailure.SessionExpired => "session not backed up: the session expired. Run `protostar auth login`.",
-                SessionSyncFailure.RegistryUnreachable => "session not backed up: the registry could not be reached. It goes on the next sync.",
+                SessionSyncFailure.RegistryUnreachable => "session not backed up: the registry could not be reached. The next hook backup that reaches it retries this session, or run `protostar sessions push`.",
                 _ => $"session not backed up: {sync.Detail ?? sync.Failure.ToString()}",
             };
         }
@@ -115,6 +116,24 @@ internal static class CapturePresenter
                 ? $"backed up {SessionsPresenter.Bytes(sent)} of the session; {SessionsPresenter.Bytes(skipped.BytesPending)} waits: {skipped.Message}"
                 : $"{SessionsPresenter.Bytes(skipped.BytesPending)} of the session not backed up yet: {skipped.Message}";
         return sent > 0 ? $"backed up {SessionsPresenter.Bytes(sent)} of the session." : "session already backed up.";
+    }
+
+    // What the push did for earlier sessions whose backup failed, counted per session, subagents with their session.
+    internal static string DescribeRetries(IReadOnlyList<TranscriptSyncOutcome>? retried)
+    {
+        if (retried is null || retried.Count == 0)
+            return string.Empty;
+
+        var sessions = retried.GroupBy(o => (o.Transcript.Harness, o.Transcript.ParentKey ?? o.Transcript.Key)).ToList();
+        var backedUp = sessions.Count(g => g.All(o => o.Status is TranscriptSyncStatus.UpToDate or TranscriptSyncStatus.Uploaded));
+        var failed = sessions.Count(g => g.Any(o => o.Status == TranscriptSyncStatus.Failed));
+        var waiting = sessions.Count - backedUp - failed;
+        var line = $" Retried {SessionsPresenter.Count(sessions.Count, "earlier session")} whose backup had failed: {backedUp} backed up";
+        if (failed > 0)
+            line += $", {failed} failed again (retried later)";
+        if (waiting > 0)
+            line += $", {waiting} left to another push";
+        return line + ".";
     }
 
     private static string Reason(SkillPushRunResult push) => push.Failure switch

@@ -21,7 +21,27 @@ internal interface ISessionLedger
 
     /// <summary>Takes the transcript's upload lock, or returns <c>null</c> when another process holds it.</summary>
     IDisposable? TryLock(Uri registry, string harness, string key);
+
+    /// <summary>Marks a session whose background backup failed, so a later hook retries it. Replaces an earlier mark. Never throws.</summary>
+    void MarkFailed(Uri registry, FailedBackup backup);
+
+    /// <summary>Every session marked failed for the registry, oldest failure first.</summary>
+    IReadOnlyList<FailedBackup> FailedBackups(Uri registry);
+
+    /// <summary>Removes a session's failure mark if it was made before <paramref name="before"/>. Never throws.</summary>
+    /// <remarks>
+    /// A mark made at or after <paramref name="before"/> records a failure the caller's run did not see (a concurrent
+    /// hook push), so it stays.
+    /// </remarks>
+    void ClearFailed(Uri registry, string harness, string key, DateTimeOffset before);
 }
+
+/// <summary>A session whose last background backup failed.</summary>
+/// <param name="Harness">The harness id.</param>
+/// <param name="Key">The session transcript's key; its subagents are retried with it.</param>
+/// <param name="Path">The session transcript, as the hook named it.</param>
+/// <param name="FailedAt">When the backup last failed.</param>
+internal sealed record FailedBackup(string Harness, string Key, string Path, DateTimeOffset FailedAt);
 
 /// <summary>What the registry holds of one transcript, as last confirmed.</summary>
 /// <param name="Revision">The registry revision.</param>
@@ -46,6 +66,10 @@ internal enum ProjectFiling
 }
 
 /// <summary>Production <see cref="ISessionLedger"/> under <c>~/.protostar/sessions/</c>.</summary>
+/// <remarks>
+/// Failure marks live apart from the entries, under <c>failed/</c> in the registry's folder, so a hook finds the few
+/// failed sessions by listing that folder rather than reading the entry of every transcript ever backed up.
+/// </remarks>
 internal sealed class SessionLedger : ISessionLedger
 {
     /// <summary>How many bytes before the stored length are fingerprinted.</summary>
@@ -99,6 +123,72 @@ internal sealed class SessionLedger : ISessionLedger
         }
     }
 
+    /// <inheritdoc />
+    public void MarkFailed(Uri registry, FailedBackup backup)
+    {
+        try
+        {
+            var path = FailedPath(registry, backup.Harness, backup.Key);
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            var temp = path + ".tmp-" + Guid.NewGuid().ToString("N");
+            File.WriteAllText(temp, JsonSerializer.Serialize(backup, Options));
+            File.Move(temp, path, overwrite: true);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // Best effort: a lost mark leaves the session to the next manual push, as before marks existed.
+        }
+    }
+
+    /// <inheritdoc />
+    public IReadOnlyList<FailedBackup> FailedBackups(Uri registry)
+    {
+        var dir = Path.Combine(RegistryDir(registry), FailedDir);
+        if (!Directory.Exists(dir))
+            return [];
+
+        var marks = new List<FailedBackup>();
+        try
+        {
+            foreach (var file in Directory.EnumerateFiles(dir, "*.json", SearchOption.AllDirectories))
+            {
+                try
+                {
+                    if (JsonSerializer.Deserialize<FailedBackup>(File.ReadAllText(file)) is { } mark)
+                        marks.Add(mark);
+                }
+                catch (Exception ex) when (ex is IOException or JsonException or UnauthorizedAccessException)
+                {
+                    // Being cleared or replaced as we read it, or unreadable: skip it this run.
+                }
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // The folder went away mid-listing; what was read is still good.
+        }
+
+        return [.. marks.OrderBy(m => m.FailedAt).ThenBy(m => m.Key, StringComparer.Ordinal)];
+    }
+
+    /// <inheritdoc />
+    public void ClearFailed(Uri registry, string harness, string key, DateTimeOffset before)
+    {
+        try
+        {
+            var path = FailedPath(registry, harness, key);
+            if (!File.Exists(path))
+                return;
+            var mark = JsonSerializer.Deserialize<FailedBackup>(File.ReadAllText(path));
+            if (mark is null || mark.FailedAt < before)
+                File.Delete(path);
+        }
+        catch (Exception ex) when (ex is IOException or JsonException or UnauthorizedAccessException)
+        {
+            // Best effort: a mark that stays only costs one more retry, which finds the session up to date.
+        }
+    }
+
     /// <summary>The fingerprint of the bytes just before <paramref name="length"/> in <paramref name="path"/>, or <c>null</c> if unreadable.</summary>
     public static string? TailHash(string path, long length)
     {
@@ -119,9 +209,15 @@ internal sealed class SessionLedger : ISessionLedger
         }
     }
 
-    private static string EntryPath(Uri registry, string harness, string key)
+    private const string FailedDir = "failed";
+
+    private static string EntryPath(Uri registry, string harness, string key) => Path.Combine(RegistryDir(registry), harness, key + ".json");
+
+    private static string FailedPath(Uri registry, string harness, string key) => Path.Combine(RegistryDir(registry), FailedDir, harness, key + ".json");
+
+    private static string RegistryDir(Uri registry)
     {
         var registryDir = Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(RegistryEndpoint.CredentialKey(registry))))[..16];
-        return Path.Combine(ProtostarPaths.ConfigDir(), "sessions", registryDir, harness, key + ".json");
+        return Path.Combine(ProtostarPaths.ConfigDir(), "sessions", registryDir);
     }
 }
