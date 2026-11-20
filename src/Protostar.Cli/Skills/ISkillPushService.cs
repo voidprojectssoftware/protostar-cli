@@ -99,7 +99,10 @@ internal enum SkillPushRunFailure
     /// <summary>The registry does not speak this CLI's API major.</summary>
     Incompatible,
 
-    /// <summary><c>--as</c> needs exactly one local skill to push under the new name; see the detail.</summary>
+    /// <summary>
+    /// <c>--as</c> needs exactly one local skill to push under a new name that nothing in its scope, here or in the registry,
+    /// already answers to; see the detail.
+    /// </summary>
     InvalidAs,
 
     /// <summary>The registry answered, but would not list the skills needed to confirm what the ledger says; see the detail.</summary>

@@ -38,9 +38,11 @@ internal sealed class SkillPushService : ISkillPushService
     private readonly ISkillLedger _ledger;
     private readonly IProjectFactsResolver _facts;
     private readonly IMachineIdentity _machine;
+    private readonly IProjectApi _projects;
 
     public SkillPushService(
-        ISkillService skills, IAccessTokenProvider tokens, IRegistryApi registry, ISkillLedger ledger, IProjectFactsResolver facts, IMachineIdentity machine)
+        ISkillService skills, IAccessTokenProvider tokens, IRegistryApi registry, ISkillLedger ledger, IProjectFactsResolver facts, IMachineIdentity machine,
+        IProjectApi projects)
     {
         _skills = skills;
         _tokens = tokens;
@@ -48,6 +50,7 @@ internal sealed class SkillPushService : ISkillPushService
         _ledger = ledger;
         _facts = facts;
         _machine = machine;
+        _projects = projects;
     }
 
     /// <inheritdoc />
@@ -77,6 +80,12 @@ internal sealed class SkillPushService : ISkillPushService
             return SkillPushRunResult.Fail(SkillPushRunFailure.SkillNotFound, missing, registry);
         if (request.As is not null && AsProblem(request.Names, selected, request.As) is { } asProblem)
             return SkillPushRunResult.Fail(SkillPushRunFailure.InvalidAs, asProblem, registry);
+
+        // --as renames the copy here once the registry has it, so a name another skill of the scope already uses, here or
+        // in the registry, would leave two skills answering to it. Every harness's skills count, as they share the registry.
+        var local = request.HarnessId is null ? discovery.Skills : _skills.Discover(null, request.HarnessHome, request.ProjectStart).Skills;
+        if (request.As is { } asName && LocalHolder(selected[0], asName, local) is { } localHolder)
+            return SkillPushRunResult.Fail(SkillPushRunFailure.InvalidAs, Taken(asName, localHolder, selected[0], local, null), registry);
 
         // Decide each skill locally first: unreadable skills fail, a second skill with an already-seen name in
         // the same scope is compared by content (identical is skipped, different is a conflict), and skills the
@@ -177,6 +186,15 @@ internal sealed class SkillPushService : ISkillPushService
                 _ => SkillPushRunFailure.SessionExpired,
             };
             return SkillPushRunResult.Fail(failure, null, registry);
+        }
+
+        if (request.As is { } asNew && pending.Count > 0)
+        {
+            var taken = await RegistryNamesAsync(registry, session.AccessToken, selected[0], cancellationToken);
+            if (taken.Failure is { } failure)
+                return failure;
+            if (RegistryHolder(asNew, taken) is { } registryHolder)
+                return SkillPushRunResult.Fail(SkillPushRunFailure.InvalidAs, Taken(asNew, registryHolder, selected[0], local, taken), registry);
         }
 
         var gone = new HashSet<int>();
@@ -417,6 +435,97 @@ internal sealed class SkillPushService : ISkillPushService
             return $"'{newName}' is already this skill's name. --as takes a different one.";
         return null;
     }
+
+    // What already answers to newName in the scope of the skill being renamed, on this machine: another skill of that
+    // name or in a folder of that name, or any folder of that name beside it (which the rename would move into). Null when free.
+    private static string? LocalHolder(DiscoveredSkill skill, string newName, IReadOnlyList<DiscoveredSkill> local)
+    {
+        foreach (var other in local.Where(s => s.Path != skill.Path && SameScope(s, skill)))
+        {
+            if (string.Equals(other.Name, newName, StringComparison.OrdinalIgnoreCase))
+                return $"the {Describe(other.Scope)} skill at {other.Path} is called '{other.Name}'";
+            if (string.Equals(Path.GetFileName(other.Path), newName, StringComparison.OrdinalIgnoreCase))
+                return $"the {Describe(other.Scope)} skill '{other.Name}' is in a folder named '{Path.GetFileName(other.Path)}' ({other.Path})";
+        }
+
+        try
+        {
+            var parent = Path.GetDirectoryName(skill.Path);
+            if (parent is not null && Directory.Exists(parent) &&
+                new DirectoryInfo(parent).EnumerateFileSystemInfos().FirstOrDefault(e => string.Equals(e.Name, newName, StringComparison.OrdinalIgnoreCase)) is { } entry)
+            {
+                return $"{entry.FullName} already exists beside it";
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return $"the folder beside it could not be checked for '{newName}' ({ex.Message})";
+        }
+
+        return null;
+    }
+
+    // The registry's skill names, live and removed, in the scope of the skill being renamed: its project's (or none when
+    // the folder has no project yet), or the global ones.
+    private async Task<RegistryNames> RegistryNamesAsync(Uri registry, string accessToken, DiscoveredSkill skill, CancellationToken cancellationToken)
+    {
+        Guid? projectId = null;
+        if (ProjectOf(skill) is { } project)
+        {
+            var resolved = await _projects.ResolveProjectAsync(registry, accessToken, project.MachineId, project.Facts, cancellationToken);
+            if (!resolved.Ok)
+                return new RegistryNames(null, [], [], SkillPushRunResult.Fail(SkillPushRunFailure.ListFailed, resolved.Error, registry));
+            if (resolved.Value!.ProjectId is not { } id)
+                return new RegistryNames(null, [], [], null);
+            projectId = id;
+        }
+
+        var list = await _registry.ListSkillsAsync(registry, accessToken, cancellationToken);
+        if (list.Skills is not { } skills)
+            return new RegistryNames(projectId, [], [], await CheckMetaAsync(registry, cancellationToken) ?? SkillPushRunResult.Fail(SkillPushRunFailure.ListFailed, list.Error, registry));
+
+        return new RegistryNames(
+            projectId,
+            skills.Where(s => s.ProjectId == projectId).ToList(),
+            (list.Removed ?? []).Where(r => r.ProjectId == projectId).ToList(),
+            null);
+    }
+
+    // What answers to newName in the registry's scope: a skill, or a removed one whose copies may still be about. Null when free.
+    private static string? RegistryHolder(string newName, RegistryNames names)
+    {
+        var where = names.ProjectId is null ? "global skill" : "skill in this project";
+        if (names.Skills.FirstOrDefault(s => string.Equals(s.Name, newName, StringComparison.OrdinalIgnoreCase)) is { } live)
+            return $"the registry already has a {where} named '{live.Name}'";
+        if (names.Removed.FirstOrDefault(r => string.Equals(r.Name, newName, StringComparison.OrdinalIgnoreCase)) is { } removed)
+        {
+            var how = removed.RenamedTo is { } renamedTo ? $"renamed to '{renamedTo}'" : "deleted";
+            return $"the registry had a {where} named '{removed.Name}' ({how} at v{removed.LastVersion}), and copies of it may still be synced under that name";
+        }
+
+        return null;
+    }
+
+    // Why --as cannot use newName, with a free name to try instead: the first of newName-2, newName-3, ... that nothing
+    // here, and nothing in the registry when it was asked, answers to.
+    private static string Taken(string newName, string holder, DiscoveredSkill skill, IReadOnlyList<DiscoveredSkill> local, RegistryNames? names)
+    {
+        var suggestion = Enumerable.Range(2, 98).Select(n => $"{newName}-{n}")
+            .FirstOrDefault(candidate => LocalHolder(skill, candidate, local) is null && (names is null || RegistryHolder(candidate, names) is null));
+        var instead = suggestion is null ? "Choose another name." : $"Choose another name, such as '{suggestion}'.";
+        return $"'{newName}' is already taken: {holder}. Nothing was pushed or changed. {instead}";
+    }
+
+    private static bool SameScope(DiscoveredSkill a, DiscoveredSkill b) =>
+        a.Scope == b.Scope && (a.Scope == SkillScope.Global || string.Equals(
+            a.ProjectRoot is null ? null : Path.TrimEndingDirectorySeparator(Path.GetFullPath(a.ProjectRoot)),
+            b.ProjectRoot is null ? null : Path.TrimEndingDirectorySeparator(Path.GetFullPath(b.ProjectRoot)),
+            StringComparison.Ordinal));
+
+    private static string Describe(SkillScope scope) => scope.ToString().ToLowerInvariant();
+
+    // The registry's names in one scope (a project, or global when ProjectId is null), or the failure that stops the run.
+    private sealed record RegistryNames(Guid? ProjectId, IReadOnlyList<RegistrySkill> Skills, IReadOnlyList<RegistryRemovedSkill> Removed, SkillPushRunResult? Failure);
 
     // A record vouches for a copy's base only when it was synced as this skill: the same scope, and the same name
     // (records from before names were kept say none). Otherwise the copy is treated as never synced (base 0).

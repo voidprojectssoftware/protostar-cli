@@ -41,13 +41,14 @@ public sealed class SkillPushServiceTests : IDisposable
     // Registry skills the ledger records were synced from, listed by every registry Build makes.
     private readonly List<RegistrySkill> _inRegistry = [];
     private readonly FakeFacts _facts = new();
+    private readonly FakeProjects _projects = new();
 
     private (ISkillPushService Sut, FakeRegistryApi Api) Build(
         IEnumerable<DiscoveredSkill> skills, StoredToken? session = null, FakeRegistryApi? api = null, SessionLookup? lookup = null)
     {
         api ??= new FakeRegistryApi();
         api.Skills.AddRange(_inRegistry.Where(r => !api.Skills.Contains(r)));
-        var sut = new SkillPushService(new FakeSkillService(skills.ToList()), new FakeTokens(lookup ?? SessionLookups.Of(session)), api, _ledger, _facts, new FakeMachine());
+        var sut = new SkillPushService(new FakeSkillService(skills.ToList()), new FakeTokens(lookup ?? SessionLookups.Of(session)), api, _ledger, _facts, new FakeMachine(), _projects);
         return (sut, api);
     }
 
@@ -1008,6 +1009,134 @@ public sealed class SkillPushServiceTests : IDisposable
 
         Assert.Equal(SkillPushRunFailure.InvalidAs, result.Failure);
         Assert.Contains("matches 2 local skills", result.Detail);
+    }
+
+    [Fact]
+    public async Task Push_as_refuses_the_name_of_a_local_skill_folder_beside_it_and_changes_nothing()
+    {
+        var hello = Skill("hello", dir: "hello");
+        var zeta = Skill("zeta", dir: "zeta");
+        Synced(hello, 1);
+        var before = _ledger.Get(RegistryUri, hello.Path);
+        var (sut, api) = Build([hello, zeta], Session());
+
+        var result = await sut.PushAsync(Request("hello") with { As = "zeta" }, CancellationToken.None);
+
+        Assert.Equal(SkillPushRunFailure.InvalidAs, result.Failure);
+        Assert.Contains("'zeta' is already taken", result.Detail);
+        Assert.Contains(zeta.Path, result.Detail);
+        Assert.Contains("such as 'zeta-2'", result.Detail);
+        Assert.Empty(api.Pushed);
+        Assert.Equal(0, api.ListCalls);
+        Assert.Contains("name: hello", File.ReadAllText(Path.Combine(hello.Path, "SKILL.md")));
+        Assert.Contains("name: zeta", File.ReadAllText(Path.Combine(zeta.Path, "SKILL.md")));
+        Assert.Equal(before, _ledger.Get(RegistryUri, hello.Path));
+        Assert.Null(_ledger.Get(RegistryUri, zeta.Path));
+    }
+
+    [Fact]
+    public async Task Push_as_refuses_a_name_a_local_skills_manifest_uses_in_another_folder()
+    {
+        var hello = Skill("hello", dir: "hello");
+        var other = Skill("Zeta", dir: "elsewhere");
+        var (sut, api) = Build([hello, other], Session());
+
+        var result = await sut.PushAsync(Request("hello") with { As = "zeta" }, CancellationToken.None);
+
+        Assert.Equal(SkillPushRunFailure.InvalidAs, result.Failure);
+        Assert.Contains($"the global skill at {other.Path} is called 'Zeta'", result.Detail);
+        Assert.Empty(api.Pushed);
+    }
+
+    [Fact]
+    public async Task Push_as_refuses_a_plain_folder_of_the_new_name_beside_the_skill()
+    {
+        var hello = Skill("hello", dir: "hello");
+        Directory.CreateDirectory(Path.Combine(_root, "zeta"));
+        var (sut, api) = Build([hello], Session());
+
+        var result = await sut.PushAsync(Request("hello") with { As = "zeta" }, CancellationToken.None);
+
+        Assert.Equal(SkillPushRunFailure.InvalidAs, result.Failure);
+        Assert.Contains("already exists beside it", result.Detail);
+        Assert.Empty(api.Pushed);
+    }
+
+    [Fact]
+    public async Task Push_as_ignores_a_skill_of_the_name_in_the_other_scope()
+    {
+        var hello = Skill("hello", dir: "hello");
+        var projectZeta = Skill("zeta", SkillScope.Project, dir: Path.Combine("repo-skills", "zeta"));
+        var (sut, api) = Build([hello, projectZeta], Session());
+
+        var result = await sut.PushAsync(Request("hello") with { As = "zeta" }, CancellationToken.None);
+
+        Assert.Equal(SkillPushRunFailure.None, result.Failure);
+        Assert.Equal("zeta", Assert.Single(api.Pushed).Name);
+    }
+
+    [Fact]
+    public async Task Push_as_refuses_the_name_of_a_registry_skill_in_the_scope_before_pushing()
+    {
+        var hello = Skill("hello", dir: "hello");
+        var (sut, api) = Build([hello], Session());
+        api.Skills.Add(new RegistrySkill("zeta", null, 2, "", DateTimeOffset.UnixEpoch));
+        api.Skills.Add(new RegistrySkill("zeta-2", null, 1, "", DateTimeOffset.UnixEpoch));
+
+        var result = await sut.PushAsync(Request("hello") with { As = "zeta" }, CancellationToken.None);
+
+        Assert.Equal(SkillPushRunFailure.InvalidAs, result.Failure);
+        Assert.Contains("the registry already has a global skill named 'zeta'", result.Detail);
+        Assert.Contains("such as 'zeta-3'", result.Detail);
+        Assert.Empty(api.Pushed);
+        Assert.True(Directory.Exists(hello.Path));
+        Assert.Null(_ledger.Get(RegistryUri, hello.Path));
+    }
+
+    [Fact]
+    public async Task Push_as_refuses_the_name_of_a_skill_removed_from_the_registry()
+    {
+        var hello = Skill("hello", dir: "hello");
+        var (sut, api) = Build([hello], Session());
+        api.Removed.Add(new RegistryRemovedSkill("zeta", null, 3, "omega"));
+
+        var result = await sut.PushAsync(Request("hello") with { As = "zeta" }, CancellationToken.None);
+
+        Assert.Equal(SkillPushRunFailure.InvalidAs, result.Failure);
+        Assert.Contains("renamed to 'omega' at v3", result.Detail);
+        Assert.Empty(api.Pushed);
+    }
+
+    [Fact]
+    public async Task Push_as_checks_a_project_skills_new_name_against_its_own_projects_registry_skills()
+    {
+        var hello = Skill("hello", SkillScope.Project, dir: Path.Combine("repo-skills", "hello"));
+        var (sut, api) = Build([hello], Session());
+        var project = FakeRegistryApi.ProjectIdOf(ProjectFacts.NotGit(hello.ProjectRoot!, hello.ProjectRoot!));
+        api.Skills.Add(new RegistrySkill("zeta", null, 1, "", DateTimeOffset.UnixEpoch));
+        api.Skills.Add(new RegistrySkill("omega", null, 1, "", DateTimeOffset.UnixEpoch, project, "repo"));
+
+        var global = await sut.PushAsync(Request("hello") with { As = "zeta" }, CancellationToken.None);
+        Assert.Equal(SkillPushRunFailure.None, global.Failure);
+
+        var renamed = Path.Combine(_root, "repo-skills", "zeta");
+        var (again, _) = Build([hello with { Name = "zeta", Path = renamed }], Session(), api);
+        var clash = await again.PushAsync(Request("zeta") with { As = "omega" }, CancellationToken.None);
+        Assert.Equal(SkillPushRunFailure.InvalidAs, clash.Failure);
+        Assert.Contains("skill in this project named 'omega'", clash.Detail);
+    }
+
+    /// <summary>Resolves a folder to the project <see cref="FakeRegistryApi.ProjectIdOf"/> gives it.</summary>
+    internal sealed class FakeProjects : IProjectApi
+    {
+        public Task<ApiResult<RemoteProject>> ResolveProjectAsync(Uri registry, string accessToken, Guid machineId, ProjectFacts facts, CancellationToken cancellationToken) =>
+            Task.FromResult(ApiResult<RemoteProject>.Success(new RemoteProject { ProjectId = FakeRegistryApi.ProjectIdOf(facts), Name = Path.GetFileName(facts.Directory) }));
+
+        public Task<ApiResult<ProjectLinkChange>> LinkFolderAsync(Uri registry, string accessToken, Guid machineId, ProjectFacts facts, string project, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
+        public Task<ApiResult<ProjectLinkChange>> UnlinkFolderAsync(Uri registry, string accessToken, Guid machineId, ProjectFacts facts, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
     }
 
     /// <summary>Facts for a folder outside git, recording which folders were asked about.</summary>

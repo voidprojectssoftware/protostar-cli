@@ -141,7 +141,7 @@ Takes the same options as `protostar skills`, plus:
 |---|---|
 | `--registry <URL>` | Registry to back up to. Defaults to `PROTOSTAR_REGISTRY_URL`, then the saved default, then `https://localhost:7443`. |
 | `--force` | Upload every selected skill even if it has not changed since its last backup. When the registry has a newer version than the one this copy was based on, replace it (keep yours): the output names the version replaced, which stays in the registry's history. |
-| `--as <NEW-NAME>` | Push the one named skill as a new registry skill called `NEW-NAME`, and rename the copy here to match (its `SKILL.md` name, and its folder when the folder has the old name). Refused, with nothing changed, when the registry already has a different skill of that name. |
+| `--as <NEW-NAME>` | Push the one named skill as a new registry skill called `NEW-NAME`, and rename the copy here to match (its `SKILL.md` name, and its folder when the folder has the old name). Refused before anything is pushed or changed when `NEW-NAME` is already taken in the skill's scope (global, or its project): by another skill here (its folder or its `SKILL.md` name, in any harness), by any folder of that name beside it, or by a registry skill, or one deleted or renamed away from the registry. The refusal names what holds the name and suggests a free one. |
 
 protostar remembers what it last backed up to each registry in
 `~/.protostar/skill-ledger.json`, so a skill that has not changed is not uploaded
