@@ -16,9 +16,25 @@ Feature: Setting up a machine in one command
     Then the exit code is 1
     And the output contains "Sign-in: failed"
     And the output contains "Hooks: done"
-    And the output contains "Skills: skipped. Needs sign-in."
+    And the output contains "Skills: skipped. Needs the registry, which could not be reached."
     And the output contains "Configuration: skipped"
     And the harness settings contain "capture --hook"
+
+  Scenario Outline: An unreachable registry fails sign-in step by step when already signed in (<token> token)
+    Given a fake claude-code harness
+    And a stored session for "https://127.0.0.1:2" whose access token is <token>
+    When I run protostar with "setup --registry https://127.0.0.1:2 --harness-home {harnessHome}"
+    Then the exit code is 1
+    And the output contains "Sign-in: failed. Could not reach the registry at https://127.0.0.1:2"
+    And the output contains "Hooks: done"
+    And the output contains "Skills: skipped. Needs the registry, which could not be reached."
+    And the output does not contain "discovery document"
+    And the harness settings contain "capture --hook"
+
+    Examples:
+      | token   |
+      | current |
+      | expired |
 
   Scenario: An invalid registry URL stops before any step
     When I run protostar with "setup --registry not-a-url"

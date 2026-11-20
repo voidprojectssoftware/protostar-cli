@@ -163,8 +163,8 @@ public sealed class SetupServiceTests
         Assert.Equal(SetupOutcome.Failed, result.Steps[0].Outcome);
         Assert.DoesNotContain("sign-in", _calls);
         Assert.Equal(SetupOutcome.Done, result.Steps[1].Outcome);
-        Assert.Equal((SetupOutcome.Skipped, SetupSkip.NotSignedIn), (result.Steps[2].Outcome, result.Steps[2].Skip));
-        Assert.Equal((SetupOutcome.Skipped, SetupSkip.NotSignedIn), (result.Steps[4].Outcome, result.Steps[4].Skip));
+        Assert.Equal((SetupOutcome.Skipped, SetupSkip.RegistryUnreachable), (result.Steps[2].Outcome, result.Steps[2].Skip));
+        Assert.Equal((SetupOutcome.Skipped, SetupSkip.RegistryUnreachable), (result.Steps[4].Outcome, result.Steps[4].Skip));
         Assert.DoesNotContain("pull", _calls);
         Assert.DoesNotContain("push", _calls);
         Assert.DoesNotContain("sync", _calls);
@@ -192,6 +192,20 @@ public sealed class SetupServiceTests
 
         Assert.Equal(SetupOutcome.Failed, result.Steps[0].Outcome);
         Assert.Equal(SetupSkip.NotSignedIn, result.Steps[2].Skip);
+        Assert.False(result.Succeeded);
+    }
+
+    [Fact]
+    public async Task A_sign_in_that_could_not_reach_the_registry_skips_what_needs_it_for_that_reason()
+    {
+        _signIn.Failure = SignInFailure.RegistryUnreachable;
+        _sessions.Pending(("s1", TranscriptKind.Session, null, 100));
+
+        var result = await Run(yes: true);
+
+        Assert.Equal(SetupOutcome.Failed, result.Steps[0].Outcome);
+        Assert.Equal(SetupSkip.RegistryUnreachable, result.Steps[2].Skip);
+        Assert.Equal(SetupSkip.RegistryUnreachable, result.Steps[4].Skip);
         Assert.False(result.Succeeded);
     }
 

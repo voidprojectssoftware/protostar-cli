@@ -128,11 +128,15 @@ internal sealed class ProjectService : IProjectService
             return (null, null, ProjectFailure.InvalidRegistry, ex.Message);
         }
 
-        var stored = await _tokens.GetSessionAsync(uri, cancellationToken);
-        if (stored is null)
-            return (uri, null, ProjectFailure.NotLoggedIn, null);
-        if (stored.IsExpired)
-            return (uri, null, ProjectFailure.SessionExpired, null);
-        return (uri, stored.AccessToken, ProjectFailure.None, null);
+        var lookup = await _tokens.GetSessionAsync(uri, cancellationToken);
+        if (lookup is { State: SessionState.Current, Session: { } stored })
+            return (uri, stored.AccessToken, ProjectFailure.None, null);
+        return lookup.State switch
+        {
+            SessionState.None => (uri, null, ProjectFailure.NotLoggedIn, null),
+            // Failed with no detail reads "could not reach" the registry.
+            SessionState.RegistryUnreachable => (uri, null, ProjectFailure.Failed, null),
+            _ => (uri, null, ProjectFailure.SessionExpired, null),
+        };
     }
 }

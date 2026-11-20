@@ -255,8 +255,8 @@ public sealed class SkillChangeServiceTests : IDisposable
 
     private sealed class Tokens : IAccessTokenProvider
     {
-        public Task<StoredToken?> GetSessionAsync(Uri registry, CancellationToken cancellationToken) =>
-            Task.FromResult<StoredToken?>(new StoredToken { Registry = Registry, AccessToken = "token", ExpiresAtUtc = DateTimeOffset.UtcNow.AddHours(1) });
+        public Task<SessionLookup> GetSessionAsync(Uri registry, CancellationToken cancellationToken) =>
+            Task.FromResult(SessionLookups.Of(new StoredToken { Registry = Registry, AccessToken = "token", ExpiresAtUtc = DateTimeOffset.UtcNow.AddHours(1) }));
     }
 
     /// <summary>Resolves every folder to <see cref="ProjectId"/>.</summary>

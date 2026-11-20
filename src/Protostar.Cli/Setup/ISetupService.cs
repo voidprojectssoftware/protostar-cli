@@ -81,6 +81,9 @@ internal enum SetupSkip
     /// <summary>The step needs the registry and sign-in did not succeed.</summary>
     NotSignedIn,
 
+    /// <summary>The step needs the registry, and sign-in failed because the registry could not be reached.</summary>
+    RegistryUnreachable,
+
     /// <summary>No supported harness was found on this machine.</summary>
     NoHarness,
 

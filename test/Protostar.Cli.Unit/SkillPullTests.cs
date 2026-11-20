@@ -39,11 +39,11 @@ public sealed class SkillPullServiceTests : IDisposable
 
     private ISkillPullService Build(StoredToken? session = null) => Build(_api, session);
 
-    private ISkillPullService Build(FakeRegistryApi api, StoredToken? session = null, bool noSession = false)
+    private ISkillPullService Build(FakeRegistryApi api, StoredToken? session = null, bool noSession = false, SessionLookup? lookup = null)
     {
         var harness = new ClaudeCodeHarness(new ClaudeCodeSkillParser(), new ClaudeCodeSkillMapper());
         var catalog = new HarnessCatalog([harness]);
-        return new SkillPullService(catalog, new Tokens(noSession ? null : session ?? Session()), api, _ledger, new ProjectFactsResolver(), _projects, new FakeMachine());
+        return new SkillPullService(catalog, new Tokens(lookup ?? SessionLookups.Of(noSession ? null : session ?? Session())), api, _ledger, new ProjectFactsResolver(), _projects, new FakeMachine());
     }
 
     private static StoredToken Session(bool expired = false) => new()
@@ -480,6 +480,14 @@ public sealed class SkillPullServiceTests : IDisposable
         var result = await Build(Session(expired: true)).PullAsync(Pull(), CancellationToken.None);
 
         Assert.Equal(SkillPullRunFailure.SessionExpired, result.Failure);
+    }
+
+    [Fact]
+    public async Task Pull_with_a_session_the_registry_could_not_be_reached_to_refresh_says_the_registry_is_unreachable()
+    {
+        var result = await Build(_api, lookup: SessionLookups.Unreachable(Registry)).PullAsync(Pull(), CancellationToken.None);
+
+        Assert.Equal(SkillPullRunFailure.RegistryUnreachable, result.Failure);
     }
 
     [Fact]
@@ -920,7 +928,7 @@ public sealed class SkillPullServiceTests : IDisposable
         PublishProject(home, "deploy", 1);
 
         var harness = new ClaudeCodeHarness(new ClaudeCodeSkillParser(), new ClaudeCodeSkillMapper());
-        var sut = new SkillPullService(new HarnessCatalog([harness]), new Tokens(Session()), _api, _ledger, new ProjectFactsResolver(), _projects, new FakeMachine());
+        var sut = new SkillPullService(new HarnessCatalog([harness]), new Tokens(SessionLookups.Of(Session())), _api, _ledger, new ProjectFactsResolver(), _projects, new FakeMachine());
         var pull = await sut.PullAsync(new SkillPullRequest([], null, config, Registry, ProjectStart: home), CancellationToken.None);
 
         var entry = Assert.Single(pull.Entries);
@@ -1058,9 +1066,9 @@ public sealed class SkillPullServiceTests : IDisposable
             throw new NotSupportedException();
     }
 
-    private sealed class Tokens(StoredToken? session) : IAccessTokenProvider
+    private sealed class Tokens(SessionLookup session) : IAccessTokenProvider
     {
-        public Task<StoredToken?> GetSessionAsync(Uri registry, CancellationToken cancellationToken) => Task.FromResult(session);
+        public Task<SessionLookup> GetSessionAsync(Uri registry, CancellationToken cancellationToken) => Task.FromResult(session);
     }
 }
 

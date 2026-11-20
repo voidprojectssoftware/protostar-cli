@@ -17,6 +17,8 @@ internal static class SetupPresenter
 {
     private const int MaxSkillLines = 20;
 
+    private const string RegistryUnreachable = "Needs the registry, which could not be reached.";
+
     private const string HooksNote = "[grey]The capture hooks back up new activity from here on.[/]";
 
     /// <summary>The interaction a setup run reports to, printing each step and prompting on this console.</summary>
@@ -128,6 +130,8 @@ internal static class SetupPresenter
     {
         if (step.Skip == SetupSkip.NotSignedIn)
             return ["Needs sign-in."];
+        if (step.Skip == SetupSkip.RegistryUnreachable)
+            return [RegistryUnreachable];
 
         // The push ran first; its line comes first, then the pull's.
         var (pushed, pushLines) = Pushed(step.SkillPush!, catalog);
@@ -212,6 +216,7 @@ internal static class SetupPresenter
         var reason = step.Skip switch
         {
             SetupSkip.NotSignedIn => "Needs sign-in.",
+            SetupSkip.RegistryUnreachable => RegistryUnreachable,
             SetupSkip.Declined => "You chose not to back them up now.",
             _ => "No terminal to ask on, and --yes was not given.",
         };

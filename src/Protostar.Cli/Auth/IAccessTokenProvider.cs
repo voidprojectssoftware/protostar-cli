@@ -14,9 +14,30 @@ internal interface IAccessTokenProvider
     /// Loads the session for <paramref name="registry"/>, refreshing and re-saving it when the access
     /// token has expired and a refresh token is available.
     /// </summary>
-    /// <returns>
-    /// The session, or <c>null</c> when none is stored. The returned session can still be expired when
-    /// the refresh failed or the registry was unreachable; callers check <see cref="StoredToken.IsExpired"/>.
-    /// </returns>
-    Task<StoredToken?> GetSessionAsync(Uri registry, CancellationToken cancellationToken);
+    /// <remarks>
+    /// Never throws for an unreachable registry: a refresh that cannot reach it, including its OIDC discovery
+    /// document, comes back as <see cref="SessionState.RegistryUnreachable"/>.
+    /// </remarks>
+    Task<SessionLookup> GetSessionAsync(Uri registry, CancellationToken cancellationToken);
 }
+
+/// <summary>Whether a usable session exists for a registry.</summary>
+internal enum SessionState
+{
+    /// <summary>No session is stored for the registry.</summary>
+    None,
+
+    /// <summary>The access token has not expired, as stored or just refreshed.</summary>
+    Current,
+
+    /// <summary>The access token expired and the registry did not renew it (no refresh token, or it refused the refresh).</summary>
+    Expired,
+
+    /// <summary>The access token expired and the registry could not be reached to renew it.</summary>
+    RegistryUnreachable,
+}
+
+/// <summary>The stored session for a registry, after any refresh.</summary>
+/// <param name="State">Whether the session can be used.</param>
+/// <param name="Session">The session, set for every state but <see cref="SessionState.None"/>; its token is only usable when <see cref="State"/> is <see cref="SessionState.Current"/>.</param>
+internal sealed record SessionLookup(SessionState State, StoredToken? Session);

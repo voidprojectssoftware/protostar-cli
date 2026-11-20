@@ -17,11 +17,13 @@ public sealed class ProjectServiceTests : IDisposable
     private readonly FakeApi _api = new();
     private readonly RecordingResolver _resolver = new();
     private readonly FakeLedger _ledger = new();
+    // Overrides _token when set, for a lookup a stored token alone cannot give (an unreachable refresh).
+    private SessionLookup? _session;
     private StoredToken? _token = new() { Registry = Registry, AccessToken = "tok", ExpiresAtUtc = DateTimeOffset.UtcNow.AddHours(1) };
 
     public void Dispose() => Directory.Delete(_folder, recursive: true);
 
-    private ProjectService Sut() => new(_resolver, new FakeTokens(() => _token), _api, new FakeMachine(), _ledger);
+    private ProjectService Sut() => new(_resolver, new FakeTokens(() => _session ?? SessionLookups.Of(_token)), _api, new FakeMachine(), _ledger);
 
     [Fact]
     public async Task Show_asks_the_registry_with_the_facts_the_session_resolver_gives()
@@ -56,6 +58,18 @@ public sealed class ProjectServiceTests : IDisposable
         var result = await Sut().ShowAsync(Registry, _folder, CancellationToken.None);
 
         Assert.Equal(ProjectFailure.NotLoggedIn, result.Failure);
+        Assert.Equal(_folder, result.Facts.Directory);
+        Assert.Equal(0, _api.Calls);
+    }
+
+    [Fact]
+    public async Task Show_with_a_session_the_registry_could_not_be_reached_to_refresh_fails_with_local_facts()
+    {
+        _session = SessionLookups.Unreachable(Registry);
+
+        var result = await Sut().ShowAsync(Registry, _folder, CancellationToken.None);
+
+        Assert.Equal(ProjectFailure.Failed, result.Failure);
         Assert.Equal(_folder, result.Facts.Directory);
         Assert.Equal(0, _api.Calls);
     }
@@ -211,8 +225,8 @@ public sealed class ProjectServiceTests : IDisposable
         }
     }
 
-    private sealed class FakeTokens(Func<StoredToken?> token) : IAccessTokenProvider
+    private sealed class FakeTokens(Func<SessionLookup> session) : IAccessTokenProvider
     {
-        public Task<StoredToken?> GetSessionAsync(Uri registry, CancellationToken cancellationToken) => Task.FromResult(token());
+        public Task<SessionLookup> GetSessionAsync(Uri registry, CancellationToken cancellationToken) => Task.FromResult(session());
     }
 }

@@ -57,17 +57,21 @@ internal sealed class SetupService : ISetupService
 
         var signIn = await SignInAsync(registry, request.SignIn, cancellationToken);
         Finish(signIn);
-        var signedIn = signIn.Outcome is SetupOutcome.Done or SetupOutcome.AlreadyDone;
+        // None when signed in; otherwise why the steps that need the registry are skipped.
+        var whyNotSignedIn = signIn.Outcome is SetupOutcome.Done or SetupOutcome.AlreadyDone ? SetupSkip.None
+            : signIn.SessionCheck?.Verification == SessionVerification.Unreachable || signIn.SignIn?.Failure == SignInFailure.RegistryUnreachable
+                ? SetupSkip.RegistryUnreachable
+                : SetupSkip.NotSignedIn;
 
         Finish(InstallHooks(request.HarnessHome));
 
-        Finish(signedIn
+        Finish(whyNotSignedIn == SetupSkip.None
             ? await SyncSkillsAsync(request, cancellationToken)
-            : new SetupStepResult(SetupStep.Skills, SetupOutcome.Skipped, SetupSkip.NotSignedIn));
+            : new SetupStepResult(SetupStep.Skills, SetupOutcome.Skipped, whyNotSignedIn));
 
         Finish(new SetupStepResult(SetupStep.Configuration, SetupOutcome.Skipped, SetupSkip.NotAvailableYet));
 
-        Finish(await BackUpSessionsAsync(request, signedIn, interaction, cancellationToken));
+        Finish(await BackUpSessionsAsync(request, whyNotSignedIn, interaction, cancellationToken));
 
         return new SetupResult(registry, null, steps);
     }
@@ -144,7 +148,7 @@ internal sealed class SetupService : ISetupService
     }
 
     private async Task<SetupStepResult> BackUpSessionsAsync(
-        SetupRequest request, bool signedIn, SetupInteraction interaction, CancellationToken cancellationToken)
+        SetupRequest request, SetupSkip whyNotSignedIn, SetupInteraction interaction, CancellationToken cancellationToken)
     {
         var status = _sessions.Status(request.Registry, null, request.HarnessHome);
         if (status.Failure != SessionSyncFailure.None)
@@ -156,8 +160,8 @@ internal sealed class SetupService : ISetupService
 
         if (backlog.Transcripts == 0)
             return Step(SetupOutcome.AlreadyDone);
-        if (!signedIn)
-            return Step(SetupOutcome.Skipped, SetupSkip.NotSignedIn);
+        if (whyNotSignedIn != SetupSkip.None)
+            return Step(SetupOutcome.Skipped, whyNotSignedIn);
 
         // A first backup can be many gigabytes, so it never starts without a yes: the flag, or an answer on a terminal.
         if (!request.Yes)
