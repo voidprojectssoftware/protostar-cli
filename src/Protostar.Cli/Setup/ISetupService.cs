@@ -24,7 +24,7 @@ internal interface ISetupService
 }
 
 /// <summary>What <c>protostar setup</c> was asked to do.</summary>
-/// <param name="Registry">The <c>--registry</c> option; <c>null</c> falls back to the environment and the default.</param>
+/// <param name="Registry">The <c>--registry</c> option; <c>null</c> falls back to the environment, the saved default, then the built-in one.</param>
 /// <param name="HarnessHome">Override the harness config root.</param>
 /// <param name="SignIn">How to run the browser sign-in when one is needed.</param>
 /// <param name="Yes">Back up pending sessions without asking.</param>

@@ -25,7 +25,7 @@ failed.
 
 | Option | Description |
 |---|---|
-| `--registry <URL>` | Registry base URL. Defaults to `$PROTOSTAR_REGISTRY_URL`, then the built-in dev default. |
+| `--registry <URL>` | Registry base URL. Defaults to `$PROTOSTAR_REGISTRY_URL`, then the saved default, then the built-in dev default. Saved as the default once sign-in succeeds. |
 | `-y`, `--yes` | Back up this machine's sessions without asking. Without it, setup asks on a terminal and skips the backup otherwise. |
 | `--no-browser` | Print the sign-in URL instead of opening a browser. |
 | `--provider <NAME>` | Skip the registry's sign-in chooser and go straight to this provider. |
@@ -121,7 +121,7 @@ Takes the same options as `protostar skills`, plus:
 
 | Option | Description |
 |---|---|
-| `--registry <URL>` | Registry to back up to. Defaults to `PROTOSTAR_REGISTRY_URL`, then `https://localhost:7443`. |
+| `--registry <URL>` | Registry to back up to. Defaults to `PROTOSTAR_REGISTRY_URL`, then the saved default, then `https://localhost:7443`. |
 | `--force` | Upload every selected skill even if it has not changed since its last backup. |
 
 protostar remembers what it last backed up to each registry in
@@ -166,7 +166,7 @@ level). A Project column appears when any project skill is listed.
 | `--harness-home <DIR>` | Override the harness config root. |
 | `--project <DIR>` | The folder whose project skills to compare. Defaults to the current directory. |
 | `--global-only` | Only compare global skills. |
-| `--registry <URL>` | Registry to read. Defaults to `PROTOSTAR_REGISTRY_URL`, then `https://localhost:7443`. |
+| `--registry <URL>` | Registry to read. Defaults to `PROTOSTAR_REGISTRY_URL`, then the saved default, then `https://localhost:7443`. |
 
 ### `protostar skills pull [NAME...]`
 
@@ -205,7 +205,7 @@ conflict. Skills kept because of local changes do not count as failures.
 | `--harness-home <DIR>` | Override the harness config root. |
 | `--project <DIR>` | The folder whose project skills to install. Defaults to the current directory. |
 | `--global-only` | Only pull global skills. |
-| `--registry <URL>` | Registry to pull from. Defaults to `PROTOSTAR_REGISTRY_URL`, then `https://localhost:7443`. |
+| `--registry <URL>` | Registry to pull from. Defaults to `PROTOSTAR_REGISTRY_URL`, then the saved default, then `https://localhost:7443`. |
 | `--force` | Overwrite skills that have local changes. Never overrides a conflict. |
 
 ## `protostar auth`
@@ -218,19 +218,19 @@ Sign in via your browser and store the session.
 
 | Option | Description |
 |---|---|
-| `--registry <URL>` | Registry to sign in to. Defaults to `https://localhost:7443` or `PROTOSTAR_REGISTRY_URL`. |
+| `--registry <URL>` | Registry to sign in to. Defaults to `PROTOSTAR_REGISTRY_URL`, then the saved default, then `https://localhost:7443`. Saved as the default once sign-in succeeds. |
 | `--provider <NAME>` | Skip the registry's sign-in chooser and go straight to this provider (e.g. `github`). |
 | `--no-browser` | Print the sign-in URL instead of opening a browser automatically. |
 | `--timeout <SECONDS>` | How long to wait for the browser sign-in to complete (default `300`). |
 
 ### `protostar auth status`
 
-Show whether you are signed in to the registry (honors `--registry` /
-`PROTOSTAR_REGISTRY_URL`).
+Show whether you are signed in to the registry, and where that registry came from
+(`--registry`, `PROTOSTAR_REGISTRY_URL`, the saved default, or the built-in default).
 
 ### `protostar auth logout`
 
-Remove the stored session for the registry.
+Remove the stored session for the registry. The saved default registry is kept.
 
 See [Authenticate to a registry](../get-started/authenticate.md).
 

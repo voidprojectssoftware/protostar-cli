@@ -21,6 +21,7 @@ public sealed class SetupServiceTests
     private readonly FakeHooks _hooks = new();
     private readonly FakeSkills _skills = new();
     private readonly FakeSessions _sessions = new();
+    private readonly FakeDefaultRegistry _defaultRegistry = new();
     private readonly List<string> _calls = [];
     private readonly List<SetupStepResult> _reported = [];
     private bool _answer;
@@ -73,6 +74,30 @@ public sealed class SetupServiceTests
         Assert.True(result.NothingChanged);
         Assert.DoesNotContain("sign-in", _calls);
         Assert.DoesNotContain("sync", _calls);
+    }
+
+    [Fact]
+    public async Task An_existing_session_still_makes_the_registry_the_default()
+    {
+        _signIn.Verification = SessionVerification.Verified;
+
+        var result = await Run(yes: true);
+
+        Assert.Equal(SetupOutcome.AlreadyDone, result.Steps[0].Outcome);
+        Assert.Equal([new Uri(Registry)], _defaultRegistry.Saved);
+    }
+
+    [Fact]
+    public async Task An_existing_session_fails_sign_in_when_the_default_cannot_be_saved()
+    {
+        _signIn.Verification = SessionVerification.Verified;
+        _defaultRegistry.Fails = true;
+
+        var result = await Run(yes: true);
+
+        Assert.Equal(SetupOutcome.Failed, result.Steps[0].Outcome);
+        Assert.Equal(SignInFailure.SaveFailed, result.Steps[0].SignIn!.Failure);
+        Assert.False(result.Succeeded);
     }
 
     [Fact]
@@ -199,7 +224,7 @@ public sealed class SetupServiceTests
     [Fact]
     public async Task An_invalid_registry_stops_before_any_step()
     {
-        var service = new SetupService(_signIn, _hooks, _skills, _sessions);
+        var service = new SetupService(_signIn, _hooks, _skills, _sessions, _defaultRegistry);
         var request = new SetupRequest("not a url", null, new SignInOptions(null, false, TimeSpan.FromMinutes(5)), true, false, null);
 
         var result = await service.RunAsync(request, Interaction(), CancellationToken.None);
@@ -214,7 +239,7 @@ public sealed class SetupServiceTests
     {
         _calls.Clear();
         _reported.Clear();
-        var service = new SetupService(_signIn, _hooks, _skills, _sessions);
+        var service = new SetupService(_signIn, _hooks, _skills, _sessions, _defaultRegistry);
         var request = new SetupRequest(Registry, "/harness", new SignInOptions("dev", true, TimeSpan.FromMinutes(5)), yes, canAsk, null);
         return await service.RunAsync(request, Interaction(), CancellationToken.None);
     }
@@ -262,6 +287,18 @@ public sealed class SetupServiceTests
             Calls.Add("sign-in");
             Options = options;
             return Task.FromResult(new SignInResult(Failure, null, registry, "dev"));
+        }
+    }
+
+    private sealed class FakeDefaultRegistry : IDefaultRegistryStore
+    {
+        public List<Uri> Saved { get; } = [];
+        public bool Fails { get; set; }
+
+        public bool Save(Uri registry)
+        {
+            Saved.Add(registry);
+            return !Fails;
         }
     }
 

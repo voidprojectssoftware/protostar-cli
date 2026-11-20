@@ -19,10 +19,13 @@ internal sealed class SetupService : ISetupService
     private readonly IHookInstallService _hooks;
     private readonly ISkillPullService _skills;
     private readonly ISessionSyncService _sessions;
+    private readonly IDefaultRegistryStore _defaultRegistry;
 
-    public SetupService(ISignInService signIn, IHookInstallService hooks, ISkillPullService skills, ISessionSyncService sessions)
+    public SetupService(ISignInService signIn, IHookInstallService hooks, ISkillPullService skills, ISessionSyncService sessions,
+        IDefaultRegistryStore defaultRegistry)
     {
         _signIn = signIn;
+        _defaultRegistry = defaultRegistry;
         _hooks = hooks;
         _skills = skills;
         _sessions = sessions;
@@ -71,7 +74,14 @@ internal sealed class SetupService : ISetupService
         switch (check.Verification)
         {
             case SessionVerification.Verified:
-                return new SetupStepResult(SetupStep.SignIn, SetupOutcome.AlreadyDone) { SessionCheck = check };
+                // A fresh sign-in saves the default itself; an existing session still makes this registry the one hooks use.
+                return _defaultRegistry.Save(registry)
+                    ? new SetupStepResult(SetupStep.SignIn, SetupOutcome.AlreadyDone) { SessionCheck = check }
+                    : new SetupStepResult(SetupStep.SignIn, SetupOutcome.Failed)
+                    {
+                        SessionCheck = check,
+                        SignIn = new SignInResult(SignInFailure.SaveFailed, null, registry, check.Login),
+                    };
             case SessionVerification.Unreachable:
                 // Signing in again would fail the same way; say the registry is down rather than open a browser.
                 return new SetupStepResult(SetupStep.SignIn, SetupOutcome.Failed) { SessionCheck = check };

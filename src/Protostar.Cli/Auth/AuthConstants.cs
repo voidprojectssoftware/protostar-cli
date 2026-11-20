@@ -17,7 +17,7 @@ internal static class AuthConstants
 
     public const string RegistryEnvVar = "PROTOSTAR_REGISTRY_URL";
 
-    // Dev default: the registry's pinned local Aspire port. Override with --registry or
-    // PROTOSTAR_REGISTRY_URL (this becomes the deployed URL once a registry is hosted).
+    // Dev default: the registry's pinned local Aspire port. Used when there is no --registry,
+    // PROTOSTAR_REGISTRY_URL or saved default (this becomes the deployed URL once a registry is hosted).
     public const string DefaultRegistryUrl = "https://localhost:7443";
 }

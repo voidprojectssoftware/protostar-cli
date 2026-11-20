@@ -55,7 +55,7 @@ internal interface ISkillChangeService
 
 /// <summary>Which skill to find.</summary>
 /// <param name="Name">The registry skill's exact name.</param>
-/// <param name="Registry">The <c>--registry</c> option; <c>null</c> falls back to the environment and default.</param>
+/// <param name="Registry">The <c>--registry</c> option; <c>null</c> falls back to the environment, the saved default, then the built-in one.</param>
 /// <param name="ProjectStart">The folder whose project's skill is meant; <c>null</c> means the global skill only.</param>
 internal sealed record SkillTargetRequest(string Name, string? Registry, string? ProjectStart);
 

@@ -11,8 +11,11 @@ internal interface ISignInService
     /// <summary>Loads the stored session for <paramref name="registry"/> (refreshing it when expired) and asks the registry whether it is still good.</summary>
     Task<SessionCheck> CheckAsync(Uri registry, CancellationToken cancellationToken);
 
-    /// <summary>Runs the browser sign-in against <paramref name="registry"/> and stores the session.</summary>
-    /// <remarks>Checks the registry's <c>/v1/meta</c> compatibility first, so an unreachable or wrong URL fails before a browser opens.</remarks>
+    /// <summary>Runs the browser sign-in against <paramref name="registry"/>, stores the session, and makes it the default registry.</summary>
+    /// <remarks>
+    /// Checks the registry's <c>/v1/meta</c> compatibility first, so an unreachable or wrong URL fails before a browser opens.
+    /// The default is what commands use without <c>--registry</c> or <c>PROTOSTAR_REGISTRY_URL</c>, hooks included.
+    /// </remarks>
     Task<SignInResult> SignInAsync(Uri registry, SignInOptions options, CancellationToken cancellationToken);
 }
 
@@ -66,7 +69,7 @@ internal enum SignInFailure
     /// <summary>The registry refused the sign-in; see the detail.</summary>
     Rejected,
 
-    /// <summary>Signed in, but the session could not be written to the credential store.</summary>
+    /// <summary>Signed in, but the session or the default registry could not be written to the config directory.</summary>
     SaveFailed,
 }
 

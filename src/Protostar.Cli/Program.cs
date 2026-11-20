@@ -22,6 +22,7 @@ var services = new ServiceCollection();
 services.AddSingleton<ISkillService, SkillService>();
 services.AddSingleton<IHookInstallService, HookInstallService>();
 services.AddSingleton<ITokenStore, TokenStore>();
+services.AddSingleton<IDefaultRegistryStore, DefaultRegistryStore>();
 services.AddSingleton<IAccessTokenProvider, AccessTokenProvider>();
 services.AddSingleton<RegistryApi>();
 services.AddSingleton<IRegistryApi>(sp => sp.GetRequiredService<RegistryApi>());

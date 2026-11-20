@@ -14,3 +14,8 @@ Feature: Authenticate to the registry
     When I run protostar with "auth status --registry https://unused.invalid"
     Then the exit code is 0
     And the output contains "Not logged in"
+
+  Scenario: status names where the registry came from
+    When I run protostar with "auth status --registry https://unused.invalid"
+    Then the exit code is 0
+    And the output contains "Registry from --registry"

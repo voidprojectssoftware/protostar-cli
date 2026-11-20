@@ -5,7 +5,7 @@ using Spectre.Console.Cli;
 namespace Protostar.Cli.Commands.Auth;
 
 /// <summary>
-/// <c>protostar auth status</c>: reports whether there is a stored session for the registry and,
+/// <c>protostar auth status</c>: reports which registry is in use and why, whether there is a stored session for it and,
 /// if reachable, verifies it with the registry (refreshing an expired access token when possible).
 /// Works offline: with no stored session it simply reports "Not logged in".
 /// </summary>
@@ -19,10 +19,10 @@ internal sealed class StatusCommand : AsyncCommand<StatusCommand.Settings>
 
     protected override async Task<int> ExecuteAsync(CommandContext context, Settings settings, CancellationToken cancellation)
     {
-        Uri registry;
+        ResolvedRegistry registry;
         try
         {
-            registry = RegistryEndpoint.Resolve(settings.Registry);
+            registry = RegistryEndpoint.ResolveWithSource(settings.Registry);
         }
         catch (FormatException ex)
         {
@@ -30,6 +30,6 @@ internal sealed class StatusCommand : AsyncCommand<StatusCommand.Settings>
             return 1;
         }
 
-        return SignInPresenter.RenderStatus(await _signIn.CheckAsync(registry, cancellation));
+        return SignInPresenter.RenderStatus(await _signIn.CheckAsync(registry.Url, cancellation), registry.Source);
     }
 }

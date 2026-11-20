@@ -108,7 +108,8 @@ By default the registry shows a sign-in chooser so you can pick how to authentic
 `--provider <name>` (e.g. `--provider github`) to skip the chooser and go straight to that provider.
 
 Point the CLI at a registry with `--registry <url>` or the `PROTOSTAR_REGISTRY_URL` environment
-variable. On a display-less Linux session the CLI detects there is no browser and prints the sign-in
+variable. A successful `auth login` or `setup` saves that registry as the default in
+`~/.protostar/config.json`, so later commands and the capture hooks reach it without either. On a display-less Linux session the CLI detects there is no browser and prints the sign-in
 URL automatically; `--no-browser` forces that behavior anywhere. Either way the printed URL still
 redirects to a loopback address, so the browser must run on the same host as the CLI (open the URL in
 a local browser, or forward the callback port over SSH). The CLI checks API compatibility with the

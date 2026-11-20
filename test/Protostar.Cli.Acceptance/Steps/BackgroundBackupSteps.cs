@@ -30,6 +30,7 @@ public sealed class BackgroundBackupSteps : IDisposable
     private string _transcript = string.Empty;
     private BufferedCommandResult? _hook;
     private TimeSpan _hookTime;
+    private bool _registryInEnvironment = true;
 
     private string ConfigDir => Path.Combine(_root, "protostar");
 
@@ -50,6 +51,15 @@ public sealed class BackgroundBackupSteps : IDisposable
             },
         };
         File.WriteAllText(Path.Combine(ConfigDir, "credentials.json"), JsonSerializer.Serialize(token));
+    }
+
+    // What setup and auth login leave behind; the hook then runs with no PROTOSTAR_REGISTRY_URL, as Claude Code
+    // started from a shell that never exported it would.
+    [Given("that registry is my saved default and not in the environment")]
+    public void GivenTheRegistryIsTheSavedDefault()
+    {
+        File.WriteAllText(Path.Combine(ConfigDir, "config.json"), JsonSerializer.Serialize(new { registry = RegistryUrl }));
+        _registryInEnvironment = false;
     }
 
     [Given("a session transcript on disk")]
@@ -75,7 +85,8 @@ public sealed class BackgroundBackupSteps : IDisposable
             .WithStandardInputPipe(PipeSource.FromString(payload, Encoding.UTF8))
             .WithEnvironmentVariables(env => env
                 .Set("PROTOSTAR_CONFIG_DIR", ConfigDir)
-                .Set("PROTOSTAR_REGISTRY_URL", RegistryUrl)
+                // null removes a value the test runner itself may have inherited.
+                .Set("PROTOSTAR_REGISTRY_URL", _registryInEnvironment ? RegistryUrl : null)
                 .Build())
             .WithValidation(CommandResultValidation.None)
             .ExecuteBufferedAsync(limit.Token);
