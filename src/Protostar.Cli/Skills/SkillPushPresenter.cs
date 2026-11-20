@@ -32,6 +32,8 @@ internal static class SkillPushPresenter
             case SkillPushRunFailure.Incompatible:
             case SkillPushRunFailure.InvalidAs:
                 return Error(result.Detail!);
+            case SkillPushRunFailure.ListFailed:
+                return Error($"Could not list the skills in {authority} to confirm what is backed up: {result.Detail}");
         }
 
         if (result.Entries.Count == 0)

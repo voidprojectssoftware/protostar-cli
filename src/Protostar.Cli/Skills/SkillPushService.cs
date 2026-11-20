@@ -18,8 +18,10 @@ namespace Protostar.Cli.Skills;
 /// without. When two skills of one scope share a name (two harnesses' global skills, say), only the first is
 /// pushed; the other is skipped if its content is identical and reported as a conflict if not. A global and a
 /// project skill of the same name are separate registry skills and are both pushed. A skill whose content
-/// matches the <see cref="ISkillLedger"/> record for the same scope is reported unchanged without any network
-/// call, and when every skill is, the registry is never contacted.
+/// matches the <see cref="ISkillLedger"/> record for the same scope is unchanged: the capture hook takes the
+/// ledger's word for it and makes no network call, while the command confirms it against the registry's skill list,
+/// one request per run however many skills there are, so a skill deleted or renamed from another machine is backed
+/// up again instead of reported as safe.
 /// <para>
 /// The base version each push names is the version the ledger says this copy last synced (pushed or pulled), not
 /// the registry's current one: that is what makes a stale edit detectable. A copy the ledger has no record of, for
@@ -77,9 +79,16 @@ internal sealed class SkillPushService : ISkillPushService
 
         // Decide each skill locally first: unreadable skills fail, a second skill with an already-seen name in
         // the same scope is compared by content (identical is skipped, different is a conflict), and skills the
-        // ledger says the registry already has are unchanged. Only what is left needs the network.
+        // ledger says the registry already has are unchanged, once the list below confirms it. Only what is left is uploaded.
         var entries = new SkillPushEntry?[selected.Count];
         var pending = new List<(int Index, IReadOnlyList<SkillUploadFile> Files, string Hash)>();
+
+        // The command checks the ledger against the registry's list (one request), because the ledger cannot know
+        // that another machine deleted or renamed a skill since. The hook, which runs on every use of a skill, keeps
+        // trusting the ledger, so an unchanged skill still costs it nothing. --as pushes under a new name, so it has
+        // nothing to confirm.
+        var verify = !request.FromHook && request.As is null;
+        var unconfirmed = new List<(int Index, IReadOnlyList<SkillUploadFile> Files, string Hash)>();
         var seen = new Dictionary<(SkillScope, string), (DiscoveredSkill Skill, string? Hash)>(ScopedNameComparer.Instance);
         for (var i = 0; i < selected.Count; i++)
         {
@@ -127,7 +136,10 @@ internal sealed class SkillPushService : ISkillPushService
             if (!request.Force && request.As is null && recorded is not null && recorded.ContentHash == hash &&
                 recorded.ProjectId is not null == (skill.Scope == SkillScope.Project))
             {
-                entries[i] = new SkillPushEntry(skill, new SkillPushOutcome(SkillPushStatus.Unchanged, recorded.Version, null, recorded.ProjectId));
+                if (verify)
+                    unconfirmed.Add((i, files, hash));
+                else
+                    entries[i] = new SkillPushEntry(skill, new SkillPushOutcome(SkillPushStatus.Unchanged, recorded.Version, null, recorded.ProjectId));
                 continue;
             }
 
@@ -144,40 +156,115 @@ internal sealed class SkillPushService : ISkillPushService
             pending.Add((i, files, hash!));
         }
 
+        var mustList = verify && (unconfirmed.Count > 0 || pending.Any(p => Synced(registry, selected[p.Index]) is not null));
+        if (pending.Count == 0 && !mustList)
+            return new SkillPushRunResult(SkillPushRunFailure.None, null, registry, entries.Select(e => e!).ToList());
+
+        var session = await _tokens.GetSessionAsync(registry, cancellationToken);
+        if (session is null)
+            return SkillPushRunResult.Fail(SkillPushRunFailure.NotLoggedIn, null, registry);
+        if (session.IsExpired)
+            return SkillPushRunResult.Fail(SkillPushRunFailure.SessionExpired, null, registry);
+
+        var gone = new HashSet<int>();
+        if (mustList)
+        {
+            var list = await _registry.ListSkillsAsync(registry, session.AccessToken, cancellationToken);
+            if (list.Skills is not { } skills)
+            {
+                // Say why when the registry is down or speaks another API; otherwise pass on what the list said.
+                if (await CheckMetaAsync(registry, cancellationToken) is { } failure)
+                    return failure;
+                return SkillPushRunResult.Fail(SkillPushRunFailure.ListFailed, list.Error, registry);
+            }
+
+            foreach (var (index, _, _) in pending)
+            {
+                if (!await StillInRegistryAsync(registry, session.AccessToken, selected[index], skills, cancellationToken))
+                    gone.Add(index);
+            }
+
+            foreach (var (index, files, hash) in unconfirmed)
+            {
+                var skill = selected[index];
+                if (await StillInRegistryAsync(registry, session.AccessToken, skill, skills, cancellationToken))
+                {
+                    var recorded = _ledger.Get(registry, skill.Path)!;
+                    entries[index] = new SkillPushEntry(skill, new SkillPushOutcome(SkillPushStatus.Unchanged, recorded.Version, null, recorded.ProjectId));
+                }
+                else
+                {
+                    gone.Add(index);
+                    pending.Add((index, files, hash));
+                }
+            }
+        }
+
         if (pending.Count > 0)
         {
-            var session = await _tokens.GetSessionAsync(registry, cancellationToken);
-            if (session is null)
-                return SkillPushRunResult.Fail(SkillPushRunFailure.NotLoggedIn, null, registry);
-            if (session.IsExpired)
-                return SkillPushRunResult.Fail(SkillPushRunFailure.SessionExpired, null, registry);
+            if (await CheckMetaAsync(registry, cancellationToken) is { } failure)
+                return failure;
 
-            var meta = await _registry.GetMetaAsync(registry, cancellationToken);
-            if (meta is null)
-                return SkillPushRunResult.Fail(SkillPushRunFailure.RegistryUnreachable, null, registry);
-            if (ApiCompatibility.Check(meta) is { } incompatibility)
-                return SkillPushRunResult.Fail(SkillPushRunFailure.Incompatible, incompatibility, registry);
-
-            foreach (var (index, files, hash) in pending)
+            foreach (var (index, files, hash) in pending.OrderBy(p => p.Index))
             {
                 var skill = selected[index];
                 entries[index] = new SkillPushEntry(skill, request.As is { } newName
                     ? await PushAsAsync(registry, session.AccessToken, skill, files, newName, cancellationToken)
-                    : await PushOneAsync(registry, session.AccessToken, skill, files, hash, request.Force, cancellationToken));
+                    : await PushOneAsync(registry, session.AccessToken, skill, files, hash, request.Force, gone.Contains(index), cancellationToken));
             }
         }
 
         return new SkillPushRunResult(SkillPushRunFailure.None, null, registry, entries.Select(e => e!).ToList());
     }
 
+    // Null when the registry is reachable and speaks this CLI's API; otherwise the failure that stops the run.
+    private async Task<SkillPushRunResult?> CheckMetaAsync(Uri registry, CancellationToken cancellationToken)
+    {
+        var meta = await _registry.GetMetaAsync(registry, cancellationToken);
+        if (meta is null)
+            return SkillPushRunResult.Fail(SkillPushRunFailure.RegistryUnreachable, null, registry);
+        if (ApiCompatibility.Check(meta) is { } incompatibility)
+            return SkillPushRunResult.Fail(SkillPushRunFailure.Incompatible, incompatibility, registry);
+        return null;
+    }
+
+    // The ledger's record of this copy when it vouches for the copy's registry skill; null when it never synced as it.
+    private SkillLedgerEntry? Synced(Uri registry, DiscoveredSkill skill) =>
+        _ledger.Get(registry, skill.Path) is { } recorded && Vouches(recorded, skill) ? recorded : null;
+
+    // Whether the registry skill this copy last synced as (its name and project, from the ledger) is in the registry's
+    // list. A copy that never synced has nothing to lose, so it counts as present. The list holds every project's
+    // skills, so a skill of another project is never mistaken for this one, and a skill that a link moved to another
+    // project is followed there (MovedSkillLedger) rather than treated as deleted.
+    private async Task<bool> StillInRegistryAsync(
+        Uri registry, string accessToken, DiscoveredSkill skill, IReadOnlyList<RegistrySkill> skills, CancellationToken cancellationToken)
+    {
+        if (Synced(registry, skill) is not { } recorded)
+            return true;
+
+        var name = recorded.Name ?? skill.Name;
+        if (skills.Any(s => s.ProjectId == recorded.ProjectId && string.Equals(s.Name, name, StringComparison.Ordinal)))
+            return true;
+
+        foreach (var moved in skills.Where(s => s.ProjectId is not null && s.ProjectId != recorded.ProjectId && string.Equals(s.Name, name, StringComparison.Ordinal)))
+        {
+            var followed = await MovedSkillLedger.FollowAsync(_registry, _ledger, registry, accessToken, skill.Path, recorded with { Name = name }, moved, skills, cancellationToken);
+            if (followed?.ProjectId == moved.ProjectId)
+                return true;
+        }
+
+        return false;
+    }
+
     // Pushes one skill based on the version its copy last synced, and records the result. A stale refusal is recorded,
     // never retried; with force it is answered by pushing again based on the registry's current version, which the
-    // registry has just named, so the replace is deliberate and a third push in between is still refused.
+    // registry has just named, so the replace is deliberate and a third push in between is still refused. A copy whose
+    // registry skill is gone (deleted or renamed elsewhere) is pushed as a new skill, base 0, and says why.
     private async Task<SkillPushOutcome> PushOneAsync(
-        Uri registry, string accessToken, DiscoveredSkill skill, IReadOnlyList<SkillUploadFile> files, string hash, bool force, CancellationToken cancellationToken)
+        Uri registry, string accessToken, DiscoveredSkill skill, IReadOnlyList<SkillUploadFile> files, string hash, bool force, bool gone,
+        CancellationToken cancellationToken)
     {
-        var recorded = _ledger.Get(registry, skill.Path);
-        var basis = recorded is not null && Vouches(recorded, skill) ? recorded : null;
+        var basis = gone ? null : Synced(registry, skill);
         var based = basis is null ? 0 : basis.Version;
         var project = ProjectOf(skill);
 
@@ -194,6 +281,9 @@ internal sealed class SkillPushService : ISkillPushService
                 };
             }
         }
+
+        if (gone && outcome.Succeeded)
+            outcome = outcome with { Message = $"'{skill.Name}' was renamed or deleted in the registry; backed it up again as '{skill.Name}'." };
 
         if (outcome.Succeeded)
         {

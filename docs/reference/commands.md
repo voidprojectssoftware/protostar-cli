@@ -135,9 +135,23 @@ Takes the same options as `protostar skills`, plus:
 | `--as <NEW-NAME>` | Push the one named skill as a new registry skill called `NEW-NAME`, and rename the copy here to match (its `SKILL.md` name, and its folder when the folder has the old name). Refused, with nothing changed, when the registry already has a different skill of that name. |
 
 protostar remembers what it last backed up to each registry in
-`~/.protostar/skill-ledger.json`, so a skill that has not changed is reported as
-unchanged without contacting the registry. Use `--force` if the registry has lost
-something the ledger says it has.
+`~/.protostar/skill-ledger.json`, so a skill that has not changed is not uploaded
+again. `skills push` still asks the registry for its list of skills, one request
+however many skills there are, to confirm that each unchanged skill is still there
+under the name and project it was backed up as. A skill another machine deleted or
+renamed since is backed up again as a new skill, and its row says why:
+
+```console
+│ global │ tidy │ new version v1 'tidy' was renamed or deleted in the registry; backed it up again as 'tidy'. │
+```
+
+A rename is treated the same way: the copy here is pushed back under the name it
+has here, so the registry then has both names. Delete the one you do not want,
+or pull the new name and remove the old folder before pushing. A project skill
+that `protostar project link` moved to another project is followed there, not
+pushed again. The [capture hook](#protostar-capture) does not make this check, so
+an unchanged skill still costs it no network call. Use `--force` to upload every
+selected skill regardless.
 
 Each push tells the registry which version this copy was last pushed or pulled as.
 When that is no longer the registry's latest version, the registry refuses the push
@@ -278,7 +292,8 @@ Its SKILL.md now names it journal: pushed as v2.
 Local copy renamed here: ~/.claude/skills/notes -> ~/.claude/skills/journal
 Other machines still have it under the old name: there it shows as only on that
 machine, and the new name as not installed, until they pull it and remove the
-old folder.
+old folder. A `protostar skills push` there before that backs the old name up
+again as a new skill, and says so.
 ```
 
 `<OLD>` must be the registry skill's exact current name. When the current folder
@@ -297,7 +312,9 @@ otherwise the global skill is. A name the registry does not have is an error
 Delete a skill and every one of its versions from the registry. It cannot be
 undone. Local copies are never deleted: the command lists them, and afterwards
 `protostar skills remote` shows them as **only here (not backed up)**. A local copy
-is backed up again, as a new skill, once it differs from what was last pushed.
+is backed up again, as a new skill, by the next `protostar skills push`, or by the
+capture hook once it differs from what was last pushed. Remove the local copy to
+keep it out of the registry.
 
 The command says what it is about to delete and asks first. With no terminal to
 ask on (a script, a pipe) it refuses unless you pass `--yes`:
