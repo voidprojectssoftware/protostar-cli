@@ -496,6 +496,7 @@ and `1` otherwise.
 | Option | Description |
 |---|---|
 | `--verify` | Ask the registry what it holds of every backed-up transcript, in batches, and back up again what it lost. A transcript the registry holds differently from this machine's record is left alone and reported. |
+| `--json` | Print one JSON record per transcript instead of progress and a table. See [JSON output](json-output.md#sessions-push). |
 
 `--verify` costs requests even when nothing changed, so plain pushes and the
 capture hooks never do it.
@@ -526,6 +527,7 @@ pending.
 |---|---|
 | `-a, --all` | List every transcript, backed up ones too, not only the pending ones. |
 | `--verify` | Also ask the registry what it holds, to confirm the backups are really there (before wiping a machine, say). Changes nothing; it needs you to be signed in. |
+| `--json` | Print one JSON record per transcript instead of a table. See [JSON output](json-output.md#sessions-status). |
 
 ```console
 $ protostar sessions status --verify
@@ -555,17 +557,18 @@ this machine's pending sessions, says why the rest are missing, and exits `1`.
 | `--machine <ID>` | Only sessions from this machine id. |
 | `--since <DATE>` | Only sessions active on or after this date or time (for example `2026-11-12`, read in your local time zone). |
 | `-n, --limit <N>` | How many to show, from 1 to 200. Defaults to 25. |
-| `--json` | Print JSON instead of a table, for agents and scripts. |
+| `--json` | Print one JSON record per session instead of a table, for agents and scripts. |
 
-With `--json`, each row is the registry's record of the session. A row for a
-session not fully backed up has a `pending` object added, and a row the registry
-does not have at all (made from the file on this machine) has no title and zero
-counts. A registry error goes to standard error, so standard output stays valid
-JSON.
+With `--json`, each row is the registry's record of the session, with its stable
+`id` first. A row for a session not fully backed up has a `pending` object added,
+and a row the registry does not have at all (made from the file on this machine)
+has no title and zero counts. A registry error goes to standard error as an error
+object with a `code`, so standard output stays valid JSON. The fields and codes are
+in [JSON output for agents and scripts](json-output.md).
 
 ```console
 $ protostar sessions list --json -n 1
-[{"harness":"claude-code","key":"00000000-0000-0000-0000-000000001113","kind":"session","title":"hello 2","firstPrompt":"hello 2","projectId":"84ae7ab4-363a-4328-b80c-81c5f6495764","project":"github.com/example/demo-app","workingDirectory":"/home/alice/src/demo-app","machineId":"e43c5bac-e1ac-4493-b2fb-21abbca63a1b","machineName":"vm-dev-01","sourcePath":"/home/alice/.claude/projects/-home-alice-src-demo-app/00000000-0000-0000-0000-000000001113.jsonl","userMessages":1,"assistantMessages":1,"length":2511,"subagentCount":0}]
+[{"id":"00000000-0000-0000-0000-000000001113","harness":"claude-code","key":"00000000-0000-0000-0000-000000001113","kind":"session","title":"hello 2","firstPrompt":"hello 2","projectId":"84ae7ab4-363a-4328-b80c-81c5f6495764","project":"github.com/example/demo-app","workingDirectory":"/home/alice/src/demo-app","machineId":"e43c5bac-e1ac-4493-b2fb-21abbca63a1b","machineName":"vm-dev-01","sourcePath":"/home/alice/.claude/projects/-home-alice-src-demo-app/00000000-0000-0000-0000-000000001113.jsonl","userMessages":1,"assistantMessages":1,"length":2511,"subagentCount":0}]
 ```
 
 ## `protostar memory`

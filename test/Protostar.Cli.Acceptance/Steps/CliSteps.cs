@@ -104,6 +104,35 @@ public sealed partial class CliSteps : IDisposable
         File.WriteAllText(path, file.ToJsonString());
     }
 
+    [Given("a session transcript {string} in the harness")]
+    public void GivenASessionTranscriptInTheHarness(string key)
+    {
+        var project = Path.Combine(_harness.ConfigDir, "projects", "-fixture-project");
+        Directory.CreateDirectory(project);
+        File.WriteAllText(Path.Combine(project, key + ".jsonl"), "{\"type\":\"user\"}\n{\"type\":\"assistant\"}\n");
+    }
+
+    // The --json contract (docs/reference/json-output.md): data alone on stdout, at most one error object on stderr.
+    [Then("standard output is a JSON array whose records have ids {string}")]
+    public void ThenStandardOutputIsAJsonArrayWithIds(string ids)
+    {
+        var records = JsonNode.Parse(Result.StandardOutput)!.AsArray();
+        Assert.Equal(ids.Split(',', StringSplitOptions.RemoveEmptyEntries), records.Select(r => r!["id"]!.GetValue<string>()));
+        Assert.False(Result.StandardOutput.Contains('\u001b'), "Standard output holds terminal escape codes.");
+    }
+
+    [Then("standard output is empty")]
+    public void ThenStandardOutputIsEmpty() =>
+        Assert.Equal(string.Empty, Result.StandardOutput.Trim());
+
+    [Then("standard error is a JSON error with code {string}")]
+    public void ThenStandardErrorIsAJsonError(string code)
+    {
+        var error = JsonNode.Parse(Result.StandardError)!["error"]!;
+        Assert.Equal(code, error["code"]!.GetValue<string>());
+        Assert.False(string.IsNullOrWhiteSpace(error["message"]!.GetValue<string>()));
+    }
+
     [Then("the harness settings contain {string}")]
     public void ThenTheHarnessSettingsContain(string text) =>
         Assert.Contains(text, _harness.ReadSettings());

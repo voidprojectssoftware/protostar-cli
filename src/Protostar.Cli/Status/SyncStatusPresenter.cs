@@ -1,4 +1,3 @@
-using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Protostar.Cli.Auth;
@@ -12,24 +11,19 @@ namespace Protostar.Cli.Status;
 /// <summary>The console face of <see cref="ISyncStatusService"/>: a short report, or one JSON object with <c>--json</c>.</summary>
 /// <remarks>
 /// Exit codes: 0 when this machine is syncing, 1 when anything in <see cref="SyncStatus.Problems"/> needs attention or
-/// the registry setting is unusable. The JSON follows the contract of the <c>sessions</c> commands (protostar-cli#21):
+/// the registry setting is unusable. The JSON follows the contract of the <c>sessions</c> commands, written through <see cref="SessionsJson"/>:
 /// data only on standard output, camelCase names, absent values left out, enums as camelCase strings, and a failure as
 /// <c>{"error":{"code":...,"message":...}}</c> on standard error.
 /// </remarks>
 internal static class SyncStatusPresenter
 {
-    /// <summary>The <c>--json</c> error code for an unusable registry URL, as the <c>sessions</c> commands use it.</summary>
-    internal const string InvalidRegistry = "invalid_registry";
-
-    private static readonly JsonSerializerOptions Output = new(TranscriptJson.Options) { Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping };
-
     /// <summary>Renders <paramref name="status"/> and returns the exit code.</summary>
     public static int Render(SyncStatus status, bool json)
     {
         var problems = status.Problems;
         if (json)
         {
-            Console.Out.WriteLine(ToJson(status).ToJsonString(Output));
+            SessionsJson.WriteObject(ToJson(status));
             return problems.Count == 0 ? 0 : 1;
         }
 
@@ -64,15 +58,8 @@ internal static class SyncStatusPresenter
     public static int RenderInvalidRegistry(string message, bool json)
     {
         if (json)
-        {
-            var error = new JsonObject { ["code"] = InvalidRegistry, ["message"] = message };
-            Console.Error.WriteLine(new JsonObject { ["error"] = error }.ToJsonString(Output));
-        }
-        else
-        {
-            AnsiConsole.MarkupLine($"[red]{Markup.Escape(message)}[/]");
-        }
-
+            return SessionsJson.Error(SessionsJson.InvalidRegistry, message);
+        AnsiConsole.MarkupLine($"[red]{Markup.Escape(message)}[/]");
         return 1;
     }
 

@@ -1,5 +1,3 @@
-using System.Text.Json;
-using System.Text.Json.Nodes;
 using Protostar.Cli.Harness;
 using Protostar.Cli.Registry;
 using Spectre.Console;
@@ -84,10 +82,23 @@ internal static class SessionsPresenter
         (p.TranscriptsUnfinished > 0 ? $", {p.TranscriptsUnfinished} not finished" : "");
 
     /// <summary>Renders a sync run and returns the exit code: 0 when everything is backed up, 130 when stopped by Ctrl+C, otherwise 1.</summary>
-    public static int RenderSync(SessionSyncResult result, IHarnessCatalog catalog)
+    /// <remarks>
+    /// With <paramref name="json"/>, every transcript's <see cref="SessionsJson.PushRecord"/> is printed instead of the
+    /// table and summary, and a run that was stopped or left anything unfinished also writes an error object
+    /// (<see cref="SessionsJson.Interrupted"/>, <see cref="SessionsJson.Incomplete"/>). The exit codes are the same.
+    /// </remarks>
+    public static int RenderSync(SessionSyncResult result, IHarnessCatalog catalog, bool json = false)
     {
-        if (Failure(result.Failure, result.Detail, result.Registry, catalog) is { } exit)
+        if (Failure(result.Failure, result.Detail, result.Registry, catalog, json) is { } exit)
             return exit;
+
+        if (json)
+        {
+            SessionsJson.WriteArray(result.Transcripts.Select(SessionsJson.PushRecord));
+            return result.Complete ? 0
+                : result.Stopped ? SessionsJson.Error(SessionsJson.Interrupted, "Stopped part way. Nothing is lost: run `protostar sessions push` again to carry on.", 130)
+                : SessionsJson.Error(SessionsJson.Incomplete, "Some transcripts were not backed up; see each record's result and message.");
+        }
 
         var notable = result.Transcripts.Where(t => t.Status != TranscriptSyncStatus.UpToDate).ToList();
         if (notable.Count > 0)
@@ -152,10 +163,14 @@ internal static class SessionsPresenter
     }
 
     /// <summary>Renders backup status and returns the exit code: 0 when fully backed up, 1 when anything is pending.</summary>
-    /// <remarks>The table lists pending transcripts only, or every transcript when <paramref name="all"/> is set.</remarks>
-    public static int RenderStatus(SessionStatusResult result, IHarnessCatalog catalog, bool all = false)
+    /// <remarks>
+    /// The table lists pending transcripts only, or every transcript when <paramref name="all"/> is set. With
+    /// <paramref name="json"/>, the same rows are printed as <see cref="SessionsJson.StatusRecord"/>s instead of the
+    /// table and summary, and the exit code is the same.
+    /// </remarks>
+    public static int RenderStatus(SessionStatusResult result, IHarnessCatalog catalog, bool all = false, bool json = false)
     {
-        if (Failure(result.Failure, result.Detail, result.Registry, catalog) is { } exit)
+        if (Failure(result.Failure, result.Detail, result.Registry, catalog, json) is { } exit)
             return exit;
 
         var pending = result.Transcripts.Where(t => t.BytesPending > 0).OrderByDescending(t => t.LastModifiedAt).ToList();
@@ -166,6 +181,12 @@ internal static class SessionsPresenter
                 .Where(t => t.BytesPending > 0 || t.Verified?.Check == BackupCheck.Diverged)
                 .OrderByDescending(t => t.LastModifiedAt)
                 .ToList();
+        if (json)
+        {
+            SessionsJson.WriteArray(rows.Select(SessionsJson.StatusRecord));
+            return result.FullySynced ? 0 : 1;
+        }
+
         if (rows.Count > 0)
         {
             var table = new Table().Border(TableBorder.Rounded);
@@ -176,14 +197,17 @@ internal static class SessionsPresenter
             table.AddColumn("State");
             foreach (var t in rows.Take(MaxRows))
             {
-                var state = t.Verified?.Check == BackupCheck.Diverged ? "[yellow]registry differs, push leaves it alone[/]"
-                    : t.BytesPending == 0 ? (t.Verified?.Check == BackupCheck.Confirmed ? "[green]backed up, verified[/]" : "[green]backed up[/]")
-                    : t.BackupFailedAt is not null ? "[yellow]failed to back up, will retry[/]"
-                    : t.Rewritten ? "[yellow]rewritten, re-upload[/]"
-                    : t.Verified?.Check == BackupCheck.Missing ? "[red]missing from the registry[/]"
-                    : t.Verified?.Check == BackupCheck.Short ? $"[yellow]registry holds only {Bytes(t.BytesBackedUp)}[/]"
-                    : t.BytesBackedUp == 0 ? "never backed up"
-                    : "new content";
+                var state = State(t) switch
+                {
+                    TranscriptState.Diverged => "[yellow]registry differs, push leaves it alone[/]",
+                    TranscriptState.BackedUp => t.Verified?.Check == BackupCheck.Confirmed ? "[green]backed up, verified[/]" : "[green]backed up[/]",
+                    TranscriptState.BackupFailed => "[yellow]failed to back up, will retry[/]",
+                    TranscriptState.Rewritten => "[yellow]rewritten, re-upload[/]",
+                    TranscriptState.Missing => "[red]missing from the registry[/]",
+                    TranscriptState.Short => $"[yellow]registry holds only {Bytes(t.BytesBackedUp)}[/]",
+                    TranscriptState.NeverBackedUp => "never backed up",
+                    _ => "new content",
+                };
                 table.AddRow(
                     Markup.Escape(Short(t.Transcript.Key)),
                     t.Transcript.Kind == TranscriptKind.Session ? "session" : "[grey]subagent[/]",
@@ -214,23 +238,20 @@ internal static class SessionsPresenter
     /// <summary>Renders the sessions as a table, or as JSON for agents and scripts, and returns the exit code.</summary>
     /// <remarks>
     /// When the registry could not be asked, this machine's pending sessions are still listed, followed by why the
-    /// rest are missing, and the exit code is 1. In JSON each row is the registry's record with a <c>pending</c>
-    /// object added for bytes not backed up yet (a row made from the file has no title and zero counts, and says
-    /// <c>fromFile</c>), and the failure goes to standard error.
+    /// rest are missing, and the exit code is 1. In JSON each row is a <see cref="SessionsJson.ListRecord"/> (a row
+    /// made from the file has no title and zero counts, and its <c>pending</c> says <c>fromFile</c>), and the failure
+    /// goes to standard error as the error object.
     /// </remarks>
     public static int RenderList(SessionListResult result, IHarnessCatalog catalog, TranscriptListQuery query, bool json)
     {
         var partial = result.Failure is not (SessionSyncFailure.None or SessionSyncFailure.InvalidRegistry or SessionSyncFailure.UnknownHarness);
-        if (!partial && Failure(result.Failure, result.Detail, result.Registry, catalog) is { } exit)
+        if (!partial && Failure(result.Failure, result.Detail, result.Registry, catalog, json) is { } exit)
             return exit;
 
         if (json)
         {
-            var rows = new JsonArray([.. result.Sessions.Select(ToJson)]);
-            Console.Out.WriteLine(rows.ToJsonString(TranscriptJson.Options));
-            if (partial)
-                Console.Error.WriteLine(FailureMessage(result.Failure, result.Detail, result.Registry, catalog));
-            return partial ? 1 : 0;
+            SessionsJson.WriteArray(result.Sessions.Select(SessionsJson.ListRecord));
+            return partial ? JsonFailure(result.Failure, result.Detail, result.Registry, catalog) : 0;
         }
 
         // With a filter, an empty list says nothing about whether anything is backed up, only that nothing matched.
@@ -311,21 +332,31 @@ internal static class SessionsPresenter
         return given.Count == 0 ? null : string.Join(", ", given);
     }
 
-    private static JsonNode ToJson(ListedSession row)
-    {
-        var node = JsonSerializer.SerializeToNode(row.Session, TranscriptJson.Options)!;
-        if (row.Pending is { } pending)
-            node["pending"] = JsonSerializer.SerializeToNode(pending, TranscriptJson.Options);
-        return node;
-    }
-
-    private static int? Failure(SessionSyncFailure failure, string? detail, Uri? registry, IHarnessCatalog catalog)
+    // Prints why the command stopped early, as markup or as the JSON error object, and returns 1; null when it went ahead.
+    private static int? Failure(SessionSyncFailure failure, string? detail, Uri? registry, IHarnessCatalog catalog, bool json = false)
     {
         if (FailureMessage(failure, detail, registry, catalog) is not { } message)
             return null;
+        if (json)
+            return SessionsJson.Error(SessionsJson.Code(failure)!, message);
         AnsiConsole.MarkupLine($"[red]{Markup.Escape(message)}[/]");
         return 1;
     }
+
+    private static int JsonFailure(SessionSyncFailure failure, string? detail, Uri? registry, IHarnessCatalog catalog) =>
+        SessionsJson.Error(SessionsJson.Code(failure)!, FailureMessage(failure, detail, registry, catalog)!);
+
+    /// <summary>What a transcript's backup state is, as the status table words it and its JSON names it.</summary>
+    /// <remarks>Checked in this order, so a verify's finding outranks what the ledger alone says.</remarks>
+    internal static TranscriptState State(TranscriptStatus t) =>
+        t.Verified?.Check == BackupCheck.Diverged ? TranscriptState.Diverged
+        : t.BytesPending == 0 ? TranscriptState.BackedUp
+        : t.BackupFailedAt is not null ? TranscriptState.BackupFailed
+        : t.Rewritten ? TranscriptState.Rewritten
+        : t.Verified?.Check == BackupCheck.Missing ? TranscriptState.Missing
+        : t.Verified?.Check == BackupCheck.Short ? TranscriptState.Short
+        : t.BytesBackedUp == 0 ? TranscriptState.NeverBackedUp
+        : TranscriptState.NewContent;
 
     /// <summary>Why a sync or status stopped early, as plain text; <c>null</c> when it went ahead. Also used by <c>setup</c>.</summary>
     internal static string? FailureMessage(SessionSyncFailure failure, string? detail, Uri? registry, IHarnessCatalog catalog)
@@ -400,4 +431,32 @@ internal static class SessionsPresenter
             : span.TotalDays < 1 ? $"{(int)span.TotalHours} h ago"
             : $"{(int)span.TotalDays} d ago";
     }
+}
+
+/// <summary>A transcript's backup state on this machine, as <c>sessions status</c> reports it.</summary>
+internal enum TranscriptState
+{
+    /// <summary>The registry has all of it.</summary>
+    BackedUp,
+
+    /// <summary>Never sent.</summary>
+    NeverBackedUp,
+
+    /// <summary>Partly sent; the file has grown since.</summary>
+    NewContent,
+
+    /// <summary>The file was rewritten rather than appended, so it goes again in full as a new revision.</summary>
+    Rewritten,
+
+    /// <summary>A capture hook's background backup of its session failed; a later hook retries it.</summary>
+    BackupFailed,
+
+    /// <summary>A verify found the registry holds none of it.</summary>
+    Missing,
+
+    /// <summary>A verify found the registry holds fewer bytes than this machine sent.</summary>
+    Short,
+
+    /// <summary>A verify found the registry holds more, or another revision; push leaves it alone.</summary>
+    Diverged,
 }
