@@ -12,11 +12,13 @@ internal sealed class SignInService : ISignInService
 {
     private readonly ITokenStore _tokens;
     private readonly IAccessTokenProvider _sessions;
+    private readonly IDefaultRegistryStore _defaultRegistry;
 
-    public SignInService(ITokenStore tokens, IAccessTokenProvider sessions)
+    public SignInService(ITokenStore tokens, IAccessTokenProvider sessions, IDefaultRegistryStore defaultRegistry)
     {
         _tokens = tokens;
         _sessions = sessions;
+        _defaultRegistry = defaultRegistry;
     }
 
     /// <inheritdoc />
@@ -113,7 +115,7 @@ internal sealed class SignInService : ISignInService
             Subject = user?.FindFirst("sub")?.Value,
             Login = login,
             Name = user?.FindFirst("name")?.Value,
-        });
+        }) && _defaultRegistry.Save(registry);
 
         return saved
             ? new SignInResult(SignInFailure.None, null, registry, login)

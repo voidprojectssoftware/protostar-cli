@@ -21,7 +21,9 @@ internal static class SignInPresenter
     }
 
     /// <summary>Renders <c>auth status</c>; always exits 0, since "not logged in" is an answer, not an error.</summary>
-    public static int RenderStatus(SessionCheck check)
+    /// <param name="check">The session check.</param>
+    /// <param name="source">Where the registry checked was chosen, shown so a surprising registry can be traced.</param>
+    public static int RenderStatus(SessionCheck check, RegistrySource source)
     {
         var authority = Markup.Escape(Authority(check.Registry));
         var login = Markup.Escape(check.Login ?? "(unknown)");
@@ -39,8 +41,17 @@ internal static class SignInPresenter
                 break;
         }
 
+        AnsiConsole.MarkupLine($"[grey]Registry from {Markup.Escape(Describe(source))}.[/]");
         return 0;
     }
+
+    private static string Describe(RegistrySource source) => source switch
+    {
+        RegistrySource.Flag => "--registry",
+        RegistrySource.Environment => AuthConstants.RegistryEnvVar,
+        RegistrySource.ConfigFile => $"{ProtostarPaths.ConfigFile()} (saved by setup or auth login)",
+        _ => "the built-in default",
+    };
 
     /// <summary>Why a sign-in failed, as markup lines; also used by <c>setup</c>.</summary>
     internal static IEnumerable<string> Problem(SignInResult result)
@@ -66,7 +77,7 @@ internal static class SignInPresenter
                 yield return $"[red]Sign-in failed:[/] {detail}";
                 break;
             case SignInFailure.SaveFailed:
-                yield return "[red]Signed in, but could not save the session to the credential store.[/]";
+                yield return $"[red]Signed in, but could not save the session to[/] [grey]{Markup.Escape(ProtostarPaths.ConfigDir())}[/].";
                 break;
         }
     }

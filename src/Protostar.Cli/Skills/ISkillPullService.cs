@@ -34,7 +34,7 @@ internal interface ISkillPullService
 /// <summary>Which registry and harnesses to compare.</summary>
 /// <param name="HarnessId">Limit to this harness; <c>null</c> for every installed harness that has skills.</param>
 /// <param name="HarnessHome">Override the harness config root.</param>
-/// <param name="Registry">The <c>--registry</c> option; <c>null</c> falls back to the environment and default.</param>
+/// <param name="Registry">The <c>--registry</c> option; <c>null</c> falls back to the environment, the saved default, then the built-in one.</param>
 /// <param name="ProjectStart">The folder whose project's skills are compared; <c>null</c> compares global skills only.</param>
 internal sealed record SkillRemoteRequest(string? HarnessId, string? HarnessHome, string? Registry, string? ProjectStart = null);
 
@@ -44,7 +44,7 @@ internal sealed record SkillRemoteRequest(string? HarnessId, string? HarnessHome
 /// </param>
 /// <param name="HarnessId">Limit to this harness; <c>null</c> for every installed harness that has skills.</param>
 /// <param name="HarnessHome">Override the harness config root.</param>
-/// <param name="Registry">The <c>--registry</c> option; <c>null</c> falls back to the environment and default.</param>
+/// <param name="Registry">The <c>--registry</c> option; <c>null</c> falls back to the environment, the saved default, then the built-in one.</param>
 /// <param name="Force">Overwrite skills that have local changes.</param>
 /// <param name="ProjectStart">The folder whose project's skills are installed; <c>null</c> pulls global skills only.</param>
 internal sealed record SkillPullRequest(

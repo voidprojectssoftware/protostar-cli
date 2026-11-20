@@ -69,9 +69,11 @@ $env:PROTOSTAR_REGISTRY_URL = "https://your-registry.example"   # PowerShell
 protostar auth login
 ```
 
-The flag always wins over the environment variable. `auth status` and
-`auth logout` read the same setting, so they target whatever registry you signed
-in to.
+The flag always wins over the environment variable. A successful sign-in saves the
+registry as your default in `~/.protostar/config.json`, so later commands and the
+capture hooks use it without the flag or the variable. `auth status` says which
+registry it checked and where that came from. See
+[registry resolution order](../reference/configuration.md#registry-resolution-order).
 
 On connect, the CLI calls the registry's `/v1/meta` endpoint to check **API
 compatibility**. If the registry speaks a major version the CLI doesn't support,

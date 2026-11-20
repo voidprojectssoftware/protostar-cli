@@ -79,7 +79,7 @@ rest still run, so one run tells you everything that needs attention.
 
 | Option | Description |
 |---|---|
-| `--registry <URL>` | The registry to use. Defaults to `$PROTOSTAR_REGISTRY_URL`, then `https://localhost:7443`. |
+| `--registry <URL>` | The registry to use. Defaults to `$PROTOSTAR_REGISTRY_URL`, then the saved default, then `https://localhost:7443`. Saved as the default once you are signed in, so hooks use it too. |
 | `-y`, `--yes` | Back up this machine's sessions without asking. |
 | `--no-browser` | Print the sign-in URL instead of opening a browser (for SSH or headless machines; see [Authenticate](./authenticate.md#headless-machines)). |
 | `--provider <NAME>` | Skip the registry's sign-in chooser and go straight to this provider (for example `github`). |

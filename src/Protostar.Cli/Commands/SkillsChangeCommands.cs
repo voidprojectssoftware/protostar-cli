@@ -17,7 +17,7 @@ internal class SkillChangeSettings : CommandSettings
     public bool GlobalOnly { get; init; }
 
     [CommandOption("--registry <URL>")]
-    [Description("Registry base URL. Defaults to $PROTOSTAR_REGISTRY_URL, then the built-in dev default.")]
+    [Description("Registry base URL. Defaults to $PROTOSTAR_REGISTRY_URL, then the registry saved by setup or auth login, then the built-in dev default.")]
     public string? Registry { get; init; }
 
     public SkillTargetRequest Target(string name) =>

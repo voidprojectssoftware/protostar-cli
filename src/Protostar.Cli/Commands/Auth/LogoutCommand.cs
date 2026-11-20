@@ -5,9 +5,12 @@ using Spectre.Console.Cli;
 namespace Protostar.Cli.Commands.Auth;
 
 /// <summary>
-/// <c>protostar auth logout</c> — removes the stored session for the registry from the OS
-/// credential store.
+/// <c>protostar auth logout</c>: removes the stored session for the registry from the credential store.
 /// </summary>
+/// <remarks>
+/// The saved default registry is kept: it says which registry to use, not who is signed in, so after a logout
+/// the next <c>auth login</c> and every hook still go to the same registry.
+/// </remarks>
 internal sealed class LogoutCommand : Command<LogoutCommand.Settings>
 {
     private readonly ITokenStore _tokens;

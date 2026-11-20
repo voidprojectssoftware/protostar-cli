@@ -20,4 +20,7 @@ internal static class ProtostarPaths
     }
 
     public static string CredentialsFile() => Path.Combine(ConfigDir(), "credentials.json");
+
+    /// <summary>Per-user settings, today only the default registry (see <see cref="DefaultRegistryStore"/>).</summary>
+    public static string ConfigFile() => Path.Combine(ConfigDir(), "config.json");
 }
