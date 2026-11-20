@@ -260,6 +260,25 @@ public sealed class SkillChangeServiceTests : IDisposable
     }
 
     /// <summary>Resolves every folder to <see cref="ProjectId"/>.</summary>
+    [Fact]
+    public async Task Rename_finds_a_copy_recorded_under_the_project_a_link_moved_the_skill_out_of()
+    {
+        var old = Guid.NewGuid();
+        var repo = Guid.NewGuid();
+        _projects.ProjectId = repo;
+        var text = Manifest("notes");
+        Publish("notes", 1, text, repo, "repo");
+        var path = SyncedCopy("notes", "notes", 1, text, old);
+
+        var target = await FindAsync("notes", projectStart: _root);
+        var renamed = await Build().RenameAsync(target, "journal", CancellationToken.None);
+
+        Assert.Equal(path, Assert.Single(target.Copies).Path);
+        Assert.Equal(Path.Combine(SkillsDir, "journal"), Assert.Single(renamed.Copies).Path);
+        var recorded = _ledger.Get(RegistryUri, Path.Combine(SkillsDir, "journal"))!;
+        Assert.Equal(("journal", (Guid?)repo), (recorded.Name, recorded.ProjectId));
+    }
+
     private sealed class HereProjects : IProjectApi
     {
         public Guid? ProjectId { get; set; }
