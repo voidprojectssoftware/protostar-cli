@@ -47,8 +47,9 @@ internal interface IAgentPushService
 /// since this copy synced (keep mine; the replaced version stays in history), and restore a deleted or renamed agent as new.
 /// </param>
 /// <param name="FromHook">
-/// The capture hook's background push: the ledger is trusted without listing the registry, and content the registry already
-/// refused is reported from the ledger without asking again.
+/// The capture hook's background push: the ledger is trusted without listing the registry, content the registry already
+/// refused is reported from the ledger without asking again, and a file without a name or description is left out (the
+/// command reports it).
 /// </param>
 internal sealed record AgentPushRequest(
     IReadOnlyList<string> Names, string? HarnessId, string? HarnessHome, string? ProjectStart, string? Registry, bool Force = false, bool FromHook = false);

@@ -103,6 +103,11 @@ internal sealed class AgentPushService : IAgentPushService
             selected = discovered.Where(a => a.Name is not null && wanted.Contains(a.Name)).ToList();
         }
 
+        // A file without a name or description is the user's to fix, and `agents push` says so. The hook leaves it out, so
+        // it is not reported as a failed backup at the end of every session.
+        if (request.FromHook)
+            selected = selected.Where(a => a.Name is not null && a.Description is not null).ToList();
+
         var entries = new AgentPushEntry?[selected.Count];
         var pending = new List<(int Index, byte[] Content, string Hash)>();
         var unconfirmed = new List<(int Index, byte[] Content, string Hash)>();

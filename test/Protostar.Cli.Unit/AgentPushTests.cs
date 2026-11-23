@@ -100,6 +100,18 @@ public sealed class AgentPushTests : IDisposable
     }
 
     [Fact]
+    public async Task The_hook_leaves_out_a_file_without_a_name_so_it_is_not_a_failed_backup_every_session()
+    {
+        Write(Path.Combine(Home, "agents", "nameless.md"), null, "body");
+        Personal("reviewer.md", "reviewer");
+
+        var result = await Sut().PushAsync(Request(fromHook: true), CancellationToken.None);
+
+        Assert.Equal("reviewer", Assert.Single(result.Entries).Agent.Name);
+        Assert.True(result.Succeeded);
+    }
+
+    [Fact]
     public async Task The_hook_takes_the_ledgers_word_for_an_unchanged_agent_with_no_request_at_all()
     {
         Personal("reviewer.md", "reviewer");
