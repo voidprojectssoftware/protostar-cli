@@ -97,7 +97,10 @@ internal sealed partial class RegistryApi : IRegistryApi, IDisposable
                 .ToList(),
             null,
             (body.Removed ?? []).Where(r => r.Name is not null)
-                .Select(r => new RegistryRemovedSkill(r.Name!, r.ProjectId, r.LastVersion, r.RenamedTo))
+                .Select(r => new RegistryRemovedSkill(r.Name!, r.ProjectId, r.LastVersion, r.RenamedTo)
+                {
+                    Versions = (r.Versions ?? []).Where(v => v.ContentHash is not null).Select(v => new RegistryRemovedVersion(v.Version, v.ContentHash!)).ToList(),
+                })
                 .ToList());
     }
 
@@ -256,6 +259,13 @@ internal sealed partial class RegistryApi : IRegistryApi, IDisposable
         [JsonPropertyName("projectId")] public Guid? ProjectId { get; init; }
         [JsonPropertyName("lastVersion")] public int LastVersion { get; init; }
         [JsonPropertyName("renamedTo")] public string? RenamedTo { get; init; }
+        [JsonPropertyName("versions")] public List<RemovedVersionItem>? Versions { get; init; }
+    }
+
+    private sealed record RemovedVersionItem
+    {
+        [JsonPropertyName("version")] public int Version { get; init; }
+        [JsonPropertyName("contentHash")] public string? ContentHash { get; init; }
     }
 
     private sealed record ListItem

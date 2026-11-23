@@ -60,6 +60,7 @@ internal static class RegistryCapability
     public const string ProjectSkills = "project-skills";
     public const string SkillRename = "skill-rename";
     public const string SkillDelete = "skill-delete";
+    public const string SkillTombstoneHashes = "skill-tombstone-hashes";
     public const string Sessions = "sessions";
     public const string TranscriptLookup = "transcript-lookup";
     public const string TranscriptPrefixLookup = "transcript-prefix-lookup";

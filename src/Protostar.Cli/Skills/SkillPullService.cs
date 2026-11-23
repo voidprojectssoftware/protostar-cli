@@ -331,11 +331,14 @@ internal sealed class SkillPullService : ISkillPullService
     }
 
     // The removal behind a local copy no registry skill claims: the ledger says it synced as a registry skill of this
-    // target's scope, and the registry says that skill was deleted or renamed after the version the copy synced.
+    // target's scope, and the registry says that skill was deleted or renamed after the version the copy synced. A copy
+    // the ledger has no record of is matched by content instead (UnsyncedCopyOf).
     private RemovedCopy? RemovedCopyOf(Context context, Target target, DiscoveredSkill local)
     {
-        if (context.Listing is not { } listing || _ledger.Get(context.Registry!, local.Path) is not { } recorded)
+        if (context.Listing is not { } listing)
             return null;
+        if (_ledger.Get(context.Registry!, local.Path) is not { } recorded)
+            return UnsyncedCopyOf(listing, target, local);
         if (recorded.ProjectId is null != (target.Scope == SkillScope.Global))
             return null;
         if (listing.RemovalOf(recorded.Name ?? local.Name, recorded.ProjectId, recorded.Version) is not { } removal)
@@ -354,11 +357,39 @@ internal sealed class SkillPullService : ISkillPullService
         return new RemovedCopy(local, recorded, removal, edited);
     }
 
+    // A copy the ledger has no record of (a restored backup, dotfiles, a lost sync history) whose content is a version of a
+    // skill deleted or renamed in this target's scope: a copy of that skill, unedited since that version (cli#128). The
+    // record it would have had is returned, not written; following a rename records it under the new name.
+    private static RemovedCopy? UnsyncedCopyOf(RegistrySkillList listing, Target target, DiscoveredSkill local)
+    {
+        if (!(listing.Removed ?? []).Any(r => r.Versions.Count > 0 && string.Equals(r.Name, local.Name, StringComparison.Ordinal)))
+            return null;
+
+        IReadOnlyList<SkillUploadFile> files;
+        try
+        {
+            files = SkillFileReader.Read(local.Path);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return null;
+        }
+
+        var scope = target.Scope == SkillScope.Global ? null : target.ProjectId;
+        if (target.Scope == SkillScope.Project && scope is null)
+            return null;
+        if (listing.CopiesOf(local.Name, SkillFileReader.RegistryHash(files)).FirstOrDefault(m => m.Removal.ProjectId == scope) is not { Removal: { } removal, Version: var version })
+            return null;
+
+        var recorded = new SkillLedgerEntry(SkillFileReader.Hash(files), version, removal.Name, removal.ProjectId);
+        return new RemovedCopy(local, recorded, removal, Edited: false, Unsynced: true);
+    }
+
     // Follows a rename for an unedited copy (its SKILL.md name and its folder, as `skills rename` does on the machine that
     // ran it) and returns the copy under its new name; reports anything else as kept. Never deletes a local file.
     private (SkillPullEntry Entry, DiscoveredSkill? Renamed) SettleRemoved(Target target, RemovedCopy removed, Uri registry)
     {
-        var (local, recorded, removal, edited) = removed;
+        var (local, recorded, removal, edited, _) = removed;
         var version = recorded.Version ?? 0;
         SkillPullEntry Kept(string note) =>
             new(target.Harness, local.Name, SkillPullStatus.RemovedInRegistry, version, local.Path, note, target.ProjectName);
@@ -397,17 +428,21 @@ internal sealed class SkillPullService : ISkillPullService
     /// <summary>What happened to a removed skill this copy came from, and the ways out, as remote and pull say it.</summary>
     private static string RemovalNote(RemovedCopy removed, bool pulling)
     {
-        var (local, _, removal, edited) = removed;
+        var (local, recorded, removal, edited, unsynced) = removed;
         var quoted = Quote(local.Name);
+        var since = unsynced ? $". This copy has no sync record here, but it is identical to v{recorded.Version}" : " after this copy last synced";
         if (removal.RenamedTo is not { } newName)
         {
             var why = edited ? "This copy has changes made here and is kept" : "This copy is kept";
-            return $"Deleted from the registry (at v{removal.LastVersion}) after this copy last synced. {why}: remove it if you no longer want it, " +
+            return $"Deleted from the registry (at v{removal.LastVersion}){since}. {why}: remove it if you no longer want it, " +
                 $"or run `protostar skills push {quoted} --force` to restore it.";
         }
 
         if (!edited)
-            return $"Renamed to '{newName}' in the registry (at v{removal.LastVersion}). `protostar skills pull` renames this copy to match.";
+        {
+            return $"Renamed to '{newName}' in the registry (at v{removal.LastVersion}){(unsynced ? since : "")}. " +
+                "`protostar skills pull` renames this copy to match.";
+        }
         return $"Renamed to '{newName}' in the registry (at v{removal.LastVersion}), but this copy has changes made here, so it " +
             (pulling ? "was not renamed" : "will not be renamed") +
             $". Move them into '{newName}', or run `protostar skills push {quoted} --force` to keep this as a separate skill named '{local.Name}'.";
@@ -840,5 +875,6 @@ internal sealed class SkillPullService : ISkillPullService
     }
 
     // A local copy of a skill the registry deleted or renamed since the copy synced, and whether it was edited here since.
-    private sealed record RemovedCopy(DiscoveredSkill Local, SkillLedgerEntry Recorded, RegistryRemovedSkill Removal, bool Edited);
+    // Unsynced: the ledger had no record of the copy; it was recognised by content as Recorded's version.
+    private sealed record RemovedCopy(DiscoveredSkill Local, SkillLedgerEntry Recorded, RegistryRemovedSkill Removal, bool Edited, bool Unsynced = false);
 }
