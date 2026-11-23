@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Protostar.Cli.Agents;
 using Protostar.Cli.Skills;
 
 namespace Protostar.Cli.Capture;
@@ -18,6 +19,9 @@ namespace Protostar.Cli.Capture;
 /// copy the registry already refused as stale (changed here and in the registry) cost none either until it changes.
 /// Plugin skills (<c>plugin:name</c>) are not local user skills and are ignored.
 /// <c>Stop</c> and <c>SessionEnd</c> hand the session to <see cref="IBackgroundPush"/> and return at once.
+/// <c>SessionEnd</c> also hashes the custom agents of the session's <c>cwd</c> (and the personal ones) against the agent
+/// ledger in process (<see cref="IAgentPushService.Changed"/>), with no network call, and hands a detached
+/// <c>agents push</c> the work only when one changed (ADR 0003). No new hook is installed: <c>SessionEnd</c> already is.
 /// </remarks>
 internal sealed class CaptureService : ICaptureService
 {
@@ -33,11 +37,13 @@ internal sealed class CaptureService : ICaptureService
 
     private readonly ISkillPushService _push;
     private readonly IBackgroundPush _background;
+    private readonly IAgentPushService _agents;
 
-    public CaptureService(ISkillPushService push, IBackgroundPush background)
+    public CaptureService(ISkillPushService push, IBackgroundPush background, IAgentPushService agents)
     {
         _push = push;
         _background = background;
+        _agents = agents;
     }
 
     /// <inheritdoc />
@@ -77,13 +83,21 @@ internal sealed class CaptureService : ICaptureService
     // always runs.
     private CaptureResult HandOffSession(string hookEvent, string payload)
     {
+        var agents = hookEvent == "SessionEnd" ? HandOffAgents(payload) : new AgentHandOff(0, null);
+        if (agents.Error is { } agentError)
+            return new CaptureResult(CaptureAction.Failed, null, null, agentError);
+
         if (ReadString(payload, "transcript_path") is not { } transcriptPath || !File.Exists(transcriptPath))
-            return Ignore(null, "No transcript to back up.");
+        {
+            return agents.Started > 0
+                ? new CaptureResult(CaptureAction.AgentsHandedOff, null, null, null, agents.Started)
+                : Ignore(null, "No transcript to back up.");
+        }
 
         try
         {
             _background.Start(transcriptPath, hookEvent == "Stop" ? StopThrottle : null);
-            return new CaptureResult(CaptureAction.SessionHandedOff, null, null, null);
+            return new CaptureResult(CaptureAction.SessionHandedOff, null, null, null, agents.Started);
         }
         catch (Exception ex)
         {
@@ -91,6 +105,27 @@ internal sealed class CaptureService : ICaptureService
             return new CaptureResult(CaptureAction.Failed, null, null, $"Could not start the session backup: {ex.Message}");
         }
     }
+
+    // Hashes the session's agents against the ledger (no network) and starts a detached push when any changed.
+    private AgentHandOff HandOffAgents(string payload)
+    {
+        var cwd = ReadString(payload, "cwd") is { } dir && Directory.Exists(dir) ? dir : null;
+        try
+        {
+            var changed = _agents.Changed(harnessHome: null, projectStart: cwd, registry: null);
+            if (changed.Count == 0)
+                return new AgentHandOff(0, null);
+            _background.StartAgents(cwd);
+            return new AgentHandOff(changed.Count, null);
+        }
+        catch (Exception ex)
+        {
+            // Unreadable files, a failed process start: none may fail the harness.
+            return new AgentHandOff(0, $"Could not start the agent backup: {ex.Message}");
+        }
+    }
+
+    private sealed record AgentHandOff(int Started, string? Error);
 
     private static string? ReadString(string payload, string property)
     {

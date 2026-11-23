@@ -55,4 +55,7 @@ internal sealed record ProjectLinkChange
 
     /// <summary>The names of the project skills that moved with the folder, sorted; empty when none did, or from a registry too old to say.</summary>
     [JsonPropertyName("movedSkills")] public IReadOnlyList<string> MovedSkills { get; init; } = [];
+
+    /// <summary>The names of the project agents that moved with the folder, sorted; empty when none did, or from a registry without agents.</summary>
+    [JsonPropertyName("movedAgents")] public IReadOnlyList<string> MovedAgents { get; init; } = [];
 }

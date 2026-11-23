@@ -31,6 +31,12 @@ internal enum CaptureAction
     /// <summary>The session was handed to a background push; the hook does not wait for it.</summary>
     SessionHandedOff,
 
+    /// <summary>
+    /// Only changed custom agents were handed to a background push (a <c>SessionEnd</c> with no transcript to back up);
+    /// <see cref="CaptureResult.AgentsHandedOff"/> says how many.
+    /// </summary>
+    AgentsHandedOff,
+
     /// <summary>The event looked actionable but could not be handled (bad payload, timeout, error).</summary>
     Failed,
 }
@@ -40,4 +46,5 @@ internal enum CaptureAction
 /// <param name="SkillName">The skill the event was about, when there was one.</param>
 /// <param name="Push">The push run for <see cref="CaptureAction.SkillBackedUp"/>; <c>null</c> otherwise.</param>
 /// <param name="Message">Why the capture was ignored or failed; <c>null</c> on success.</param>
-internal sealed record CaptureResult(CaptureAction Action, string? SkillName, SkillPushRunResult? Push, string? Message);
+/// <param name="AgentsHandedOff">At <c>SessionEnd</c>, how many changed custom agents were handed to a background push.</param>
+internal sealed record CaptureResult(CaptureAction Action, string? SkillName, SkillPushRunResult? Push, string? Message, int AgentsHandedOff = 0);

@@ -18,6 +18,11 @@ internal interface IBackgroundPush
     /// <param name="throttle">Passed to the child as <c>--throttle</c>; <c>null</c> to push whatever is new.</param>
     /// <exception cref="InvalidOperationException">The executable could not be located or started.</exception>
     void Start(string transcriptPath, TimeSpan? throttle);
+
+    /// <summary>Starts a detached <c>protostar agents push --from-hook</c> for the agents changed in a session, and returns without waiting.</summary>
+    /// <param name="projectStart">The session's working directory, where its project's agents are found; <c>null</c> for personal agents only.</param>
+    /// <exception cref="InvalidOperationException">The executable could not be located or started.</exception>
+    void StartAgents(string? projectStart);
 }
 
 /// <summary>Production <see cref="IBackgroundPush"/>.</summary>
@@ -34,16 +39,25 @@ internal interface IBackgroundPush
 /// are dropped (.NET ignores a broken pipe on the console streams). The child then calls <c>setsid</c>
 /// (<see cref="DetachFromTerminal"/>) so closing the terminal does not send it <c>SIGHUP</c>.
 /// </para>
-/// <para>The child runs <c>sessions push</c>, which starts no process of its own, so a push never starts another.</para>
+/// <para>
+/// The child runs <c>sessions push</c> or <c>agents push</c>, neither of which starts a process of its own, so a push never
+/// starts another.
+/// </para>
 /// </remarks>
 internal sealed class BackgroundPush : IBackgroundPush
 {
     /// <inheritdoc />
-    public void Start(string transcriptPath, TimeSpan? throttle)
-    {
-        var exe = Environment.ProcessPath ?? throw new InvalidOperationException("Could not locate the protostar executable.");
-        var startInfo = StartInfo(exe, Path.GetFullPath(transcriptPath), throttle, OperatingSystem.IsWindows());
+    public void Start(string transcriptPath, TimeSpan? throttle) =>
+        Launch(StartInfo(Executable(), Path.GetFullPath(transcriptPath), throttle, OperatingSystem.IsWindows()));
 
+    /// <inheritdoc />
+    public void StartAgents(string? projectStart) =>
+        Launch(AgentsStartInfo(Executable(), projectStart is null ? null : Path.GetFullPath(projectStart), OperatingSystem.IsWindows()));
+
+    private static string Executable() => Environment.ProcessPath ?? throw new InvalidOperationException("Could not locate the protostar executable.");
+
+    private static void Launch(ProcessStartInfo startInfo)
+    {
         using var child = Process.Start(startInfo) ?? throw new InvalidOperationException("The background push did not start.");
         if (startInfo.RedirectStandardInput)
         {
@@ -53,20 +67,10 @@ internal sealed class BackgroundPush : IBackgroundPush
         }
     }
 
-    /// <summary>How the child is started; separate so the options can be checked on any OS.</summary>
+    /// <summary>How the session push child is started; separate so the options can be checked on any OS.</summary>
     internal static ProcessStartInfo StartInfo(string exe, string transcriptPath, TimeSpan? throttle, bool windows)
     {
-        var startInfo = new ProcessStartInfo(exe)
-        {
-            // Not the harness's working directory: a child holding a project folder open stops it being deleted on Windows.
-            WorkingDirectory = Path.GetTempPath(),
-            UseShellExecute = windows,
-            WindowStyle = windows ? ProcessWindowStyle.Hidden : ProcessWindowStyle.Normal,
-            RedirectStandardInput = !windows,
-            RedirectStandardOutput = !windows,
-            RedirectStandardError = !windows,
-        };
-
+        var startInfo = Detached(exe, windows);
         startInfo.ArgumentList.Add("sessions");
         startInfo.ArgumentList.Add("push");
         startInfo.ArgumentList.Add("--session");
@@ -79,6 +83,38 @@ internal sealed class BackgroundPush : IBackgroundPush
 
         return startInfo;
     }
+
+    /// <summary>How the agent push child is started: <c>agents push --from-hook</c>, with <c>--project</c> or <c>--personal-only</c>.</summary>
+    internal static ProcessStartInfo AgentsStartInfo(string exe, string? projectStart, bool windows)
+    {
+        var startInfo = Detached(exe, windows);
+        startInfo.ArgumentList.Add("agents");
+        startInfo.ArgumentList.Add("push");
+        startInfo.ArgumentList.Add("--from-hook");
+        if (projectStart is null)
+        {
+            startInfo.ArgumentList.Add("--personal-only");
+        }
+        else
+        {
+            startInfo.ArgumentList.Add("--project");
+            startInfo.ArgumentList.Add(projectStart);
+        }
+
+        return startInfo;
+    }
+
+    private static ProcessStartInfo Detached(string exe, bool windows) =>
+        new(exe)
+        {
+            // Not the harness's working directory: a child holding a project folder open stops it being deleted on Windows.
+            WorkingDirectory = Path.GetTempPath(),
+            UseShellExecute = windows,
+            WindowStyle = windows ? ProcessWindowStyle.Hidden : ProcessWindowStyle.Normal,
+            RedirectStandardInput = !windows,
+            RedirectStandardOutput = !windows,
+            RedirectStandardError = !windows,
+        };
 
     /// <summary>Called by the child: leaves the terminal's session so closing the terminal does not end the push.</summary>
     /// <remarks>A no-op on Windows, where the shell already gave the child its own console.</remarks>

@@ -1,3 +1,4 @@
+using Protostar.Cli.Agents;
 using Protostar.Cli.Auth;
 using Protostar.Cli.Registry;
 using Protostar.Cli.Sessions;
@@ -18,7 +19,8 @@ internal interface IProjectService
     /// <summary>Links the folder of <paramref name="directory"/> on this machine to <paramref name="project"/>, an id or exact name.</summary>
     /// <remarks>
     /// The folder's project skills may move with it; this machine's skill ledger records of them then name their new
-    /// project (<see cref="MovedSkillLedger.Follow"/>). The same holds for <see cref="UnlinkAsync"/>.
+    /// project (<see cref="MovedSkillLedger.Follow"/>), and so do its project agents' records (<see cref="MovedAgentLedger.Follow"/>).
+    /// The same holds for <see cref="UnlinkAsync"/>.
     /// </remarks>
     Task<ProjectLinkResult> LinkAsync(string? registry, string directory, string project, CancellationToken cancellationToken);
 
@@ -66,10 +68,13 @@ internal sealed class ProjectService : IProjectService
     private readonly IProjectApi _api;
     private readonly IMachineIdentity _machine;
     private readonly ISkillLedger _ledger;
+    private readonly IAgentLedger _agentLedger;
 
     public ProjectService(
-        IProjectFactsResolver facts, IAccessTokenProvider tokens, IRegistryCapabilities capabilities, IProjectApi api, IMachineIdentity machine, ISkillLedger ledger)
+        IProjectFactsResolver facts, IAccessTokenProvider tokens, IRegistryCapabilities capabilities, IProjectApi api, IMachineIdentity machine, ISkillLedger ledger,
+        IAgentLedger agentLedger)
     {
+        _agentLedger = agentLedger;
         _facts = facts;
         _tokens = tokens;
         _capabilities = capabilities;
@@ -119,6 +124,8 @@ internal sealed class ProjectService : IProjectService
 
         if (changed.Value!.MovedSkills.Count > 0 && before.Value?.ProjectId is { } from && changed.Value.Project.ProjectId is { } to)
             MovedSkillLedger.Follow(_ledger, uri!, changed.Value.MovedSkills, from, to);
+        if (changed.Value.MovedAgents.Count > 0 && before.Value?.ProjectId is { } agentsFrom && changed.Value.Project.ProjectId is { } agentsTo)
+            MovedAgentLedger.Follow(_agentLedger, uri!, changed.Value.MovedAgents, agentsFrom, agentsTo);
         return new ProjectLinkResult(facts, uri, changed.Value, ProjectFailure.None, null);
     }
 

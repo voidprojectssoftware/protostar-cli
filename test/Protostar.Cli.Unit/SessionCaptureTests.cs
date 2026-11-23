@@ -24,7 +24,7 @@ public sealed class SessionCaptureTests : IDisposable
     public async Task Stop_hands_the_named_transcript_to_a_throttled_background_push()
     {
         var background = new FakeBackground();
-        var sut = new CaptureService(new NoSkills(), background);
+        var sut = new CaptureService(new NoSkills(), background, new AgentPushTests.FakeAgentPush());
 
         var result = await sut.HandleAsync("Stop", Payload("Stop"), CancellationToken.None);
 
@@ -37,7 +37,7 @@ public sealed class SessionCaptureTests : IDisposable
     public async Task SessionEnd_hands_off_without_a_throttle()
     {
         var background = new FakeBackground();
-        var sut = new CaptureService(new NoSkills(), background);
+        var sut = new CaptureService(new NoSkills(), background, new AgentPushTests.FakeAgentPush());
 
         await sut.HandleAsync("SessionEnd", Payload("SessionEnd"), CancellationToken.None);
 
@@ -48,7 +48,7 @@ public sealed class SessionCaptureTests : IDisposable
     public async Task A_payload_without_a_transcript_is_ignored()
     {
         var background = new FakeBackground();
-        var sut = new CaptureService(new NoSkills(), background);
+        var sut = new CaptureService(new NoSkills(), background, new AgentPushTests.FakeAgentPush());
 
         var result = await sut.HandleAsync("Stop", """{"session_id":"s"}""", CancellationToken.None);
 
@@ -59,7 +59,7 @@ public sealed class SessionCaptureTests : IDisposable
     [Fact]
     public async Task A_push_that_cannot_start_is_logged_and_the_hook_still_exits_0()
     {
-        var sut = new CaptureService(new NoSkills(), new FakeBackground { Failure = new System.ComponentModel.Win32Exception("no such file") });
+        var sut = new CaptureService(new NoSkills(), new FakeBackground { Failure = new System.ComponentModel.Win32Exception("no such file") }, new AgentPushTests.FakeAgentPush());
         var logged = new List<string>();
 
         var result = await sut.HandleAsync("SessionEnd", Payload("SessionEnd"), CancellationToken.None);
@@ -186,6 +186,15 @@ public sealed class SessionCaptureTests : IDisposable
             if (Failure is not null)
                 throw Failure;
             Started.Add((transcriptPath, throttle));
+        }
+
+        public List<string?> AgentsStarted { get; } = [];
+
+        public void StartAgents(string? projectStart)
+        {
+            if (Failure is not null)
+                throw Failure;
+            AgentsStarted.Add(projectStart);
         }
     }
 

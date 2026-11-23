@@ -17,6 +17,7 @@ public sealed class ProjectServiceTests : IDisposable
     private readonly FakeApi _api = new();
     private readonly RecordingResolver _resolver = new();
     private readonly FakeLedger _ledger = new();
+    private readonly AgentPushTests.FakeAgentLedger _agentLedger = new();
     // Overrides _token when set, for a lookup a stored token alone cannot give (an unreachable refresh).
     private SessionLookup? _session;
     private StoredToken? _token = new() { Registry = Registry, AccessToken = "tok", ExpiresAtUtc = DateTimeOffset.UtcNow.AddHours(1) };
@@ -25,7 +26,7 @@ public sealed class ProjectServiceTests : IDisposable
 
     private readonly MetaOnlyRegistry _meta = new();
 
-    private ProjectService Sut() => new(_resolver, new FakeTokens(() => _session ?? SessionLookups.Of(_token)), new RegistryCapabilities(_meta), _api, new FakeMachine(), _ledger);
+    private ProjectService Sut() => new(_resolver, new FakeTokens(() => _session ?? SessionLookups.Of(_token)), new RegistryCapabilities(_meta), _api, new FakeMachine(), _ledger, _agentLedger);
 
     [Fact]
     public async Task Show_asks_the_registry_with_the_facts_the_session_resolver_gives()

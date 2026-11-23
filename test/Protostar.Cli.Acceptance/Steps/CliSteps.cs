@@ -93,6 +93,20 @@ public sealed partial class CliSteps : IDisposable
         File.WriteAllText(Path.Combine(dir, "SKILL.md"), $"---\nname: {name}\ndescription: test skill\n---\nBody.\n");
     }
 
+    [Given("an agent named {string} in the harness")]
+    public void GivenAnAgentInTheHarness(string name)
+    {
+        Directory.CreateDirectory(Path.Combine(_harness.ConfigDir, "agents"));
+        File.WriteAllText(Path.Combine(_harness.ConfigDir, "agents", $"{name}.md"), $"---\nname: {name}\ndescription: test agent\n---\nBody.\n");
+    }
+
+    [Given("an agent file {string} with no name in the harness")]
+    public void GivenAnAgentFileWithNoName(string file)
+    {
+        Directory.CreateDirectory(Path.Combine(_harness.ConfigDir, "agents"));
+        File.WriteAllText(Path.Combine(_harness.ConfigDir, "agents", file), "---\ndescription: test agent\n---\nBody.\n");
+    }
+
     // Shared by every scenario through the one config dir, so each scenario that stores a session uses its own registry.
     [Given(@"a stored session for ""(\S+)"" whose access token is (current|expired)")]
     public void GivenAStoredSession(string registry, string state)

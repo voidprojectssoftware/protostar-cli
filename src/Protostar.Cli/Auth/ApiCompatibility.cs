@@ -71,6 +71,7 @@ internal static class RegistryCapability
     public const string MemoryBaseVersions = "memory-base-versions";
     public const string Search = "search";
     public const string MemoryRedactedRead = "memory-redacted-read";
+    public const string Agents = "agents";
 
     /// <summary>What a person calls the feature <paramref name="capability"/> names, to finish "too old for ...".</summary>
     public static string Feature(string capability) => capability switch
@@ -91,6 +92,7 @@ internal static class RegistryCapability
         MemoryBaseVersions => "memory version history",
         Search => "search",
         MemoryRedactedRead => "serving memory with secrets redacted",
+        Agents => "agent backups",
         _ => capability,
     };
 }
