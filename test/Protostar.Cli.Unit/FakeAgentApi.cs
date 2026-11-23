@@ -116,6 +116,28 @@ internal sealed class FakeAgentApi : IAgentApi
         }));
     }
 
+    public List<(string Name, Guid? ProjectId, string? NewName)> Changes { get; } = [];
+
+    public Task<ApiResult<string>> RenameAgentAsync(Uri registry, string accessToken, string name, Guid? projectId, string newName, CancellationToken cancellationToken)
+    {
+        Changes.Add((name, projectId, newName));
+        if (!_agents.ContainsKey((projectId, name)))
+            return Task.FromResult(ApiResult<string>.Fail($"You have no agent '{name}'."));
+        if (_agents.ContainsKey((projectId, newName)))
+            return Task.FromResult(newName == name ? ApiResult<string>.Success(name) : ApiResult<string>.Fail($"You already have an agent named '{newName}'."));
+        Rename(projectId, name, newName);
+        return Task.FromResult(ApiResult<string>.Success(newName));
+    }
+
+    public Task<ApiResult<bool>> DeleteAgentAsync(Uri registry, string accessToken, string name, Guid? projectId, CancellationToken cancellationToken)
+    {
+        Changes.Add((name, projectId, null));
+        if (!_agents.ContainsKey((projectId, name)))
+            return Task.FromResult(ApiResult<bool>.Fail($"You have no agent '{name}'."));
+        Delete(projectId, name);
+        return Task.FromResult(ApiResult<bool>.Success(true));
+    }
+
     public Task<RegistryAgentList> ListAgentsAsync(Uri registry, string accessToken, CancellationToken cancellationToken)
     {
         ListCalls++;

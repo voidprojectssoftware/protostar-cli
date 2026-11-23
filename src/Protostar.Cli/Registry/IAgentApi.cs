@@ -53,6 +53,25 @@ internal interface IAgentApi
     /// </remarks>
     Task<ApiResult<RemoteAgentContent>> GetAgentContentAsync(
         Uri registry, string accessToken, string name, Guid? projectId, int? version, CancellationToken cancellationToken);
+
+    /// <summary>Renames the caller's agent (<c>POST /v1/agents/{name}/rename</c>), keeping its versions.</summary>
+    /// <param name="registry">The registry base URL.</param>
+    /// <param name="accessToken">A current bearer token for that registry.</param>
+    /// <param name="name">The agent's exact current name.</param>
+    /// <param name="projectId">The agent's project; <c>null</c> for the personal agent of that name.</param>
+    /// <param name="newName">The name it takes.</param>
+    /// <param name="cancellationToken">Cancels the request.</param>
+    /// <returns>The agent's name now, or why the registry refused (the name is taken, no such agent).</returns>
+    /// <remarks>The stored files keep the <c>name</c> they were pushed with; the registry remembers the old name for other machines.</remarks>
+    Task<ApiResult<string>> RenameAgentAsync(Uri registry, string accessToken, string name, Guid? projectId, string newName, CancellationToken cancellationToken);
+
+    /// <summary>Deletes the caller's agent with every version (<c>DELETE /v1/agents/{name}</c>); the registry remembers the name.</summary>
+    /// <param name="registry">The registry base URL.</param>
+    /// <param name="accessToken">A current bearer token for that registry.</param>
+    /// <param name="name">The agent's exact name.</param>
+    /// <param name="projectId">The agent's project; <c>null</c> for the personal agent of that name.</param>
+    /// <param name="cancellationToken">Cancels the request.</param>
+    Task<ApiResult<bool>> DeleteAgentAsync(Uri registry, string accessToken, string name, Guid? projectId, CancellationToken cancellationToken);
 }
 
 /// <summary>One version of an agent as the registry serves it, with its file.</summary>
