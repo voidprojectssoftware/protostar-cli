@@ -183,6 +183,7 @@ public sealed class AgentPullTests : IDisposable
 
         Assert.Equal(AgentSyncState.RemovedInRegistry, Assert.Single(remote.Agents, a => a.Name == "reviewer").State);
         Assert.Contains("`protostar agents pull` renames this copy to match", Assert.Single(remote.Agents, a => a.Name == "reviewer").Note);
+        Assert.Equal(AgentSyncState.UpdateAvailable, Assert.Single(remote.Agents, a => a.Name == "code-reviewer").State);
         Assert.Equal(AgentPullStatus.FollowedRename, Assert.Single(result.Entries, e => e.Name == "reviewer").Status);
         Assert.Equal(AgentPullStatus.UpToDate, Assert.Single(result.Entries, e => e.Name == "code-reviewer").Status);
         Assert.Equal(FakeAgentApi.File("code-reviewer", "v1"), File.ReadAllText(file));

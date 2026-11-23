@@ -130,7 +130,12 @@ internal static class AgentPullPresenter
     }
 
     // The states whose text does not already carry the note get it after, when there is one.
-    internal static string Describe(AgentComparison agent, int? version = null) => agent.State switch
+    internal static string Describe(AgentComparison agent, int? version = null) =>
+        agent.Note is { } note && agent.State is AgentSyncState.UpToDate or AgentSyncState.UpdateAvailable or AgentSyncState.LocalOnly
+            ? $"{State(agent, version)} {Markup.Escape(note)}"
+            : State(agent, version);
+
+    private static string State(AgentComparison agent, int? version) => agent.State switch
     {
         AgentSyncState.UpToDate when version is { } pinned => $"[green]matches v{pinned}[/]",
         AgentSyncState.UpToDate => "[green]up to date[/]",

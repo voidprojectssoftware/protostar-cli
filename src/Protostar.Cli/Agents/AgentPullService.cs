@@ -322,9 +322,19 @@ internal sealed class AgentPullService : IAgentPullService
                 return new AgentComparison(harness, remote.Name, AgentSyncState.NotInstalled, remote, null, null, Project: project);
             if (AgentInstaller.PathFor(target.AgentsDirectory, relative) is not { } path)
                 return new AgentComparison(harness, remote.Name, AgentSyncState.Conflict, remote, null, null, $"The registry's path '{relative}' cannot be written here.", project);
-            return Occupied(path)
+            if (!Occupied(path))
+                return new AgentComparison(harness, remote.Name, AgentSyncState.NotInstalled, remote, null, null, Project: project);
+
+            // The file there may be an unedited copy of this agent from before a rename, which a pull renames to follow
+            // before it compares: then this agent is here already, only under its old name.
+            var renamed = target.Local
+                .Where(l => SamePath(l.Path, path))
+                .Select(l => RemovedCopyOf(context, target, l))
+                .FirstOrDefault(r => r is { Edited: false } && r.Removal.RenamedTo == current.Name);
+            return renamed is null
                 ? new AgentComparison(harness, remote.Name, AgentSyncState.Conflict, remote, path, null, OccupiedNote(path), project)
-                : new AgentComparison(harness, remote.Name, AgentSyncState.NotInstalled, remote, null, null, Project: project);
+                : new AgentComparison(harness, remote.Name, AgentSyncState.UpdateAvailable, remote, path, renamed.Recorded.Version,
+                    $"The copy here is named '{renamed.Local.Name}'; `protostar agents pull` renames it to match.", project);
         }
 
         // A record only speaks for the registry agent it was synced as: the same name and the same project. A record of the
