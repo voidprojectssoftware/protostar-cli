@@ -78,3 +78,111 @@ internal sealed class AgentsPushCommand : AsyncCommand<AgentsPushCommand.Setting
         return AgentPushPresenter.Render(await _push.PushAsync(request, cancellation), _catalog);
     }
 }
+
+/// <summary><c>protostar agents remote [NAME...]</c>: lists the registry's agents and how each compares with this machine.</summary>
+/// <remarks>The comparison is in <see cref="AgentPullService"/> and the output in <see cref="AgentPullPresenter"/>.</remarks>
+internal sealed class AgentsRemoteCommand : AsyncCommand<AgentsRemoteCommand.Settings>
+{
+    private readonly IAgentPullService _pull;
+    private readonly IHarnessCatalog _catalog;
+
+    public AgentsRemoteCommand(IAgentPullService pull, IHarnessCatalog catalog)
+    {
+        _pull = pull;
+        _catalog = catalog;
+    }
+
+    public sealed class Settings : CommandSettings
+    {
+        [CommandArgument(0, "[NAME]")]
+        [Description("Registry agent name(s) to compare. Omit to compare every agent.")]
+        public string[] Names { get; init; } = [];
+
+        [CommandOption("--version <N>")]
+        [Description("Compare the one named agent with its version N instead of its current version: what `agents pull NAME --version N` would do.")]
+        public int? Version { get; init; }
+
+        [CommandOption("-H|--harness <ID>")]
+        [Description("Only compare with this harness id.")]
+        public string? Harness { get; init; }
+
+        [CommandOption("--harness-home <DIR>")]
+        [Description("Override the harness config root (testing or a non-default location).")]
+        public string? HarnessHome { get; init; }
+
+        [CommandOption("--project <DIR>")]
+        [Description("The folder whose project agents to compare. Defaults to the current directory.")]
+        public string? Project { get; init; }
+
+        [CommandOption("--personal-only")]
+        [Description("Only compare personal agents; leave project agents alone.")]
+        public bool PersonalOnly { get; init; }
+
+        [CommandOption("--registry <URL>")]
+        [Description("Registry base URL. Defaults to $PROTOSTAR_REGISTRY_URL, then the registry saved by setup or auth login, then the built-in dev default.")]
+        public string? Registry { get; init; }
+    }
+
+    protected override async Task<int> ExecuteAsync(CommandContext context, Settings settings, CancellationToken cancellation)
+    {
+        var projectStart = settings.PersonalOnly ? null : settings.Project ?? Directory.GetCurrentDirectory();
+        var request = new AgentRemoteRequest(settings.Harness, settings.HarnessHome, settings.Registry, projectStart, settings.Names, settings.Version);
+        return AgentPullPresenter.RenderRemote(await _pull.CompareAsync(request, cancellation), _catalog);
+    }
+}
+
+/// <summary><c>protostar agents pull [NAME...]</c>: installs or updates agents from the registry on this machine.</summary>
+/// <remarks>With no names it pulls every agent. The work is in <see cref="AgentPullService"/> and the output in <see cref="AgentPullPresenter"/>.</remarks>
+internal sealed class AgentsPullCommand : AsyncCommand<AgentsPullCommand.Settings>
+{
+    private readonly IAgentPullService _pull;
+    private readonly IHarnessCatalog _catalog;
+
+    public AgentsPullCommand(IAgentPullService pull, IHarnessCatalog catalog)
+    {
+        _pull = pull;
+        _catalog = catalog;
+    }
+
+    public sealed class Settings : CommandSettings
+    {
+        [CommandArgument(0, "[NAME]")]
+        [Description("Registry agent name(s) to pull. Omit to pull every agent in the registry.")]
+        public string[] Names { get; init; } = [];
+
+        [CommandOption("-H|--harness <ID>")]
+        [Description("Only install into this harness id.")]
+        public string? Harness { get; init; }
+
+        [CommandOption("--harness-home <DIR>")]
+        [Description("Override the harness config root (testing or a non-default location).")]
+        public string? HarnessHome { get; init; }
+
+        [CommandOption("--project <DIR>")]
+        [Description("The folder whose project agents to install. Defaults to the current directory.")]
+        public string? Project { get; init; }
+
+        [CommandOption("--personal-only")]
+        [Description("Only pull personal agents; leave project agents alone.")]
+        public bool PersonalOnly { get; init; }
+
+        [CommandOption("--registry <URL>")]
+        [Description("Registry base URL. Defaults to $PROTOSTAR_REGISTRY_URL, then the registry saved by setup or auth login, then the built-in dev default.")]
+        public string? Registry { get; init; }
+
+        [CommandOption("--force")]
+        [Description("Overwrite agents that have local changes, including ones changed here and in the registry (keep theirs).")]
+        public bool Force { get; init; }
+
+        [CommandOption("--version <N>")]
+        [Description("Install version N of the one named agent instead of its current version, to recover earlier work. Local changes are still kept unless --force.")]
+        public int? Version { get; init; }
+    }
+
+    protected override async Task<int> ExecuteAsync(CommandContext context, Settings settings, CancellationToken cancellation)
+    {
+        var projectStart = settings.PersonalOnly ? null : settings.Project ?? Directory.GetCurrentDirectory();
+        var request = new AgentPullRequest(settings.Names, settings.Harness, settings.HarnessHome, settings.Registry, settings.Force, projectStart, settings.Version);
+        return AgentPullPresenter.RenderPull(await _pull.PullAsync(request, cancellation), _catalog);
+    }
+}

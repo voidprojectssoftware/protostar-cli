@@ -31,7 +31,8 @@ $ protostar --version, -v   # print the version (e.g. 0.1.0)
 ## `protostar setup`
 
 Set up this machine in one step: sign in, install capture hooks, back up this
-machine's skills and then pull the registry's, bring your agents' memory to the
+machine's skills and then pull the registry's, do the same for your personal
+custom agents, bring your agents' memory to the
 projects checked out here (as [`memory pull`](#protostar-memory-pull) does), and
 offer to back up existing sessions. Prints one line per step (done, already
 done, skipped, or failed) and is safe to run again. Exits `0` unless a step
@@ -461,13 +462,58 @@ its last backup. Run it inside a project to include that project's agents.
 A file whose front matter has no `name` (or no `description`) is refused without
 being sent: Claude Code does not load it either. When an agent changed here and in
 the registry since this copy was synced, nothing is overwritten and the push says
-which version the registry has. `protostar agents push NAME --force` keeps your copy;
-taking the registry's copy arrives with `agents pull`. A copy of an agent deleted or
-renamed in the registry is reported, not uploaded. A registry from before agents is
+which version the registry has, with the ways out: `protostar agents push NAME --force`
+keeps your copy, `protostar agents pull NAME --force` takes the registry's. A copy of an
+agent deleted or renamed in the registry is reported, not uploaded. A registry from before agents is
 named as too old instead of failing. Exit code 1 when anything was not backed up.
 
 You rarely need to run it: at the end of each session the capture hook backs up the
 agents that changed (see [`capture`](#protostar-capture)).
+
+### `protostar agents remote [NAME...]`
+
+Lists the agents in the registry and how each compares with this machine: its scope
+(personal, or the project it belongs to), the registry's latest version, what this
+machine has (`not installed`, `up to date`, `update available`, `local changes`,
+`changed here and in the registry`, `gone from the registry`, `conflict`, or `only
+here`), and the file it lives in, relative to the agents folder. Another project's
+agents are listed as theirs; they are only pulled from a checkout of that project.
+
+| Option | Meaning |
+|---|---|
+| `--version <N>` | Compare the one named agent with its version N: what `agents pull NAME --version N` would do. |
+| `--project <DIR>` | The folder whose project agents to compare. Defaults to the current directory. |
+| `--personal-only` | Only personal agents. |
+| `-H, --harness`, `--harness-home`, `--registry` | As for `skills remote`. |
+
+### `protostar agents pull [NAME...]`
+
+Installs the registry's agents that are missing here and updates copies that are
+unedited since they last synced. **A copy edited here is never overwritten** without
+`--force`, and a file that is not the agent is never overwritten at all. A missing
+agent is written at the path it was pushed from (subfolders included), inside
+`~/.claude/agents/` or, for this folder's project, `<repo>/.claude/agents/`; a
+path that would leave that folder is refused. Run it again and nothing changes.
+
+| Option | Meaning |
+|---|---|
+| `--force` | Overwrite copies with local changes, including ones changed here and in the registry (keep theirs). Never overwrites a conflict. |
+| `--version <N>` | Install version N of the one named agent instead of its current version. Local changes are still kept unless `--force`. |
+| `--project <DIR>` | The folder whose project agents to install. Defaults to the current directory. |
+| `--personal-only` | Only personal agents. |
+| `-H, --harness`, `--harness-home`, `--registry` | As for `skills pull`. |
+
+When an agent was renamed in the registry, a pull renames an unedited copy here to
+follow: it sets the `name` line in the file, which stays where it is (the registry
+keeps the path the agent was pushed from, so every machine has it in the same
+place). The same applies when a fresh machine pulls a renamed agent, whose stored
+file still says its old name. An edited copy of a renamed agent, and any copy of a
+deleted agent, is kept and reported; local files are never deleted.
+
+Project agents follow the folder's project exactly as project skills do,
+including after `protostar project link`. Like project skills, they are written
+into the checkout, where git sees them; whether to commit them is yours to decide.
+Exit code 1 when an agent failed or conflicted.
 
 ## `protostar sessions`
 

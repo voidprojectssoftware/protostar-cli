@@ -54,6 +54,7 @@ services.AddSingleton<ISkillChangeService, SkillChangeService>();
 services.AddSingleton<IAgentApi>(sp => sp.GetRequiredService<RegistryApi>());
 services.AddSingleton<IAgentLedger, AgentLedger>();
 services.AddSingleton<IAgentPushService, AgentPushService>();
+services.AddSingleton<IAgentPullService, AgentPullService>();
 services.AddSingleton<IBackgroundPush, BackgroundPush>();
 services.AddSingleton<ICaptureService, CaptureService>();
 services.AddSingleton<ISignInService, SignInService>();
@@ -124,9 +125,13 @@ app.Configure(config =>
 
     config.AddBranch(Named("agents"), agents =>
     {
-        agents.SetDescription("Back up your custom agents (personal, and this project's) to the registry.");
+        agents.SetDescription("Back up your custom agents (personal, and this project's) and install them on any machine.");
         agents.AddCommand<AgentsPushCommand>("push")
             .WithDescription("Back up local custom agents to the registry (all, or the named ones).");
+        agents.AddCommand<AgentsRemoteCommand>("remote")
+            .WithDescription("List the agents in the registry and how each compares with this machine.");
+        agents.AddCommand<AgentsPullCommand>("pull")
+            .WithDescription("Install or update agents from the registry on this machine (all, or the named ones). Never overwrites a local edit without --force.");
     });
 
     config.AddBranch(Named("sessions"), sessions =>

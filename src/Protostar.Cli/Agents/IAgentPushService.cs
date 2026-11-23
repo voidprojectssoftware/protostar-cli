@@ -5,8 +5,7 @@ namespace Protostar.Cli.Agents;
 
 /// <summary>Backs up local custom agents to the registry: <c>protostar agents push</c> and the capture hook's background push.</summary>
 /// <remarks>
-/// The agents' copy of <see cref="Skills.ISkillPushService"/> (ADR 0003), without <c>--as</c> or anything that needs
-/// <c>agents pull</c> (7.2). Returns data only; <see cref="AgentPushPresenter"/> renders it.
+/// The agents' copy of <see cref="Skills.ISkillPushService"/> (ADR 0003), without <c>--as</c>. Returns data only; <see cref="AgentPushPresenter"/> renders it.
 /// </remarks>
 internal interface IAgentPushService
 {

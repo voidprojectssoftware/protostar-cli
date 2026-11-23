@@ -38,10 +38,25 @@ internal interface IAgentApi
     /// </remarks>
     Task<ApiResult<RemoteAgentContent>> GetRedactedAgentContentAsync(
         Uri registry, string accessToken, string name, Guid? projectId, int? version, CancellationToken cancellationToken);
+
+    /// <summary>Downloads one version of the caller's agent as stored, to install it (<c>GET /v1/agents/{name}/content</c>).</summary>
+    /// <param name="registry">The registry base URL.</param>
+    /// <param name="accessToken">A current bearer token for that registry.</param>
+    /// <param name="name">The agent's exact name.</param>
+    /// <param name="projectId">The agent's project; <c>null</c> for the personal agent of that name.</param>
+    /// <param name="version">The version to read; <c>null</c> for the current one.</param>
+    /// <param name="cancellationToken">Cancels the download.</param>
+    /// <remarks>
+    /// The file's bytes hash to <see cref="RemoteAgentContent.ContentHash"/>. An agent or version the caller does not have comes
+    /// back with <see cref="ApiResult{T}.AgentUnknown"/> set; a registry without the route (a bare 404) as the too-old message
+    /// for <c>agent-content</c>.
+    /// </remarks>
+    Task<ApiResult<RemoteAgentContent>> GetAgentContentAsync(
+        Uri registry, string accessToken, string name, Guid? projectId, int? version, CancellationToken cancellationToken);
 }
 
 /// <summary>One version of an agent as the registry serves it, with its file.</summary>
-/// <remarks>Read with <c>redacted=true</c>, so <see cref="Content"/> may not hash to <see cref="ContentHash"/>, which is always the stored file's.</remarks>
+/// <remarks>Read with <c>redacted=true</c>, <see cref="Content"/> may not hash to <see cref="ContentHash"/>, which is always the stored file's.</remarks>
 internal sealed record RemoteAgentContent
 {
     [JsonPropertyName("name")] public string Name { get; init; } = "";
@@ -69,7 +84,10 @@ internal sealed record RemoteAgentContent
 /// <param name="ProjectId">The agent's project; <c>null</c> for a personal agent.</param>
 /// <param name="ProjectName">That project's display name.</param>
 /// <param name="FirstVersion">1, or above it for an agent that reused a removed agent's name.</param>
-internal sealed record RegistryAgent(string Name, int Version, string ContentHash, Guid? ProjectId, string? ProjectName, int FirstVersion);
+/// <param name="Description">The current version's description.</param>
+/// <param name="Path">The current version's file path relative to the agents folder, with <c>/</c> separators, as it was pushed.</param>
+internal sealed record RegistryAgent(
+    string Name, int Version, string ContentHash, Guid? ProjectId, string? ProjectName, int FirstVersion, string? Description = null, string? Path = null);
 
 /// <summary>An agent name the caller deleted or renamed away.</summary>
 internal sealed record RegistryRemovedAgent(string Name, Guid? ProjectId, int LastVersion, string? RenamedTo, bool Replaced = false);

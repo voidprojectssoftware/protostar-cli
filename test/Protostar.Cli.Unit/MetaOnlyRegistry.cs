@@ -16,7 +16,7 @@ internal sealed class MetaOnlyRegistry : IRegistryApi
             RegistryCapability.SkillDelete, RegistryCapability.Sessions, RegistryCapability.TranscriptLookup, RegistryCapability.TranscriptPrefixLookup,
             RegistryCapability.SessionSkills, RegistryCapability.RedactedRead, RegistryCapability.Projects, RegistryCapability.Memory,
             RegistryCapability.MemoryContent, RegistryCapability.MemoryBaseVersions, RegistryCapability.Search, RegistryCapability.MemoryRedactedRead,
-            RegistryCapability.Agents,
+            RegistryCapability.Agents, RegistryCapability.AgentContent,
         ],
     };
 
