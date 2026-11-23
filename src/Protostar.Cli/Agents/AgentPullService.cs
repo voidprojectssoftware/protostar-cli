@@ -460,9 +460,10 @@ internal sealed class AgentPullService : IAgentPullService
     private static bool Covers(Target target, RegistryAgent agent) =>
         target.Scope == AgentScope.Personal ? agent.ProjectId is null : target.ProjectId is { } id && agent.ProjectId == id;
 
-    // Project agents no project target here covers (another project's, as a rule): listed, never written.
+    // Project agents no project target here covers (another project's, as a rule): listed, never written. A run for personal
+    // agents only (no project folder, as setup and --personal-only) leaves project agents out altogether.
     private static IEnumerable<RegistryAgent> Elsewhere(Context context, IReadOnlyList<RegistryAgent> agents) =>
-        agents.Where(a => a.ProjectId is not null && !context.Targets.Any(t => t.Scope == AgentScope.Project && Covers(t, a)));
+        context.Here is null ? [] : agents.Where(a => a.ProjectId is not null && !context.Targets.Any(t => t.Scope == AgentScope.Project && Covers(t, a)));
 
     private static string WouldGo(Target target, RegistryAgent remote) =>
         Path.Combine(target.Capability.ProjectAgentsDirectory($"<checkout of {remote.ProjectName}>"), remote.Path ?? $"{remote.Name}.md");

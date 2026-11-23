@@ -94,7 +94,7 @@ public sealed class AgentPullTests : IDisposable
         Assert.Equal((AgentSyncState.LocalChanges, 1, (string?)null), states["planner"]);
         Assert.Equal((AgentSyncState.NotInstalled, 1, (string?)null), states["newcomer"]);
         Assert.Equal((AgentSyncState.LocalOnly, (int?)null, (string?)null), states["mine"]);
-        Assert.Equal((AgentSyncState.OtherProject, 1, "app"), states["linter"]);
+        Assert.DoesNotContain("linter", states.Keys); // personal agents only: project agents are left out, not listed as another project's
     }
 
     [Fact]
