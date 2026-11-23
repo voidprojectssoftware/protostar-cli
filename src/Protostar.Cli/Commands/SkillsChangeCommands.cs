@@ -90,3 +90,53 @@ internal sealed class SkillsRenameCommand : AsyncCommand<SkillsRenameCommand.Set
         return SkillChangePresenter.RenderRename(await _changes.RenameAsync(found.Target!, settings.NewName, cancellation));
     }
 }
+
+/// <summary>
+/// <c>protostar skills dismiss &lt;name&gt;</c>: keeps this machine's copy of a skill deleted or renamed in the registry
+/// here as it is, unsynced, and stops listing it as a decision. Changes no file and nothing in the registry.
+/// </summary>
+internal sealed class SkillsDismissCommand : AsyncCommand<SkillsDismissCommand.Settings>
+{
+    private readonly ISkillPullService _pull;
+    private readonly IHarnessCatalog _catalog;
+
+    public SkillsDismissCommand(ISkillPullService pull, IHarnessCatalog catalog)
+    {
+        _pull = pull;
+        _catalog = catalog;
+    }
+
+    public sealed class Settings : CommandSettings
+    {
+        [CommandArgument(0, "<NAME>")]
+        [Description("The local copy's skill name, as `protostar skills remote` lists it under \"gone from the registry\".")]
+        public string[] Names { get; init; } = [];
+
+        [CommandOption("-H|--harness <ID>")]
+        [Description("Only this harness's copies.")]
+        public string? Harness { get; init; }
+
+        [CommandOption("--harness-home <DIR>")]
+        [Description("Override the harness config root (testing or a non-default location).")]
+        public string? HarnessHome { get; init; }
+
+        [CommandOption("--project <DIR>")]
+        [Description("The folder whose project skills count too. Defaults to the current directory.")]
+        public string? Project { get; init; }
+
+        [CommandOption("--global-only")]
+        [Description("Only global skills.")]
+        public bool GlobalOnly { get; init; }
+
+        [CommandOption("--registry <URL>")]
+        [Description("Registry base URL. Defaults to $PROTOSTAR_REGISTRY_URL, then the registry saved by setup or auth login, then the built-in dev default.")]
+        public string? Registry { get; init; }
+    }
+
+    protected override async Task<int> ExecuteAsync(CommandContext context, Settings settings, CancellationToken cancellation)
+    {
+        var request = new SkillPullRequest(settings.Names, settings.Harness, settings.HarnessHome, settings.Registry,
+            ProjectStart: settings.GlobalOnly ? null : settings.Project ?? Directory.GetCurrentDirectory());
+        return SkillPullPresenter.RenderDismiss(await _pull.DismissAsync(request, cancellation), _catalog);
+    }
+}

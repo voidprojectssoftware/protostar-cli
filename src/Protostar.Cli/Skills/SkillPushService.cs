@@ -151,6 +151,16 @@ internal sealed class SkillPushService : ISkillPushService
             // A record only vouches for the scope it was pushed in. A project skill backed up as global by a CLI
             // from before project skills has a record without a project, and must still go up as the project's.
             var recorded = _ledger.Get(registry, skill.Path);
+
+            // The user chose to keep this copy of a removed skill here unsynced (`skills dismiss`): nothing to send or ask.
+            if (!request.Force && request.As is null && recorded?.DismissedHash is { } dismissed && dismissed == hash)
+            {
+                entries[i] = new SkillPushEntry(skill, new SkillPushOutcome(SkillPushStatus.Skipped, recorded.Version,
+                    $"Dismissed: '{recorded.Name ?? skill.Name}' was deleted or renamed in the registry, and this copy is kept here unsynced. " +
+                    $"`protostar skills push {skill.Name} --force` backs it up as a separate skill."));
+                continue;
+            }
+
             if (!request.Force && request.As is null && recorded is not null && recorded.ContentHash == hash &&
                 recorded.ProjectId is not null == (skill.Scope == SkillScope.Project))
             {
@@ -716,15 +726,18 @@ internal sealed class SkillPushService : ISkillPushService
                 $"separate skill, or `protostar skills pull {quoted} --force` to replace it with the new one.";
         }
 
+        var dismiss = $"`protostar skills dismiss {quoted}` to keep it here unsynced and stop being asked";
         if (removal.RenamedTo is not { } renamedTo)
         {
             return $"{changed}'{name}' was deleted from the registry (at v{removal.LastVersion}) after this copy last synced. {kept} " +
-                $"Run `protostar skills push {quoted} --force` to restore it{(edited ? " with your changes" : "")}, or remove this copy.";
+                $"Run `protostar skills push {quoted} --force` to restore it{(edited ? " with your changes" : "")}, remove this copy, or run {dismiss}.";
         }
 
         var what = $"'{name}' was renamed to '{renamedTo}' in the registry (at v{removal.LastVersion}) after this copy last synced";
         return edited
-            ? $"Changed here, but {what}. {kept} Move them into '{renamedTo}' (`protostar skills pull` installs it), or run `protostar skills push {quoted} --force` to keep this as a separate skill named '{name}'."
+            ? $"Changed here, but {what}. {kept} Move them into '{renamedTo}' (`protostar skills pull` installs it beside this copy, and " +
+              $"`protostar skills remote` gives the exact steps), then delete this copy. Or run `protostar skills push {quoted} --force` to keep " +
+              $"this as a separate skill named '{name}', or {dismiss}."
             : $"{what}, so it was not uploaded again under the old name. `protostar skills pull` renames this copy to '{renamedTo}'.";
     }
 

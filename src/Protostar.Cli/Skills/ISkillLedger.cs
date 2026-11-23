@@ -61,6 +61,11 @@ internal interface ISkillLedger
 /// synced (<see cref="Registry.SkillPushStatus.Removed"/>), rather than as stale.
 /// </param>
 /// <param name="RefusedRenamedTo">For a refusal because of a rename, the skill's name in the registry then.</param>
+/// <param name="DismissedHash">
+/// The content of this copy of a removed skill that the user chose to keep here unsynced (<c>protostar skills dismiss</c>).
+/// While the copy has this content it is never uploaded or renamed, and pull, remote and setup no longer list it as a
+/// decision. <c>null</c> when not dismissed.
+/// </param>
 internal sealed record SkillLedgerEntry(
     string ContentHash, int? Version, string? Name = null, Guid? ProjectId = null, string? RefusedHash = null, int? RefusedVersion = null,
-    bool RefusedAsRemoved = false, string? RefusedRenamedTo = null);
+    bool RefusedAsRemoved = false, string? RefusedRenamedTo = null, string? DismissedHash = null);

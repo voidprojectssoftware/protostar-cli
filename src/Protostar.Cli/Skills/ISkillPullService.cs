@@ -30,6 +30,20 @@ internal interface ISkillPullService
     /// records the installed content, so the capture hook does not push it straight back.
     /// </remarks>
     Task<SkillPullRunResult> PullAsync(SkillPullRequest request, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Keeps this machine's copies named <see cref="SkillPullRequest.Names"/> of a skill deleted or renamed in the registry
+    /// here as they are, unsynced: <c>protostar skills dismiss</c>.
+    /// </summary>
+    /// <remarks>
+    /// Settles the decision such a copy leaves (an edited copy of a renamed skill beside the renamed one, say) without
+    /// touching any file: the ledger remembers the copy's content as dismissed (<see cref="SkillLedgerEntry.DismissedHash"/>),
+    /// so push and the hook skip it, pull never renames it, and setup no longer counts it as a decision. A later edit
+    /// brings the question back. Only a copy the registry's list shows to be of a removed skill can be dismissed;
+    /// otherwise the run fails with <see cref="SkillPullRunFailure.NothingToDismiss"/>. Returns one
+    /// <see cref="SkillPullStatus.RemovedInRegistry"/> entry per dismissed copy, marked <see cref="SkillPullEntry.Dismissed"/>.
+    /// </remarks>
+    Task<SkillPullRunResult> DismissAsync(SkillPullRequest request, CancellationToken cancellationToken);
 }
 
 /// <summary>Which registry and harnesses to compare.</summary>
@@ -109,6 +123,12 @@ internal enum SkillPullRunFailure
 
     /// <summary>The requested version of the named skill could not be fetched (it does not exist, say); see the detail.</summary>
     VersionNotFound,
+
+    /// <summary>
+    /// <c>skills dismiss</c> found no copy of that name here that is a copy of a skill deleted or renamed in the registry;
+    /// the detail is the name.
+    /// </summary>
+    NothingToDismiss,
 }
 
 /// <summary>How a skill on this machine compares with the registry.</summary>
@@ -240,7 +260,12 @@ internal enum SkillPullStatus
 /// <param name="Path">The skill directory.</param>
 /// <param name="Message">Why it failed, or a note (such as local changes overwritten); <c>null</c> otherwise.</param>
 /// <param name="Project">The project's display name for a project skill; <c>null</c> for a global skill.</param>
-internal sealed record SkillPullEntry(IHarness Harness, string Name, SkillPullStatus Status, int Version, string Path, string? Message, string? Project = null);
+/// <param name="Dismissed">
+/// For <see cref="SkillPullStatus.RemovedInRegistry"/>, the user chose to keep this copy here unsynced
+/// (<c>protostar skills dismiss</c>), so it is no longer a decision.
+/// </param>
+internal sealed record SkillPullEntry(
+    IHarness Harness, string Name, SkillPullStatus Status, int Version, string Path, string? Message, string? Project = null, bool Dismissed = false);
 
 /// <summary>The result of a pull run.</summary>
 /// <param name="Version">The version asked for with <c>--version</c>; <c>null</c> for current versions.</param>

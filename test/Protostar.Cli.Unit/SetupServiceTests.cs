@@ -126,6 +126,19 @@ public sealed class SetupServiceTests
     }
 
     [Fact]
+    public async Task A_dismissed_copy_of_a_removed_skill_is_not_a_decision()
+    {
+        _skills.Status = SkillPullStatus.RemovedInRegistry;
+        _skills.Dismissed = true;
+
+        var result = await Run(yes: true);
+
+        Assert.Equal(SetupOutcome.AlreadyDone, result.Steps[2].Outcome);
+        Assert.Empty(result.Steps[2].SkillDecisions);
+        Assert.Equal(0, result.SkillDecisions);
+    }
+
+    [Fact]
     public async Task A_decision_outranks_skills_installed_in_the_same_run_and_every_one_is_counted()
     {
         _skills.Status = SkillPullStatus.Installed;
@@ -602,6 +615,11 @@ public sealed class SetupServiceTests
 
         public Task<SkillRemoteResult> CompareAsync(SkillRemoteRequest request, CancellationToken cancellationToken) => throw new NotSupportedException();
 
+        public Task<SkillPullRunResult> DismissAsync(SkillPullRequest request, CancellationToken cancellationToken) => throw new NotSupportedException();
+
+        /// <summary>Marks the "greet" entry as dismissed (`skills dismiss`).</summary>
+        public bool Dismissed { get; set; }
+
         public Task<SkillPullRunResult> PullAsync(SkillPullRequest request, CancellationToken cancellationToken)
         {
             Calls.Add("pull");
@@ -612,7 +630,7 @@ public sealed class SetupServiceTests
                 ? SkillPullRunResult.Fail(Failure, null, registry)
                 : new SkillPullRunResult(SkillPullRunFailure.None, null, registry,
                 [
-                    new SkillPullEntry(Harness, "greet", Status, 1, "/harness/skills/greet", null),
+                    new SkillPullEntry(Harness, "greet", Status, 1, "/harness/skills/greet", null, Dismissed: Dismissed),
                     .. Others.Select((status, i) => new SkillPullEntry(Harness, $"other{i}", status, 1, $"/harness/skills/other{i}", null)),
                 ]));
         }

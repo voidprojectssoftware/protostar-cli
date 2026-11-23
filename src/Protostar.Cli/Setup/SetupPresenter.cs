@@ -173,7 +173,9 @@ internal static class SetupPresenter
             (Of(SkillPullStatus.Failed) is > 0 and var failed ? $", [red]{failed} failed[/]" : "") +
             (Of(SkillPullStatus.OtherProject) is > 0 and var elsewhere ? $", [grey]{elsewhere} left for other projects' checkouts[/]" : "") +
             (Of(SkillPullStatus.FollowedRename) is > 0 and var followed ? $", {followed} renamed here to follow the registry" : "") +
-            (Of(SkillPullStatus.RemovedInRegistry) is > 0 and var gone ? $", [yellow]{gone} kept although deleted or renamed in the registry[/]" : "") + ".";
+            (result.Entries.Count(e => e is { Status: SkillPullStatus.RemovedInRegistry, Dismissed: false }) is > 0 and var gone
+                ? $", [yellow]{gone} kept although deleted or renamed in the registry[/]" : "") +
+            (result.Entries.Count(e => e.Dismissed) is > 0 and var dismissed ? $", [grey]{dismissed} dismissed (kept here unsynced)[/]" : "") + ".";
 
         // Condensed: one line per skill that changed, capped. Up-to-date and other projects' skills are only counted.
         // Every skill that needs a decision is listed, uncapped, with its way out, since setup cannot settle it.

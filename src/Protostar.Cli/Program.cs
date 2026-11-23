@@ -121,6 +121,8 @@ app.Configure(config =>
             .WithDescription("Rename a skill in the registry, keeping its history; this machine's copies follow.");
         skills.AddCommand<SkillsDeleteCommand>("delete")
             .WithDescription("Delete a skill and all its versions from the registry. Local copies are never deleted.");
+        skills.AddCommand<SkillsDismissCommand>("dismiss")
+            .WithDescription("Keep a local copy of a skill deleted or renamed in the registry as it is, unsynced, and stop being asked about it.");
     });
 
     config.AddBranch(Named("agents"), agents =>
