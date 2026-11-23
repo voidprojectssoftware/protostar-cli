@@ -125,7 +125,8 @@ internal static class SkillPullPresenter
         var conflicted = result.Entries.Count(e => e.Status == SkillPullStatus.Conflict);
         var elsewhere = result.Entries.Count(e => e.Status == SkillPullStatus.OtherProject);
         var followed = result.Entries.Count(e => e.Status == SkillPullStatus.FollowedRename);
-        var gone = result.Entries.Count(e => e.Status == SkillPullStatus.RemovedInRegistry);
+        var gone = result.Entries.Count(e => e is { Status: SkillPullStatus.RemovedInRegistry, Dismissed: false });
+        var dismissed = result.Entries.Count(e => e is { Status: SkillPullStatus.RemovedInRegistry, Dismissed: true });
 
         AnsiConsole.MarkupLine(
             $"From [grey]{Markup.Escape(authority)}[/]: {installed} installed, {updated} updated, {current} already up to date" +
@@ -135,13 +136,25 @@ internal static class SkillPullPresenter
             (failed > 0 ? $", [red]{failed} failed[/]" : string.Empty) +
             (elsewhere > 0 ? $", [grey]{elsewhere} left for other projects' checkouts[/]" : string.Empty) +
             (followed > 0 ? $", {followed} renamed here to follow the registry" : string.Empty) +
-            (gone > 0 ? $", [yellow]{gone} kept although deleted or renamed in the registry[/]" : string.Empty) + ".");
+            (gone > 0 ? $", [yellow]{gone} kept although deleted or renamed in the registry[/]" : string.Empty) +
+            (dismissed > 0 ? $", [grey]{dismissed} dismissed (kept here unsynced)[/]" : string.Empty) + ".");
         if (held > 0)
             AnsiConsole.MarkupLine("[grey]Back up local changes with `protostar skills push`, or overwrite them with `protostar skills pull --force`.[/]");
         foreach (var entry in result.Entries.Where(e => e.Status == SkillPullStatus.ChangedBoth))
             SkillPushPresenter.ResolutionHelp(entry.Name, result.Version is null ? entry.Version : null);
 
         return result.Succeeded ? 0 : 1;
+    }
+
+    /// <summary>Renders a <c>skills dismiss</c> run: one line per copy now kept here unsynced, and returns the exit code.</summary>
+    public static int RenderDismiss(SkillPullRunResult result, IHarnessCatalog catalog)
+    {
+        if (Failure(result.Failure, result.Detail, result.Registry, catalog) is { } code)
+            return code;
+
+        foreach (var entry in result.Entries)
+            AnsiConsole.MarkupLine($"Dismissed [bold]{Markup.Escape(entry.Name)}[/] at [grey]{Markup.Escape(entry.Path)}[/]: {Markup.Escape(entry.Message ?? string.Empty)}");
+        return 0;
     }
 
     // The states whose text does not already carry the note get it after, when there is one (cli#95's notes on whose a copy is).
@@ -184,6 +197,7 @@ internal static class SkillPullPresenter
             SkillPullStatus.Conflict => "[red]conflict:[/]",
             SkillPullStatus.OtherProject => "[grey]not here:[/]",
             SkillPullStatus.FollowedRename => "[green]followed the rename:[/]",
+            SkillPullStatus.RemovedInRegistry when entry.Dismissed => "[grey]kept, removed from the registry:[/]",
             SkillPullStatus.RemovedInRegistry => "[yellow]kept, removed from the registry:[/]",
             _ => "[red]failed[/]",
         };
@@ -223,6 +237,8 @@ internal static class SkillPullPresenter
             SkillPullRunFailure.SkillNotFound => $"There is no skill named '{detail}' in {authority}. Run `protostar skills remote` to see what is there.",
             SkillPullRunFailure.InvalidVersion => detail,
             SkillPullRunFailure.VersionNotFound => $"Could not fetch that version from {authority}: {detail}",
+            SkillPullRunFailure.NothingToDismiss =>
+                $"Nothing to dismiss: no copy of '{detail}' here is a copy of a skill deleted or renamed in {authority}. Run `protostar skills remote` to see what is there.",
             _ => detail,
         };
     }

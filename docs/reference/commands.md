@@ -234,6 +234,22 @@ unchanged skill still costs it no network call; an edited copy of a removed skil
 is refused once, and the hook does not send that same content again. Use `--force`
 to upload every selected skill regardless.
 
+A copy this machine has no sync record of (a restored backup, dotfiles, or a lost
+`~/.protostar`) is recognised too, by content: when its files are byte-identical to a
+version of a skill deleted or renamed in the registry, it is that skill, and it is
+reported instead of uploaded as a new one. Only the hashes the registry already
+keeps are compared (it lists each removed name's version hashes when it serves
+`skill-tombstone-hashes`); nothing is uploaded to ask. Push and the hook check only
+such a never-synced copy, which they were about to upload anyway:
+
+```console
+│ global │ greet-user │ renamed to hello in the registry: This copy has no sync record here, but it is identical to v1 of 'greet-user', which was renamed to 'hello' in the registry (at v1). It was not uploaded under the old name. `protostar skills pull` renames this copy to 'hello'. │
+```
+
+A copy with other content that only reuses the name is a new skill and is backed up
+as usual. Against a registry without `skill-tombstone-hashes` such a copy is pushed
+as a new skill, as before.
+
 Each push tells the registry which version this copy was last pushed or pulled as.
 When that is no longer the registry's latest version, the registry refuses the push
 instead of stacking it on top, and the skill shows as **changed here and in the
@@ -342,7 +358,16 @@ rename: its folder and its `SKILL.md` name change to the new name, and the
 registry's skill then pulls into it (**followed the rename**). A copy edited here,
 a copy whose new name is already taken here, and any copy of a deleted skill are
 kept as they are (**kept, removed from the registry**), with the ways out. Local files
-are never deleted.
+are never deleted. A copy with no sync record whose content equals a version of the
+renamed skill follows the rename the same way.
+
+For an edited copy of a renamed skill the row gives the exact steps to move your
+changes into the new name: `protostar skills pull NEW` installs it beside your copy,
+`diff -r` on the two folders shows your changes (the `name:` line differs on
+purpose), you copy them across and `protostar skills push NEW`, then delete the old
+folder. Until you do, or choose another way out, `protostar setup` ends with "needs a
+decision". [`protostar skills dismiss`](#protostar-skills-dismiss-name) is the way
+to say "keep it here, stop asking".
 
 Before anything is written, every file is checked against the checksum the registry
 sent. A path that would land outside the skill folder, pass through a symbolic
@@ -438,6 +463,31 @@ registry refused, or confirmation was needed and not possible.
 | `--global-only` | Only the global skill of that name, even when this folder's project has one. |
 | `--registry <URL>` | Registry to change. Defaults to `PROTOSTAR_REGISTRY_URL`, then the saved default, then `https://localhost:7443`. |
 | `-y`, `--yes` | Delete without asking. Needed when input is not a terminal. |
+
+### `protostar skills dismiss <NAME>`
+
+Keep this machine's copy of a skill deleted or renamed in the registry exactly as it
+is, unsynced, and stop being asked about it. No file and nothing in the registry
+changes: the ledger remembers the copy's content as dismissed, so `skills push` and
+the capture hook skip it, `skills pull` never renames it, and `protostar setup` no
+longer counts it as a decision. If you edit the copy again, the question comes back.
+
+```console
+$ protostar skills dismiss greet-user
+Dismissed greet-user at ~/.claude/skills/greet-user: Renamed to 'hello' in the registry (at v1). Dismissed: kept here as it is, unsynced, and never uploaded or renamed. Delete the folder when you no longer want it, or run `protostar skills push greet-user --force` to back it up as a separate skill named 'greet-user'.
+```
+
+Only a copy that `protostar skills remote` lists as **gone from the registry** can be
+dismissed; any other name exits `1` with "Nothing to dismiss". `push NAME --force`
+still backs a dismissed copy up as a separate skill.
+
+| Option | Description |
+|---|---|
+| `-H, --harness <ID>` | Only this harness's copies. |
+| `--harness-home <DIR>` | Override the harness config root (testing or a non-default location). |
+| `--project <DIR>` | The folder whose project skills count too. Defaults to the current directory. |
+| `--global-only` | Only global skills. |
+| `--registry <URL>` | Registry to use. Defaults to `PROTOSTAR_REGISTRY_URL`, then the saved default, then `https://localhost:7443`. |
 
 ## `protostar agents`
 

@@ -165,10 +165,11 @@ internal sealed record SetupStepResult(SetupStep Step, SetupOutcome Outcome, Set
     /// <summary>The skills the pull kept or left alone that only the user can settle, in pull order; empty for other steps.</summary>
     /// <remarks>
     /// Changed here and in the registry, deleted or renamed in the registry but kept here, kept for local changes the push
-    /// did not back up, and a conflict with a folder or a same-name twin. None of them changes on a second run.
+    /// did not back up, and a conflict with a folder or a same-name twin. None of them changes on a second run. A removed
+    /// skill's copy the user dismissed (<c>protostar skills dismiss</c>) is settled, so it is not one.
     /// </remarks>
     public IReadOnlyList<SkillPullEntry> SkillDecisions =>
-        Skills?.Entries.Where(e => e.Status is SkillPullStatus.ChangedBoth or SkillPullStatus.RemovedInRegistry
+        Skills?.Entries.Where(e => !e.Dismissed && e.Status is SkillPullStatus.ChangedBoth or SkillPullStatus.RemovedInRegistry
             or SkillPullStatus.LocalChanges or SkillPullStatus.Conflict).ToList() ?? [];
 
     /// <summary>The agents the pull kept or left alone that only the user can settle, as <see cref="SkillDecisions"/> for skills.</summary>

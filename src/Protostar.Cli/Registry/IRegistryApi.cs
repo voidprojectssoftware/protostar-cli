@@ -140,6 +140,26 @@ internal sealed record RegistrySkillList(IReadOnlyList<RegistrySkill>? Skills, s
 
         return Removed?.FirstOrDefault(r => r.ProjectId == projectId && string.Equals(r.Name, name, StringComparison.Ordinal) && synced <= r.LastVersion);
     }
+
+    /// <summary>
+    /// The removed skills named <paramref name="name"/>, in any scope, that had a version whose content hash is
+    /// <paramref name="registryHash"/>, each with that version: what a copy no sync record vouches for could be a copy of.
+    /// </summary>
+    /// <param name="name">The copy's skill name.</param>
+    /// <param name="registryHash">The copy's content hash as the registry computes it (<c>SkillFileReader.RegistryHash</c>).</param>
+    /// <remarks>
+    /// A copy whose bytes equal a version of a removed skill is that skill, however it got here (a restored backup, dotfiles,
+    /// a lost sync history), so it is treated as having synced that version (cli#128). Only the registry's own hashes are
+    /// compared; nothing is uploaded to ask. Empty from a registry that does not send the hashes (before
+    /// <c>skill-tombstone-hashes</c>), so such a copy is pushed as a new skill as before. When two versions share the hash
+    /// (a change undone), the later one is taken.
+    /// </remarks>
+    public IEnumerable<(RegistryRemovedSkill Removal, int Version)> CopiesOf(string name, string registryHash) =>
+        (Removed ?? [])
+            .Where(r => string.Equals(r.Name, name, StringComparison.Ordinal))
+            .Select(r => (Removal: r, Version: r.Versions.Where(v => string.Equals(v.ContentHash, registryHash, StringComparison.OrdinalIgnoreCase))
+                .Select(v => v.Version).DefaultIfEmpty(0).Max()))
+            .Where(m => m.Version >= 1 && m.Version <= m.Removal.LastVersion);
 }
 
 /// <summary>A skill name the caller deleted or renamed away in the registry.</summary>
@@ -148,7 +168,16 @@ internal sealed record RegistrySkillList(IReadOnlyList<RegistrySkill>? Skills, s
 /// <param name="LastVersion">The skill's last version under that name: copies synced at or below it are copies of it.</param>
 /// <param name="RenamedTo">The skill's name now, when it was renamed; <c>null</c> when it was deleted.</param>
 /// <param name="Replaced">True when a new, unrelated skill has taken the name since.</param>
-internal sealed record RegistryRemovedSkill(string Name, Guid? ProjectId, int LastVersion, string? RenamedTo, bool Replaced = false);
+internal sealed record RegistryRemovedSkill(string Name, Guid? ProjectId, int LastVersion, string? RenamedTo, bool Replaced = false)
+{
+    /// <summary>Each version the skill had under this name, with its content hash; empty from a registry that does not say.</summary>
+    public IReadOnlyList<RegistryRemovedVersion> Versions { get; init; } = [];
+}
+
+/// <summary>One version of a removed skill, as the registry's list names it.</summary>
+/// <param name="Version">The version number.</param>
+/// <param name="ContentHash">Its content hash; compare with <c>SkillFileReader.RegistryHash</c>.</param>
+internal sealed record RegistryRemovedVersion(int Version, string ContentHash);
 
 /// <summary>One version of a skill with every file's bytes.</summary>
 internal sealed record RegistrySkillContent(string Name, int Version, string ContentHash, IReadOnlyList<RegistrySkillFile> Files);

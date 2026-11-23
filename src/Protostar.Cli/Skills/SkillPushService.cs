@@ -151,6 +151,16 @@ internal sealed class SkillPushService : ISkillPushService
             // A record only vouches for the scope it was pushed in. A project skill backed up as global by a CLI
             // from before project skills has a record without a project, and must still go up as the project's.
             var recorded = _ledger.Get(registry, skill.Path);
+
+            // The user chose to keep this copy of a removed skill here unsynced (`skills dismiss`): nothing to send or ask.
+            if (!request.Force && request.As is null && recorded?.DismissedHash is { } dismissed && dismissed == hash)
+            {
+                entries[i] = new SkillPushEntry(skill, new SkillPushOutcome(SkillPushStatus.Skipped, recorded.Version,
+                    $"Dismissed: '{recorded.Name ?? skill.Name}' was deleted or renamed in the registry, and this copy is kept here unsynced. " +
+                    $"`protostar skills push {skill.Name} --force` backs it up as a separate skill."));
+                continue;
+            }
+
             if (!request.Force && request.As is null && recorded is not null && recorded.ContentHash == hash &&
                 recorded.ProjectId is not null == (skill.Scope == SkillScope.Project))
             {
@@ -180,7 +190,13 @@ internal sealed class SkillPushService : ISkillPushService
             pending.Add((i, files, hash!));
         }
 
-        var mustList = verify && (unconfirmed.Count > 0 || pending.Any(p => Synced(registry, selected[p.Index]) is not null));
+        // A copy no sync record vouches for may still be a byte-identical copy of a skill since deleted or renamed (cli#128).
+        // Checked, by the command and the hook alike, only for such a copy, which was about to be uploaded anyway, and only
+        // when the registry sends the hashes: an unchanged or ledgered skill still costs the hook nothing, and an older
+        // registry is pushed to exactly as before.
+        var unsynced = request.As is null && pending.Any(p => Synced(registry, selected[p.Index]) is null);
+        var match = unsynced && await SendsRemovedHashesAsync(registry, cancellationToken);
+        var mustList = verify && (unconfirmed.Count > 0 || pending.Any(p => Synced(registry, selected[p.Index]) is not null)) || match;
         if (pending.Count == 0 && !mustList)
             return new SkillPushRunResult(SkillPushRunFailure.None, null, registry, entries.Select(e => e!).ToList());
 
@@ -218,78 +234,86 @@ internal sealed class SkillPushService : ISkillPushService
                 return SkillPushRunResult.Fail(SkillPushRunFailure.ListFailed, list.Error, registry);
             }
 
-            // A project skill copy recorded under a project other than its folder's (pulled while the folder was linked
-            // elsewhere): still that project's skill, or this folder's project's and never synced there (LinkedSkillCopy).
-            // A copy of a skill removed from the registry is reported as such below, like any other.
-            var held = new Dictionary<int, RegistrySkill>();
+            // Which project each project skill's folder is in, asked at most once per folder.
             var heres = new Dictionary<string, (bool Known, Guid? Id)>(StringComparer.Ordinal);
-            foreach (var (index, _, hash) in pending.Concat(unconfirmed))
+            if (match)
+                await MatchUnsyncedAsync(registry, session.AccessToken, selected, pending, entries, gone, list, heres, request.Force, cancellationToken);
+
+            // The hook lists only to recognise unsynced copies above; confirming what the ledger says is the command's job.
+            if (verify)
             {
-                var skill = selected[index];
-                if (skill.Scope != SkillScope.Project || Synced(registry, skill) is not { ProjectId: not null })
-                    continue;
-                var here = await FolderProjectAsync(registry, session.AccessToken, skill, heres, cancellationToken);
-                if (!here.Known)
-                    continue;
+                // A project skill copy recorded under a project other than its folder's (pulled while the folder was linked
+                // elsewhere): still that project's skill, or this folder's project's and never synced there (LinkedSkillCopy).
+                // A copy of a skill removed from the registry is reported as such below, like any other.
+                var held = new Dictionary<int, RegistrySkill>();
+                foreach (var (index, _, hash) in pending.Concat(unconfirmed))
+                {
+                    var skill = selected[index];
+                    if (skill.Scope != SkillScope.Project || Synced(registry, skill) is not { ProjectId: not null })
+                        continue;
+                    var here = await FolderProjectAsync(registry, session.AccessToken, skill, heres, cancellationToken);
+                    if (!here.Known)
+                        continue;
 
-                // A record of a skill a link moved follows it first (to this folder's project, as a rule), so a move is never
-                // mistaken for a copy left behind by an unlink.
-                await StillInRegistryAsync(registry, session.AccessToken, skill, skills, cancellationToken);
-                if (Synced(registry, skill) is not { ProjectId: { } syncedIn } recorded || !LinkedSkillCopy.NamesOtherProject(recorded, here.Id) ||
-                    list.RemovalOf(recorded.Name ?? skill.Name, syncedIn, recorded.Version) is not null)
-                {
-                    continue;
+                    // A record of a skill a link moved follows it first (to this folder's project, as a rule), so a move is never
+                    // mistaken for a copy left behind by an unlink.
+                    await StillInRegistryAsync(registry, session.AccessToken, skill, skills, cancellationToken);
+                    if (Synced(registry, skill) is not { ProjectId: { } syncedIn } recorded || !LinkedSkillCopy.NamesOtherProject(recorded, here.Id) ||
+                        list.RemovalOf(recorded.Name ?? skill.Name, syncedIn, recorded.Version) is not null)
+                    {
+                        continue;
+                    }
+
+                    if (LinkedSkillCopy.StillOf(recorded, hash, here.Id, skills) is { } owner)
+                        held[index] = owner;
+                    else
+                        disowned[index] = LinkedSkillCopy.WhyNotStill(recorded, hash, skills);
                 }
 
-                if (LinkedSkillCopy.StillOf(recorded, hash, here.Id, skills) is { } owner)
-                    held[index] = owner;
-                else
-                    disowned[index] = LinkedSkillCopy.WhyNotStill(recorded, hash, skills);
-            }
-
-            // A copy whose registry skill is gone is either a copy of a skill deleted or renamed since it synced, which is
-            // reported and never uploaded (that would undo the delete or rename), or of one the registry has no memory of,
-            // which is backed up again. With --force a removed skill is restored on purpose, as a new skill.
-            foreach (var (index, _, hash) in pending.ToList())
-            {
-                var skill = selected[index];
-                if (disowned.ContainsKey(index) || await StillInRegistryAsync(registry, session.AccessToken, skill, skills, cancellationToken))
-                    continue;
-                gone.Add(index);
-                if (Removal(registry, skill, list) is { } removal && !request.Force)
+                // A copy whose registry skill is gone is either a copy of a skill deleted or renamed since it synced, which is
+                // reported and never uploaded (that would undo the delete or rename), or of one the registry has no memory of,
+                // which is backed up again. With --force a removed skill is restored on purpose, as a new skill.
+                foreach (var (index, _, hash) in pending.ToList())
                 {
-                    pending.RemoveAll(p => p.Index == index);
-                    entries[index] = new SkillPushEntry(skill, RefuseRemoved(registry, skill, hash, removal));
-                }
-            }
-
-            foreach (var (index, files, hash) in unconfirmed)
-            {
-                var skill = selected[index];
-                var recorded = _ledger.Get(registry, skill.Path)!;
-                if (disowned.ContainsKey(index))
-                {
-                    pending.Add((index, files, hash));
-                }
-                else if (held.TryGetValue(index, out var owner))
-                {
-                    entries[index] = new SkillPushEntry(skill, new SkillPushOutcome(SkillPushStatus.Unchanged, recorded.Version,
-                        LinkedSkillCopy.StillNote(owner), owner.ProjectId, owner.ProjectName));
-                }
-                else if (await StillInRegistryAsync(registry, session.AccessToken, skill, skills, cancellationToken))
-                {
-                    entries[index] = new SkillPushEntry(skill, new SkillPushOutcome(SkillPushStatus.Unchanged, recorded.Version, null, recorded.ProjectId));
-                }
-                else if (Removal(registry, skill, list) is { } removal)
-                {
-                    // Unedited since it synced, so there is nothing of this machine's to protect: only report it.
-                    entries[index] = new SkillPushEntry(skill, new SkillPushOutcome(SkillPushStatus.Removed, removal.LastVersion,
-                        RemovedMessage(skill.Name, removal, edited: false), recorded.ProjectId, RenamedTo: removal.RenamedTo));
-                }
-                else
-                {
+                    var skill = selected[index];
+                    if (disowned.ContainsKey(index) || await StillInRegistryAsync(registry, session.AccessToken, skill, skills, cancellationToken))
+                        continue;
                     gone.Add(index);
-                    pending.Add((index, files, hash));
+                    if (Removal(registry, skill, list) is { } removal && !request.Force)
+                    {
+                        pending.RemoveAll(p => p.Index == index);
+                        entries[index] = new SkillPushEntry(skill, RefuseRemoved(registry, skill, hash, removal));
+                    }
+                }
+
+                foreach (var (index, files, hash) in unconfirmed)
+                {
+                    var skill = selected[index];
+                    var recorded = _ledger.Get(registry, skill.Path)!;
+                    if (disowned.ContainsKey(index))
+                    {
+                        pending.Add((index, files, hash));
+                    }
+                    else if (held.TryGetValue(index, out var owner))
+                    {
+                        entries[index] = new SkillPushEntry(skill, new SkillPushOutcome(SkillPushStatus.Unchanged, recorded.Version,
+                            LinkedSkillCopy.StillNote(owner), owner.ProjectId, owner.ProjectName));
+                    }
+                    else if (await StillInRegistryAsync(registry, session.AccessToken, skill, skills, cancellationToken))
+                    {
+                        entries[index] = new SkillPushEntry(skill, new SkillPushOutcome(SkillPushStatus.Unchanged, recorded.Version, null, recorded.ProjectId));
+                    }
+                    else if (Removal(registry, skill, list) is { } removal)
+                    {
+                        // Unedited since it synced, so there is nothing of this machine's to protect: only report it.
+                        entries[index] = new SkillPushEntry(skill, new SkillPushOutcome(SkillPushStatus.Removed, removal.LastVersion,
+                            RemovedMessage(skill.Name, removal, edited: false), recorded.ProjectId, RenamedTo: removal.RenamedTo));
+                    }
+                    else
+                    {
+                        gone.Add(index);
+                        pending.Add((index, files, hash));
+                    }
                 }
             }
         }
@@ -344,6 +368,68 @@ internal sealed class SkillPushService : ISkillPushService
         return force
             ? new SkillPushRunResult(SkillPushRunFailure.None, null, registry, [], NoStaleProtection + " Pushed anyway (--force).")
             : SkillPushRunResult.Fail(SkillPushRunFailure.Incompatible, NoStaleProtection + " Update the registry, or push with --force to overwrite anyway.", registry);
+    }
+
+    // Whether the registry's list carries each removed skill's version hashes, so an unsynced copy can be recognised.
+    private async Task<bool> SendsRemovedHashesAsync(Uri registry, CancellationToken cancellationToken) =>
+        (await _capabilities.RequireAsync(registry, cancellationToken)).Supports(RegistryCapability.SkillTombstoneHashes) == CapabilitySupport.Listed;
+
+    // Recognises each pending copy that no sync record vouches for but whose content is a version of a skill deleted or
+    // renamed in its scope (RegistrySkillList.CopiesOf). It is recorded as having synced that version, which is what it
+    // is, so every later run treats it like any other copy of a removed skill; then it is reported rather than uploaded,
+    // or, with --force, restored on purpose as a new skill. A project skill's folder is resolved only when a removed skill
+    // of some project matches it, so a never-synced copy of a new skill costs no extra request.
+    private async Task MatchUnsyncedAsync(
+        Uri registry, string accessToken, IReadOnlyList<DiscoveredSkill> selected, List<(int Index, IReadOnlyList<SkillUploadFile> Files, string Hash)> pending,
+        SkillPushEntry?[] entries, HashSet<int> gone, RegistrySkillList list, Dictionary<string, (bool Known, Guid? Id)> heres, bool force,
+        CancellationToken cancellationToken)
+    {
+        foreach (var (index, files, hash) in pending.ToList())
+        {
+            var skill = selected[index];
+            if (Synced(registry, skill) is not null)
+                continue;
+            var matches = list.CopiesOf(skill.Name, SkillFileReader.RegistryHash(files)).ToList();
+            if (matches.Count == 0)
+                continue;
+
+            Guid? scope = null;
+            if (skill.Scope == SkillScope.Project)
+            {
+                if (!matches.Any(m => m.Removal.ProjectId is not null))
+                    continue;
+                var here = await FolderProjectAsync(registry, accessToken, skill, heres, cancellationToken);
+                if (here.Id is not { } id)
+                    continue;
+                scope = id;
+            }
+
+            if (matches.FirstOrDefault(m => m.Removal.ProjectId == scope) is not { Removal: { } removal, Version: var version })
+                continue;
+
+            _ledger.Record(registry, skill.Path, new SkillLedgerEntry(hash, version, removal.Name, removal.ProjectId));
+            if (force)
+            {
+                gone.Add(index);
+                continue;
+            }
+
+            pending.RemoveAll(p => p.Index == index);
+            entries[index] = new SkillPushEntry(skill, new SkillPushOutcome(SkillPushStatus.Removed, removal.LastVersion,
+                UnsyncedCopyMessage(skill.Name, removal, version), removal.ProjectId, RenamedTo: removal.RenamedTo));
+        }
+    }
+
+    // Why a copy with no sync record that equals a version of a removed skill was not backed up, and the way out.
+    internal static string UnsyncedCopyMessage(string name, RegistryRemovedSkill removal, int version)
+    {
+        var quoted = name.Any(char.IsWhiteSpace) ? $"\"{name}\"" : name;
+        var same = $"This copy has no sync record here, but it is identical to v{version} of '{name}'";
+        return removal.RenamedTo is { } renamedTo
+            ? $"{same}, which was renamed to '{renamedTo}' in the registry (at v{removal.LastVersion}). It was not uploaded under the old name. " +
+              $"`protostar skills pull` renames this copy to '{renamedTo}'."
+            : $"{same}, which was deleted from the registry (at v{removal.LastVersion}). It was not uploaded again. " +
+              $"Run `protostar skills push {quoted} --force` to restore it, or remove this copy.";
     }
 
     // The ledger's record of this copy when it vouches for the copy's registry skill; null when it never synced as it.
@@ -641,15 +727,18 @@ internal sealed class SkillPushService : ISkillPushService
                 $"separate skill, or `protostar skills pull {quoted} --force` to replace it with the new one.";
         }
 
+        var dismiss = $"`protostar skills dismiss {quoted}` to keep it here unsynced and stop being asked";
         if (removal.RenamedTo is not { } renamedTo)
         {
             return $"{changed}'{name}' was deleted from the registry (at v{removal.LastVersion}) after this copy last synced. {kept} " +
-                $"Run `protostar skills push {quoted} --force` to restore it{(edited ? " with your changes" : "")}, or remove this copy.";
+                $"Run `protostar skills push {quoted} --force` to restore it{(edited ? " with your changes" : "")}, remove this copy, or run {dismiss}.";
         }
 
         var what = $"'{name}' was renamed to '{renamedTo}' in the registry (at v{removal.LastVersion}) after this copy last synced";
         return edited
-            ? $"Changed here, but {what}. {kept} Move them into '{renamedTo}' (`protostar skills pull` installs it), or run `protostar skills push {quoted} --force` to keep this as a separate skill named '{name}'."
+            ? $"Changed here, but {what}. {kept} Move them into '{renamedTo}' (`protostar skills pull` installs it beside this copy, and " +
+              $"`protostar skills remote` gives the exact steps), then delete this copy. Or run `protostar skills push {quoted} --force` to keep " +
+              $"this as a separate skill named '{name}', or {dismiss}."
             : $"{what}, so it was not uploaded again under the old name. `protostar skills pull` renames this copy to '{renamedTo}'.";
     }
 
