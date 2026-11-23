@@ -51,26 +51,26 @@ internal static class SetupPresenter
         // Configuration is skipped on every run until it exists, so it does not make a run "partly set up".
         var skipped = result.Steps.Count(s => s.Outcome == SetupOutcome.Skipped && s.Skip != SetupSkip.NotAvailableYet);
         var decisions = result.SkillDecisions + result.AgentDecisions;
-        var (needDecision, where) = Decisions(result.SkillDecisions, result.AgentDecisions);
-        var alsoDecisions = decisions > 0 ? $" [yellow]{needDecision}[/]; {where} how to settle {(decisions == 1 ? "it" : "each")}." : "";
+        var (needDecision, where, says) = Decisions(result.SkillDecisions, result.AgentDecisions);
+        var alsoDecisions = decisions > 0 ? $" [yellow]{needDecision}[/]; the {where} {says} how to settle {(decisions == 1 ? "it" : "each")}." : "";
         AnsiConsole.MarkupLine(
             failed > 0 ? $"[red]Setup finished with {failed} failed step{(failed == 1 ? "" : "s")}.[/] Fix it and run `protostar setup` again; finished steps are not repeated.{alsoDecisions}"
             : skipped > 0 ? $"[yellow]Setup finished; {skipped} step{(skipped == 1 ? " was" : "s were")} skipped.[/] See above for how to finish {(skipped == 1 ? "it" : "them")}.{alsoDecisions}"
-            : decisions > 0 ? $"[yellow]Set up, but {needDecision}.[/] {char.ToUpperInvariant(where[0])}{where[1..]} above how to settle {(decisions == 1 ? "it" : "each one")}."
+            : decisions > 0 ? $"[yellow]Set up, but {needDecision}.[/] The {where} above {says} how to settle {(decisions == 1 ? "it" : "each one")}."
             : result.NothingChanged ? "[green]This machine is already set up.[/] Nothing changed."
             : "[green]This machine is set up.[/] Running `protostar setup` again changes nothing.");
         return failed > 0 ? 1 : 0;
     }
 
     // "1 skill needs a decision" / "2 agents need a decision" / "1 skill and 1 agent need a decision", and which steps say how.
-    private static (string Need, string Where) Decisions(int skills, int agents)
+    private static (string Need, string Where, string Says) Decisions(int skills, int agents)
     {
         string Count(int n, string noun) => n == 1 ? $"1 {noun}" : $"{n} {noun}s";
         return (skills, agents) switch
         {
-            (_, 0) => ($"{Count(skills, "skill")} {(skills == 1 ? "needs" : "need")} a decision", "the Skills step says"),
-            (0, _) => ($"{Count(agents, "agent")} {(agents == 1 ? "needs" : "need")} a decision", "the Agents step says"),
-            _ => ($"{Count(skills, "skill")} and {Count(agents, "agent")} need a decision", "the Skills and Agents steps say"),
+            (_, 0) => ($"{Count(skills, "skill")} {(skills == 1 ? "needs" : "need")} a decision", "Skills step", "says"),
+            (0, _) => ($"{Count(agents, "agent")} {(agents == 1 ? "needs" : "need")} a decision", "Agents step", "says"),
+            _ => ($"{Count(skills, "skill")} and {Count(agents, "agent")} need a decision", "Skills and Agents steps", "say"),
         };
     }
 
