@@ -191,10 +191,11 @@ internal sealed class SkillPushService : ISkillPushService
         }
 
         // A copy no sync record vouches for may still be a byte-identical copy of a skill since deleted or renamed (cli#128).
-        // The command always checks; the hook only when the registry sends the hashes, and only for such a copy, which
-        // it was about to upload anyway, so an unchanged or ledgered skill still costs it nothing.
+        // Checked, by the command and the hook alike, only for such a copy, which was about to be uploaded anyway, and only
+        // when the registry sends the hashes: an unchanged or ledgered skill still costs the hook nothing, and an older
+        // registry is pushed to exactly as before.
         var unsynced = request.As is null && pending.Any(p => Synced(registry, selected[p.Index]) is null);
-        var match = unsynced && (verify || await SendsRemovedHashesAsync(registry, cancellationToken));
+        var match = unsynced && await SendsRemovedHashesAsync(registry, cancellationToken);
         var mustList = verify && (unconfirmed.Count > 0 || pending.Any(p => Synced(registry, selected[p.Index]) is not null)) || match;
         if (pending.Count == 0 && !mustList)
             return new SkillPushRunResult(SkillPushRunFailure.None, null, registry, entries.Select(e => e!).ToList());

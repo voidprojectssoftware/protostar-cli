@@ -122,6 +122,72 @@ public sealed class SkillPullServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task Pull_renames_an_unsynced_copy_identical_to_a_version_of_a_renamed_skill()
+    {
+        var path = Local("greet-user", ("SKILL.md", Manifest("greet-user")));
+        RenamedInRegistry("greet-user", "hello", 1);
+        _api.Removed[^1] = _api.Removed[^1] with { Versions = [new RegistryRemovedVersion(1, SkillFileReader.RegistryHash(SkillFileReader.Read(path)))] };
+
+        var remote = await Build().CompareAsync(Remote(), CancellationToken.None);
+        var result = await Build().PullAsync(Pull(), CancellationToken.None);
+
+        var gone = remote.Skills.Single(c => c.Name == "greet-user");
+        Assert.Equal(SkillSyncState.RemovedInRegistry, gone.State);
+        Assert.Contains("no sync record here, but it is identical to v1", gone.Note);
+        Assert.Equal(SkillPullStatus.FollowedRename, result.Entries.Single(e => e.Name == "greet-user").Status);
+        Assert.Equal(SkillPullStatus.UpToDate, result.Entries.Single(e => e.Name == "hello").Status);
+        Assert.False(Directory.Exists(path));
+        Assert.Equal(("hello", 2), (_ledger.Get(RegistryUri, Path.Combine(SkillsDir, "hello"))!.Name, _ledger.Get(RegistryUri, Path.Combine(SkillsDir, "hello"))!.Version));
+    }
+
+    [Fact]
+    public async Task Pull_leaves_an_unsynced_copy_with_other_content_alone_as_only_here()
+    {
+        var path = Local("greet-user", ("SKILL.md", Manifest("greet-user", "a later, different skill")));
+        RenamedInRegistry("greet-user", "hello", 1);
+        _api.Removed[^1] = _api.Removed[^1] with { Versions = [new RegistryRemovedVersion(1, "0000")] };
+
+        var remote = await Build().CompareAsync(Remote(), CancellationToken.None);
+
+        Assert.Equal(SkillSyncState.LocalOnly, remote.Skills.Single(c => c.Name == "greet-user").State);
+        Assert.True(Directory.Exists(path));
+    }
+
+    [Fact]
+    public async Task Pull_gives_the_exact_steps_for_an_edited_copy_of_a_renamed_skill_and_dismiss_settles_it()
+    {
+        var path = Local("greet-user", ("SKILL.md", Manifest("greet-user")));
+        RecordSyncedAs(path, "greet-user", 1);
+        File.AppendAllText(Path.Combine(path, "SKILL.md"), "\nmy edit");
+        RenamedInRegistry("greet-user", "hello", 1);
+
+        var before = await Build().PullAsync(Pull(), CancellationToken.None);
+        var dismissed = await Build().DismissAsync(Pull("greet-user"), CancellationToken.None);
+        var after = await Build().PullAsync(Pull(), CancellationToken.None);
+
+        var kept = before.Entries.Single(e => e.Name == "greet-user");
+        Assert.Contains($"diff -r {path} {Path.Combine(SkillsDir, "hello")}", kept.Message);
+        Assert.Contains("run `protostar skills push hello`, then delete", kept.Message);
+        Assert.Contains("`protostar skills dismiss greet-user`", kept.Message);
+        Assert.False(kept.Dismissed);
+        Assert.True(Assert.Single(dismissed.Entries).Dismissed);
+        var settled = after.Entries.Single(e => e.Name == "greet-user");
+        Assert.Equal((SkillPullStatus.RemovedInRegistry, true), (settled.Status, settled.Dismissed));
+        Assert.Contains("Dismissed: kept here as it is", settled.Message);
+        Assert.EndsWith("my edit", File.ReadAllText(Path.Combine(path, "SKILL.md")));
+    }
+
+    [Fact]
+    public async Task Dismiss_refuses_a_skill_that_is_not_a_copy_of_a_removed_one()
+    {
+        Local("notes", ("SKILL.md", Manifest("notes")));
+
+        var result = await Build().DismissAsync(Pull("notes"), CancellationToken.None);
+
+        Assert.Equal((SkillPullRunFailure.NothingToDismiss, "notes"), (result.Failure, result.Detail));
+    }
+
+    [Fact]
     public async Task Pull_updates_a_renamed_copy_when_the_registry_moved_on_after_the_rename()
     {
         var path = Local("greet-user", ("SKILL.md", Manifest("greet-user")));
