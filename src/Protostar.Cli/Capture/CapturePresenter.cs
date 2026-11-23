@@ -1,3 +1,4 @@
+using Protostar.Cli.Agents;
 using Protostar.Cli.Memory;
 using Protostar.Cli.Registry;
 using Protostar.Cli.Sessions;
@@ -82,7 +83,11 @@ internal static class CapturePresenter
         if (result.Action == CaptureAction.Ignored)
             return $"{prefix}: nothing to do.";
         if (result.Action == CaptureAction.SessionHandedOff)
-            return $"{prefix}: backing up the session in the background.";
+            return result.AgentsHandedOff > 0
+                ? $"{prefix}: backing up the session and {SessionsPresenter.Count(result.AgentsHandedOff, "changed agent")} in the background."
+                : $"{prefix}: backing up the session in the background.";
+        if (result.Action == CaptureAction.AgentsHandedOff)
+            return $"{prefix}: backing up {SessionsPresenter.Count(result.AgentsHandedOff, "changed agent")} in the background.";
         if (result.Action == CaptureAction.Failed && result.SkillName is null)
             return $"{prefix}: {result.Message}";
         if (result.Action == CaptureAction.Failed || result.Push is null)
@@ -123,6 +128,60 @@ internal static class CapturePresenter
             SkillPushStatus.Unchanged => $"{scope} unchanged",
             _ => $"{scope} at {entry.Skill.Path} not backed up: {entry.Outcome.Message}",
         };
+    }
+
+    /// <summary>Writes the line for the background agent push a <c>SessionEnd</c> started, logs it when it needs attention, records it, and returns 0.</summary>
+    /// <remarks>A refusal answered from the ledger (<see cref="Registry.AgentPushOutcome.Remembered"/>) is not logged again.</remarks>
+    public static int RenderBackgroundAgentPush(AgentPushRunResult result, TextWriter output, Action<string> log, Action<CaptureRecord> record)
+    {
+        var line = $"protostar agents push (background): {DescribeAgents(result)}";
+        output.WriteLine(line);
+
+        var attention = result.Failure != AgentPushRunFailure.None ||
+            result.Entries.Any(e => e.Outcome.Status is AgentPushStatus.Refused or AgentPushStatus.Failed or AgentPushStatus.Conflict ||
+                                    e.Outcome is { Status: AgentPushStatus.Stale or AgentPushStatus.Removed, Remembered: false });
+        if (attention)
+            log($"{DateTimeOffset.UtcNow:O} {line}");
+        record(Record(result, line));
+        return 0;
+    }
+
+    internal static CaptureRecord Record(AgentPushRunResult result, string line)
+    {
+        var now = DateTimeOffset.UtcNow;
+        var registry = result.Registry?.GetLeftPart(UriPartial.Authority);
+        CaptureFailure? reason = result.Failure switch
+        {
+            AgentPushRunFailure.None => result.Entries.Any(e => e.Outcome.Status is AgentPushStatus.Failed) ? CaptureFailure.Other
+                : result.Entries.Any(e => e.Outcome.Status is AgentPushStatus.Refused or AgentPushStatus.Conflict or AgentPushStatus.Stale or AgentPushStatus.Removed)
+                    ? CaptureFailure.Refused
+                    : null,
+            AgentPushRunFailure.NotLoggedIn => CaptureFailure.NotSignedIn,
+            AgentPushRunFailure.SessionExpired => CaptureFailure.SessionExpired,
+            AgentPushRunFailure.RegistryUnreachable => CaptureFailure.RegistryUnreachable,
+            AgentPushRunFailure.Incompatible => CaptureFailure.Incompatible,
+            _ => CaptureFailure.Other,
+        };
+        return reason is null
+            ? new CaptureRecord(now, CaptureKind.Agents, true, registry, result.Entries.Count)
+            : new CaptureRecord(now, CaptureKind.Agents, false, registry, result.Entries.Count, Reason: reason, Error: ErrorText(line));
+    }
+
+    // "agent 'reviewer' backed up as v3; agent 'linter' not backed up: ...", or why the run stopped.
+    internal static string DescribeAgents(AgentPushRunResult result)
+    {
+        if (AgentPushPresenter.FailureMessage(result, null) is { } failure)
+            return $"agents not backed up: {failure}";
+
+        var changed = result.Entries.Where(e => e.Outcome.Status != AgentPushStatus.Unchanged).ToList();
+        if (changed.Count == 0)
+            return "agents already backed up.";
+        return string.Join("; ", changed.Select(e => e.Outcome.Status switch
+        {
+            AgentPushStatus.Created => $"agent '{e.Agent.Name}' backed up as v{e.Outcome.Version}",
+            AgentPushStatus.Stale => $"agent '{e.Agent.Name}' not backed up: {e.Outcome.Message} Run `protostar agents push {e.Agent.Name}` to choose which to keep",
+            _ => $"agent '{e.Agent.Name ?? e.Agent.RelativePath}' not backed up: {e.Outcome.Message}",
+        })) + ".";
     }
 
     /// <summary>Writes the line for a background session push, logs it when it needs attention, and returns 0.</summary>

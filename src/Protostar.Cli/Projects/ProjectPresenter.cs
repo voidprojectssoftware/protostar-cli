@@ -64,6 +64,8 @@ internal static class ProjectPresenter
             grid.AddRow("[grey]Skills moved[/]", change.MovedSkills.Count == 0
                 ? "[grey]none[/]"
                 : Markup.Escape(string.Join(", ", change.MovedSkills)));
+            if (change.MovedAgents.Count > 0)
+                grid.AddRow("[grey]Agents moved[/]", Markup.Escape(string.Join(", ", change.MovedAgents)));
         }
         AnsiConsole.Write(grid);
         return 0;

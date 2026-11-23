@@ -18,7 +18,7 @@ public sealed class CaptureServiceTests
     private static (ICaptureService Sut, FakePush Push) Build(SkillPushRunResult? result = null)
     {
         var push = new FakePush(result ?? Ok(SkillPushStatus.Created, 4));
-        return (new CaptureService(push, new SessionCaptureTests.FakeBackground()), push);
+        return (new CaptureService(push, new SessionCaptureTests.FakeBackground(), new AgentPushTests.FakeAgentPush()), push);
     }
 
     private static SkillPushRunResult Ok(SkillPushStatus status, int? version) => new(
@@ -82,7 +82,7 @@ public sealed class CaptureServiceTests
     public async Task A_push_that_throws_becomes_a_failed_capture_not_an_exception()
     {
         var push = new FakePush(null) { Throw = new InvalidOperationException("boom") };
-        var sut = new CaptureService(push, new SessionCaptureTests.FakeBackground());
+        var sut = new CaptureService(push, new SessionCaptureTests.FakeBackground(), new AgentPushTests.FakeAgentPush());
 
         var result = await sut.HandleAsync("PostToolUse", SkillUse, CancellationToken.None);
 
@@ -94,7 +94,7 @@ public sealed class CaptureServiceTests
     public async Task A_timeout_becomes_a_failed_capture()
     {
         var push = new FakePush(null) { Throw = new OperationCanceledException() };
-        var sut = new CaptureService(push, new SessionCaptureTests.FakeBackground());
+        var sut = new CaptureService(push, new SessionCaptureTests.FakeBackground(), new AgentPushTests.FakeAgentPush());
 
         var result = await sut.HandleAsync("PostToolUse", SkillUse, CancellationToken.None);
 

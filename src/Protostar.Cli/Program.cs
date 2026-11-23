@@ -1,5 +1,6 @@
 using Microsoft.Extensions.DependencyInjection;
 using Protostar.Cli;
+using Protostar.Cli.Agents;
 using Protostar.Cli.Auth;
 using Protostar.Cli.Capture;
 using Protostar.Cli.Commands;
@@ -49,6 +50,9 @@ services.AddSingleton<ISkillLedger, SkillLedger>();
 services.AddSingleton<ISkillPushService, SkillPushService>();
 services.AddSingleton<ISkillPullService, SkillPullService>();
 services.AddSingleton<ISkillChangeService, SkillChangeService>();
+services.AddSingleton<IAgentApi>(sp => sp.GetRequiredService<RegistryApi>());
+services.AddSingleton<IAgentLedger, AgentLedger>();
+services.AddSingleton<IAgentPushService, AgentPushService>();
 services.AddSingleton<IBackgroundPush, BackgroundPush>();
 services.AddSingleton<ICaptureService, CaptureService>();
 services.AddSingleton<ISignInService, SignInService>();
@@ -115,6 +119,13 @@ app.Configure(config =>
             .WithDescription("Rename a skill in the registry, keeping its history; this machine's copies follow.");
         skills.AddCommand<SkillsDeleteCommand>("delete")
             .WithDescription("Delete a skill and all its versions from the registry. Local copies are never deleted.");
+    });
+
+    config.AddBranch(Named("agents"), agents =>
+    {
+        agents.SetDescription("Back up your custom agents (personal, and this project's) to the registry.");
+        agents.AddCommand<AgentsPushCommand>("push")
+            .WithDescription("Back up local custom agents to the registry (all, or the named ones).");
     });
 
     config.AddBranch(Named("sessions"), sessions =>

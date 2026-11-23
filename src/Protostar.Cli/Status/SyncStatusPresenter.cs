@@ -114,6 +114,7 @@ internal static class SyncStatusPresenter
     {
         CaptureKind.Skills => "Skills",
         CaptureKind.Sessions => "Sessions",
+        CaptureKind.Agents => "Agents",
         _ => "Memory",
     };
 
@@ -139,6 +140,7 @@ internal static class SyncStatusPresenter
         SyncProblem.SkillsFailing => $"Skill backups are failing{Hint(status, CaptureKind.Skills)}",
         SyncProblem.SessionsFailing => $"Session backups are failing{Hint(status, CaptureKind.Sessions)}",
         SyncProblem.MemoryFailing => $"Memory backups are failing{Hint(status, CaptureKind.Memory)}",
+        SyncProblem.AgentsFailing => $"Agent backups are failing{Hint(status, CaptureKind.Agents)}",
         _ => "Sessions whose backup failed are waiting to be retried. Run `protostar sessions push` to retry them now.",
     };
 
@@ -148,6 +150,7 @@ internal static class SyncStatusPresenter
         CaptureFailure.RegistryUnreachable => ": the registry could not be reached. They resume on their own once it can.",
         CaptureFailure.Incompatible => ": the registry does not offer what they need (the newest failure says what). Update the registry; they resume on their own once it does.",
         CaptureFailure.Refused when kind == CaptureKind.Skills => ": the registry refused a skill. Run `protostar skills remote` to choose which copy to keep.",
+        CaptureFailure.Refused when kind == CaptureKind.Agents => ": the registry refused an agent. Run `protostar agents push` to see which and choose which copy to keep.",
         _ => $". Details are in {Path.Combine(ProtostarPaths.ConfigDir(), "capture.log")}.",
     };
 }

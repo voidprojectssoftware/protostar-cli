@@ -16,6 +16,9 @@ internal enum CaptureKind
 
     /// <summary>The memory of a session's project (the same push, after the session).</summary>
     Memory,
+
+    /// <summary>Custom agents changed in a session (the push <c>SessionEnd</c> starts when one changed).</summary>
+    Agents,
 }
 
 /// <summary>Why a background backup failed, for <c>protostar status</c> to say what to do.</summary>
@@ -48,7 +51,7 @@ internal enum CaptureFailure
 /// <param name="Kind">What was being backed up.</param>
 /// <param name="Ok">Whether everything it tried reached the registry.</param>
 /// <param name="Registry">The registry's authority (<c>https://host:port</c>); <c>null</c> when it was never resolved.</param>
-/// <param name="Items">Skills checked, transcripts handled, or memory files uploaded.</param>
+/// <param name="Items">Skills or agents checked, transcripts handled, or memory files uploaded.</param>
 /// <param name="Bytes">Session bytes uploaded; <c>null</c> for the other kinds.</param>
 /// <param name="Reason">Why it failed; <c>null</c> when <paramref name="Ok"/>.</param>
 /// <param name="Error">The error message a person would read; <c>null</c> when <paramref name="Ok"/>.</param>

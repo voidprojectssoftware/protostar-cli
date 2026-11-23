@@ -95,6 +95,9 @@ internal enum SyncProblem
 
     /// <summary>Sessions are marked failed and wait for a hook to retry them.</summary>
     SessionsAwaitingRetry,
+
+    /// <summary>The newest agent backup failed.</summary>
+    AgentsFailing,
 }
 
 /// <summary>The answer to "is this machine syncing?".</summary>
@@ -136,6 +139,7 @@ internal sealed record SyncStatus(
                 {
                     CaptureKind.Skills => SyncProblem.SkillsFailing,
                     CaptureKind.Sessions => SyncProblem.SessionsFailing,
+                    CaptureKind.Agents => SyncProblem.AgentsFailing,
                     _ => SyncProblem.MemoryFailing,
                 });
             }
