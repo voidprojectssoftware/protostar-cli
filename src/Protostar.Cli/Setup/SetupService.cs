@@ -1,3 +1,4 @@
+using Protostar.Cli.Agents;
 using Protostar.Cli.Auth;
 using Protostar.Cli.Harness;
 using Protostar.Cli.Hooks;
@@ -25,10 +26,15 @@ internal sealed class SetupService : ISetupService
     private readonly ISessionSyncService _sessions;
     private readonly IMemorySyncService _memory;
     private readonly IDefaultRegistryStore _defaultRegistry;
+    private readonly IAgentPushService _agentPush;
+    private readonly IAgentPullService _agentPull;
 
     public SetupService(ISignInService signIn, IHookInstallService hooks, ISkillPushService push, ISkillPullService skills,
-        IMemorySyncService memory, ISessionSyncService sessions, IDefaultRegistryStore defaultRegistry)
+        IMemorySyncService memory, ISessionSyncService sessions, IDefaultRegistryStore defaultRegistry, IAgentPushService agentPush,
+        IAgentPullService agentPull)
     {
+        _agentPush = agentPush;
+        _agentPull = agentPull;
         _memory = memory;
         _push = push;
         _signIn = signIn;
@@ -71,6 +77,10 @@ internal sealed class SetupService : ISetupService
         Finish(whyNotSignedIn == SetupSkip.None
             ? await SyncSkillsAsync(request, cancellationToken)
             : new SetupStepResult(SetupStep.Skills, SetupOutcome.Skipped, whyNotSignedIn));
+
+        Finish(whyNotSignedIn == SetupSkip.None
+            ? await SyncAgentsAsync(request, cancellationToken)
+            : new SetupStepResult(SetupStep.Agents, SetupOutcome.Skipped, whyNotSignedIn));
 
         Finish(whyNotSignedIn == SetupSkip.None
             ? await PullMemoryAsync(request, cancellationToken)
@@ -155,6 +165,35 @@ internal sealed class SetupService : ISetupService
             Skills = pull,
         };
         return outcome is (SetupOutcome.Done or SetupOutcome.AlreadyDone) && step.SkillDecisions.Count > 0
+            ? step with { Outcome = SetupOutcome.NeedsDecision }
+            : step;
+    }
+
+    // The agents' copy of SyncSkillsAsync, for personal agents only (the story asks for those; project agents travel with
+    // `agents push` and `agents pull` in a checkout, and the hook). A registry without agents or agent downloads is skipped,
+    // not failed: running setup again would not change it, only updating the registry would.
+    private async Task<SetupStepResult> SyncAgentsAsync(SetupRequest request, CancellationToken cancellationToken)
+    {
+        var push = await _agentPush.PushAsync(new AgentPushRequest([], null, request.HarnessHome, null, request.Registry), cancellationToken);
+        var pull = await _agentPull.PullAsync(new AgentPullRequest([], null, request.HarnessHome, request.Registry), cancellationToken);
+
+        var outcome = pull switch
+        {
+            { Failure: AgentPullRunFailure.NoHarness or AgentPullRunFailure.RegistryTooOld } => SetupOutcome.Skipped,
+            _ when pull.Failure != AgentPullRunFailure.None || pull.Entries.Any(e => e.Status == AgentPullStatus.Failed) => SetupOutcome.Failed,
+            _ when push.Failure != AgentPushRunFailure.None || push.Entries.Any(e => e.Outcome.Status == AgentPushStatus.Failed) => SetupOutcome.Failed,
+            _ when push.Entries.Any(e => e.Outcome.Status == AgentPushStatus.Created) ||
+                pull.Entries.Any(e => e.Status is AgentPullStatus.Installed or AgentPullStatus.Updated or AgentPullStatus.FollowedRename) => SetupOutcome.Done,
+            _ => SetupOutcome.AlreadyDone,
+        };
+        var skip = pull.Failure switch
+        {
+            AgentPullRunFailure.NoHarness => SetupSkip.NoHarness,
+            AgentPullRunFailure.RegistryTooOld => SetupSkip.RegistryTooOld,
+            _ => SetupSkip.None,
+        };
+        var step = new SetupStepResult(SetupStep.Agents, outcome, skip) { AgentPush = push, AgentPull = pull };
+        return outcome is (SetupOutcome.Done or SetupOutcome.AlreadyDone) && step.AgentDecisions.Count > 0
             ? step with { Outcome = SetupOutcome.NeedsDecision }
             : step;
     }

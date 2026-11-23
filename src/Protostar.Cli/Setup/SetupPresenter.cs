@@ -1,3 +1,4 @@
+using Protostar.Cli.Agents;
 using Protostar.Cli.Auth;
 using Protostar.Cli.Harness;
 using Protostar.Cli.Hooks;
@@ -49,16 +50,28 @@ internal static class SetupPresenter
         var failed = result.Steps.Count(s => s.Outcome == SetupOutcome.Failed);
         // Configuration is skipped on every run until it exists, so it does not make a run "partly set up".
         var skipped = result.Steps.Count(s => s.Outcome == SetupOutcome.Skipped && s.Skip != SetupSkip.NotAvailableYet);
-        var decisions = result.SkillDecisions;
-        var needDecision = decisions == 1 ? "1 skill needs a decision" : $"{decisions} skills need a decision";
-        var alsoDecisions = decisions > 0 ? $" [yellow]{needDecision}[/]; the Skills step says how to settle {(decisions == 1 ? "it" : "each")}." : "";
+        var decisions = result.SkillDecisions + result.AgentDecisions;
+        var (needDecision, where) = Decisions(result.SkillDecisions, result.AgentDecisions);
+        var alsoDecisions = decisions > 0 ? $" [yellow]{needDecision}[/]; {where} how to settle {(decisions == 1 ? "it" : "each")}." : "";
         AnsiConsole.MarkupLine(
             failed > 0 ? $"[red]Setup finished with {failed} failed step{(failed == 1 ? "" : "s")}.[/] Fix it and run `protostar setup` again; finished steps are not repeated.{alsoDecisions}"
             : skipped > 0 ? $"[yellow]Setup finished; {skipped} step{(skipped == 1 ? " was" : "s were")} skipped.[/] See above for how to finish {(skipped == 1 ? "it" : "them")}.{alsoDecisions}"
-            : decisions > 0 ? $"[yellow]Set up, but {needDecision}.[/] The Skills step above says how to settle {(decisions == 1 ? "it" : "each one")}."
+            : decisions > 0 ? $"[yellow]Set up, but {needDecision}.[/] {char.ToUpperInvariant(where[0])}{where[1..]} above how to settle {(decisions == 1 ? "it" : "each one")}."
             : result.NothingChanged ? "[green]This machine is already set up.[/] Nothing changed."
             : "[green]This machine is set up.[/] Running `protostar setup` again changes nothing.");
         return failed > 0 ? 1 : 0;
+    }
+
+    // "1 skill needs a decision" / "2 agents need a decision" / "1 skill and 1 agent need a decision", and which steps say how.
+    private static (string Need, string Where) Decisions(int skills, int agents)
+    {
+        string Count(int n, string noun) => n == 1 ? $"1 {noun}" : $"{n} {noun}s";
+        return (skills, agents) switch
+        {
+            (_, 0) => ($"{Count(skills, "skill")} {(skills == 1 ? "needs" : "need")} a decision", "the Skills step says"),
+            (0, _) => ($"{Count(agents, "agent")} {(agents == 1 ? "needs" : "need")} a decision", "the Agents step says"),
+            _ => ($"{Count(skills, "skill")} and {Count(agents, "agent")} need a decision", "the Skills and Agents steps say"),
+        };
     }
 
     private static void Step(SetupStepResult step, IHarnessCatalog catalog, string pushCommand)
@@ -68,6 +81,7 @@ internal static class SetupPresenter
             SetupStep.SignIn => "Sign-in",
             SetupStep.Hooks => "Hooks",
             SetupStep.Skills => "Skills",
+            SetupStep.Agents => "Agents",
             SetupStep.Memory => "Memory",
             SetupStep.Configuration => "Configuration",
             _ => "Sessions",
@@ -86,6 +100,7 @@ internal static class SetupPresenter
             SetupStep.SignIn => SignIn(step),
             SetupStep.Hooks => Hooks(step, catalog),
             SetupStep.Skills => Skills(step, catalog),
+            SetupStep.Agents => Agents(step, catalog),
             SetupStep.Memory => Memory(step, catalog),
             SetupStep.Configuration => ["Not available yet: syncing harness configuration is still to come."],
             _ => Sessions(step, catalog, pushCommand),
@@ -224,6 +239,59 @@ internal static class SetupPresenter
         if (notable.Count > MaxSkillLines)
             lines.Add($"[grey]... and {notable.Count - MaxSkillLines} more pushed. `protostar skills remote` lists them all.[/]");
         return (summary, lines);
+    }
+
+    // The agents' copy of Skills: the push's line, then the pull's, one line per agent that changed, and every decision with
+    // its way out. Personal agents only, so there is no project column.
+    private static List<string> Agents(SetupStepResult step, IHarnessCatalog catalog)
+    {
+        if (step.Skip == SetupSkip.NotSignedIn)
+            return ["Needs sign-in."];
+        if (step.Skip == SetupSkip.RegistryUnreachable)
+            return [RegistryUnreachable];
+
+        var push = step.AgentPush!;
+        var pushed = AgentPushPresenter.FailureMessage(push, catalog) is { } pushFailure
+            ? $"Push: [red]{Markup.Escape(pushFailure)}[/]"
+            : push.Entries.Count == 0
+                ? "Pushed: no personal agents on this machine."
+                : $"Pushed: {push.Entries.Count(e => e.Outcome.Status == AgentPushStatus.Created)} backed up, " +
+                  $"{push.Entries.Count(e => e.Outcome.Status == AgentPushStatus.Unchanged)} already backed up" +
+                  (push.Entries.Count(e => e.Outcome.Status is AgentPushStatus.Stale or AgentPushStatus.Removed) is > 0 and var held
+                      ? $", [yellow]{held} not pushed because they changed in the registry too, or were deleted or renamed there[/]" : "") +
+                  (push.Entries.Count(e => e.Outcome.Status is AgentPushStatus.Refused or AgentPushStatus.Conflict or AgentPushStatus.Failed) is > 0 and var problems
+                      ? $", [red]{problems} not backed up[/]" : "") + ".";
+        var pushLines = push.Entries
+            .Where(e => e.Outcome.Status is AgentPushStatus.Created or AgentPushStatus.Refused or AgentPushStatus.Conflict or AgentPushStatus.Failed)
+            .Select(e => Markup.Escape(e.Agent.Name ?? e.Agent.RelativePath) + ": " + AgentPushPresenter.Describe(e.Outcome));
+
+        var pull = step.AgentPull!;
+        if (AgentPullPresenter.FailureMessage(pull.Failure, pull.Detail, pull.Registry, catalog) is { } failure)
+            return [$"{pushed} Pull: {(step.Skip == SetupSkip.RegistryTooOld ? "[yellow]" : "[red]")}{Markup.Escape(failure)}[/]", .. pushLines];
+
+        var summary = pull.Entries.Count == 0 ? "Pulled: no personal agents in the registry yet." : $"Pulled: {AgentPullPresenter.Summary(pull)}.";
+        string Line(AgentPullEntry e) => Markup.Escape(e.Name) + ": " + AgentPullPresenter.Describe(e);
+        var decisions = step.AgentDecisions;
+        var changed = pull.Entries.Where(e => e.Status is not (AgentPullStatus.UpToDate or AgentPullStatus.OtherProject) && !decisions.Contains(e)).ToList();
+        var lines = new List<string> { $"{pushed} {summary}" };
+        lines.AddRange(pushLines);
+        lines.AddRange(changed.Take(MaxSkillLines).Select(Line));
+        if (changed.Count > MaxSkillLines)
+            lines.Add($"[grey]... and {changed.Count - MaxSkillLines} more. `protostar agents remote` lists them all.[/]");
+        foreach (var decision in decisions)
+        {
+            lines.Add(Line(decision));
+            var name = Markup.Escape(decision.Name.Any(char.IsWhiteSpace) ? $"\"{decision.Name}\"" : decision.Name);
+            var wayOut = decision.Status switch
+            {
+                AgentPullStatus.ChangedBoth => $"Keep yours: [blue]protostar agents push {name} --force[/]; theirs: [blue]protostar agents pull {name} --force[/].",
+                AgentPullStatus.LocalChanges => $"Back it up: [blue]protostar agents push {name}[/]; or overwrite it: [blue]protostar agents pull {name} --force[/].",
+                _ => null,
+            };
+            if (wayOut is not null)
+                lines.Add($"  {wayOut}");
+        }
+        return lines;
     }
 
     private static List<string> Memory(SetupStepResult step, IHarnessCatalog catalog)

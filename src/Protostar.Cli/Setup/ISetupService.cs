@@ -1,3 +1,4 @@
+using Protostar.Cli.Agents;
 using Protostar.Cli.Auth;
 using Protostar.Cli.Hooks;
 using Protostar.Cli.Memory;
@@ -6,10 +7,11 @@ using Protostar.Cli.Skills;
 
 namespace Protostar.Cli.Setup;
 
-/// <summary>Gets a machine ready in one run: sign in, install hooks, push and pull skills, pull memory, and back up sessions.</summary>
+/// <summary>Gets a machine ready in one run: sign in, install hooks, push and pull skills and personal agents, pull memory, and back up sessions.</summary>
 /// <remarks>
 /// Backs <c>protostar setup</c>. Each step calls the same service its own command does (<see cref="ISignInService"/>,
 /// <see cref="IHookInstallService"/>, <see cref="ISkillPushService"/> and <see cref="ISkillPullService"/>,
+/// <see cref="IAgentPushService"/> and <see cref="IAgentPullService"/>,
 /// <see cref="IMemorySyncService"/>, <see cref="ISessionSyncService"/>), so setup has
 /// no second implementation of any of them. Every step is idempotent, so running setup again changes nothing and says so.
 /// </remarks>
@@ -17,7 +19,8 @@ internal interface ISetupService
 {
     /// <summary>Runs every step in order, reporting each through <paramref name="interaction"/> as it finishes.</summary>
     /// <remarks>
-    /// The order is fixed: sign-in, hooks, skills, memory, configuration, sessions. Hooks go in before skills are pulled so a
+    /// The order is fixed: sign-in, hooks, skills, agents, memory, configuration, sessions. Agents follow skills with the same
+    /// push-then-pull rules, for personal agents only. Hooks go in before skills are pulled so a
     /// skill used the moment it lands is already captured; the pull records each skill in the ledger, so that capture
     /// recognises it as unchanged and does not push it straight back. Within the skills step this machine's skills are
     /// pushed before the registry's are pulled, so a skill changed here is backed up rather than kept back by the pull
@@ -53,6 +56,9 @@ internal enum SetupStep
     SignIn,
     Hooks,
     Skills,
+
+    /// <summary>Pushing this machine's personal agents, then pulling the registry's, after skills and by the same rules.</summary>
+    Agents,
 
     /// <summary>Bringing the registry's memory to this machine's checkouts.</summary>
     Memory,
@@ -103,6 +109,9 @@ internal enum SetupSkip
     /// <summary>The step's feature does not exist yet.</summary>
     NotAvailableYet,
 
+    /// <summary>The registry lacks the feature the step needs; updating the registry, not this machine, settles it.</summary>
+    RegistryTooOld,
+
     /// <summary>The user answered no to backing up sessions now.</summary>
     Declined,
 
@@ -135,6 +144,12 @@ internal sealed record SetupStepResult(SetupStep Step, SetupOutcome Outcome, Set
     /// <summary>The skill pull, for <see cref="SetupStep.Skills"/>.</summary>
     public SkillPullRunResult? Skills { get; init; }
 
+    /// <summary>The push of this machine's personal agents, for <see cref="SetupStep.Agents"/> when signed in; it runs before <see cref="AgentPull"/>.</summary>
+    public AgentPushRunResult? AgentPush { get; init; }
+
+    /// <summary>The personal agent pull, for <see cref="SetupStep.Agents"/>.</summary>
+    public AgentPullRunResult? AgentPull { get; init; }
+
     /// <summary>The memory pull, for <see cref="SetupStep.Memory"/> when signed in.</summary>
     public MemoryPullResult? MemoryPull { get; init; }
 
@@ -155,6 +170,11 @@ internal sealed record SetupStepResult(SetupStep Step, SetupOutcome Outcome, Set
     public IReadOnlyList<SkillPullEntry> SkillDecisions =>
         Skills?.Entries.Where(e => e.Status is SkillPullStatus.ChangedBoth or SkillPullStatus.RemovedInRegistry
             or SkillPullStatus.LocalChanges or SkillPullStatus.Conflict).ToList() ?? [];
+
+    /// <summary>The agents the pull kept or left alone that only the user can settle, as <see cref="SkillDecisions"/> for skills.</summary>
+    public IReadOnlyList<AgentPullEntry> AgentDecisions =>
+        AgentPull?.Entries.Where(e => e.Status is AgentPullStatus.ChangedBoth or AgentPullStatus.RemovedInRegistry
+            or AgentPullStatus.LocalChanges or AgentPullStatus.Conflict).ToList() ?? [];
 }
 
 /// <summary>Every step's outcome, in order.</summary>
@@ -170,4 +190,7 @@ internal sealed record SetupResult(Uri? Registry, string? InvalidRegistry, IRead
 
     /// <summary>How many skills need the user's decision, across every step.</summary>
     public int SkillDecisions => Steps.Sum(s => s.SkillDecisions.Count);
+
+    /// <summary>How many agents need the user's decision.</summary>
+    public int AgentDecisions => Steps.Sum(s => s.AgentDecisions.Count);
 }
