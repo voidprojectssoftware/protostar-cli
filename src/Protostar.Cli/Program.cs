@@ -41,6 +41,7 @@ services.AddSingleton<IProjectFactsResolver, ProjectFactsResolver>();
 services.AddSingleton<ISessionSyncService, SessionSyncService>();
 services.AddSingleton<ISessionReader, SessionReader>();
 services.AddSingleton<ISessionSkills, SessionSkills>();
+services.AddSingleton<ISessionAgents, SessionAgents>();
 services.AddSingleton<IProjectApi>(sp => sp.GetRequiredService<RegistryApi>());
 services.AddSingleton<IProjectService, ProjectService>();
 services.AddSingleton<IMemoryApi>(sp => sp.GetRequiredService<RegistryApi>());

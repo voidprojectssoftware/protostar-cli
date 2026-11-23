@@ -62,7 +62,7 @@ public sealed class McpSteps : IDisposable
     [When("the client calls {string} for {string}")]
     public async Task WhenTheClientCalls(string tool, string value)
     {
-        var argument = tool == "search" ? "query" : "id";
+        var argument = tool switch { "search" => "query", "get_agent" => "name", _ => "id" };
         _reply = await RequestAsync("tools/call", new JsonObject { ["name"] = tool, ["arguments"] = new JsonObject { [argument] = value } });
     }
 

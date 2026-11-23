@@ -810,8 +810,17 @@ pushed before the skill was last used. Each one is also marked when it applies:
 - **plugin**: a plugin's skill (`plugin:skill`). Plugins are not checked, so
   these are never marked "not installed here".
 
-A registry that does not offer this (it does not list `session-skills`) shows
-the session without the block. One too old to list its capabilities is asked
+**Agents used** lists your own custom agents the session delegated to (its
+subagents' too), with how many times, the version marked `?`, and whether the
+agent matched is `personal` or `project` (a project agent of that name wins, as
+Claude Code loads them). The version is the newest pushed by the time the session
+ended, since protostar backs agents up when a session ends. Built-in agent types
+(`general-purpose`, `Explore`, `Plan`) and plugin agents are never listed.
+**deleted from the registry** marks an agent deleted since. "Agents used: none of
+yours" means the session delegated to none of your agents.
+
+A registry that does not offer these (it does not list `session-skills`, or
+`session-agents`) shows the session without that block. One too old to list its capabilities is asked
 anyway, and a refusal is ignored the same way. Listing the skills costs one
 request, made while the conversation downloads.
 
@@ -899,7 +908,7 @@ No match exits `0`. A registry too old for search says so, and the command exits
 
 | Option | Description |
 |---|---|
-| `-k, --kind <KIND>` | Only `session` (sessions and their subagents) or `memory`. Both by default. |
+| `-k, --kind <KIND>` | Only `session` (sessions and their subagents) or `memory`, or `agent` to search your custom agents instead (the registry must list `agent-search`). Sessions and memory by default. |
 | `-p, --project <ID\|NAME\|.>` | Only this project: its id, text in its name (which may match several projects, as in `sessions list`), or `.` for the project this folder belongs to. |
 | `-n, --limit <N>` | How many to show, from 1 to 100. Defaults to 20. |
 | `--json` | Print one JSON array of hits instead of the list. See [JSON output](json-output.md#search). |
@@ -916,7 +925,7 @@ $ protostar search '"DNS records"' --kind memory --project homelab --json
 
 ## `protostar mcp`
 
-Serve your backed-up sessions and memory to coding agents as MCP tools, over
+Serve your backed-up sessions, memory and custom agents to coding agents as MCP tools, over
 standard input and output. Register it with your agent rather than running it
 yourself:
 
@@ -924,8 +933,8 @@ yourself:
 $ claude mcp add --scope user protostar -- protostar mcp
 ```
 
-It serves five read-only tools, `search`, `list_sessions`, `get_session`,
-`get_session_skills` and `get_memory`, with no tool that changes anything. Everything they return is
+It serves six read-only tools, `search`, `list_sessions`, `get_session`,
+`get_session_skills`, `get_memory` and `get_agent`, with no tool that changes anything. Everything they return is
 redacted by the registry, and one result is at most 80,000 characters, with long
 sessions paged. It uses the stored sign-in, resolved on every call, and keeps
 standard output for the protocol alone. See

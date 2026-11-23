@@ -167,7 +167,7 @@ If the download fails part way, the records already printed stand and a
 
 ### The session record
 
-The first line, `type` `session`, describes the session and the skills it used.
+The first line, `type` `session`, describes the session and the skills and custom agents it used.
 It comes before the first message (once the download has started), so read it
 with `head -n 1`, or skip it with `select(.type != "session")`.
 
@@ -177,6 +177,7 @@ with `head -n 1`, or skip it with `select(.type != "session")`.
 | `transcriptId`, `harness` | string | As in the message records. |
 | `session` | object | The [`sessions list` record](#sessions-list) of the session. |
 | `skills` | array | The skills it used, its subagents' included, earliest first used first. Absent when the registry cannot list them: it does not list `session-skills`, or the request failed. Empty when it used none. |
+| `agents` | array | Your custom agents it delegated to, its subagents' included, earliest first used first. Never a built-in or plugin agent type. Absent when the registry cannot list them: it does not list `session-agents`, or the request failed. Empty when it used none of yours. |
 
 Each skill has the fields `get_session_skills` gives (see [The MCP tools](#the-mcp-tools)):
 `name` (a plugin's skill as `plugin:skill`), `uses`, `firstUsedAt`, `lastUsedAt`,
@@ -188,6 +189,11 @@ versions were pushed) and `deleted` (since deleted from the registry). It adds:
 |---|---|---|
 | `installedHere` | boolean | A skill of that name is installed on this machine: a personal skill, or a project skill of the folder the command ran in when that folder is the session's project. Absent for a plugin's skill, which is not looked for, and when the skills on this machine (or the folder's project) could not be read. |
 
+Each agent has the registry's fields: `name`, `uses`, `firstUsedAt`,
+`lastUsedAt`, `agentId` (absent once deleted), `projectId` (absent for a
+personal agent), `version` with `versionInferred: true` (the newest version
+pushed by the time the session ended; absent when none was) and `deleted`.
+
 ## `search`
 
 One record per hit, best match first. Every field but the snippet comes from the
@@ -195,17 +201,20 @@ registry's own records, and the title and snippet are redacted by the registry.
 
 | Field | Type | Meaning |
 |---|---|---|
-| `kind` | string | `session` (a session or a subagent) or `memory`, as `--kind` takes them. |
+| `kind` | string | `session` (a session or a subagent), `memory` or `agent`, as `--kind` takes them. |
 | `id` | string | For a session, its [id](#ids), which `sessions show` takes. Memory has no `id`: `projectId` and `path` name it. |
 | `harness` | string | For a session, the harness. |
 | `parentId` | string | For a subagent, the `id` of its session. |
 | `title` | string | For a session, its title or first prompt. |
 | `path` | string | For memory, the file's path in the project's memory folder, for example `dns.md`. |
-| `projectId` | string (UUID) | The project. Absent for a session not filed under one yet. |
+| `name` | string | For an agent, its name, which MCP `get_agent` takes. |
+| `version` | number | For an agent, its current version, the one matched. |
+| `description` | string | For an agent, its description. |
+| `projectId` | string (UUID) | The project. Absent for a session not filed under one yet, or a personal agent. |
 | `project` | string | The project's name. |
-| `machineId` | string (UUID) | For a session, the machine it came from; for memory, the machine that sent the version matched. |
+| `machineId` | string (UUID) | For a session, the machine it came from; for memory, the machine that sent the version matched. Absent for an agent. |
 | `machineName` | string | That machine's name. |
-| `date` | time | For a session, its latest activity; for memory, when the file last changed. |
+| `date` | time | For a session, its latest activity; for memory, when the file last changed; for an agent, when its current version was pushed. |
 | `snippet` | string | The text around the match, with each matched word between `«` and `»`. It can hold line breaks. |
 
 No match is an empty array, `[]`, with exit code `0`. A registry that does not
@@ -230,11 +239,12 @@ codes add fields of their own, listed below.
 | `not_signed_in` | No sign-in is stored for the registry. Run `protostar auth login`. | `sessions list`, `show`, `push`, `status --verify`; `search` |
 | `session_expired` | The sign-in expired and could not be refreshed. Run `protostar auth login`. | as above |
 | `registry_unreachable` | The registry did not answer, or refused or failed the request. | as above |
-| `registry_incompatible` | The registry speaks an API version this protostar does not, or is too old to offer the feature: it does not list the capability in `/v1/meta` (the message reads "This registry is too old for …"), or, listing none, answered `404`. The sessions commands need `sessions`, `status --verify` also `transcript-lookup`, `search` needs `search`. The MCP tools refuse a registry that does not list theirs, even one that lists none: `get_session` needs `redacted-read`, `get_session_skills` needs `session-skills`, `get_memory` needs `memory-redacted-read`. See [Troubleshooting](troubleshooting.md#registry-too-old). | as above |
-| `not_found` | No transcript has that id, and no session id starts with it. Run `protostar sessions list`. For `get_memory`, no project with memory matches (the error adds `projects`, those that have memory), or it has no file at that path. | `sessions show`; MCP `get_session`, `get_session_skills`, `get_memory` |
+| `registry_incompatible` | The registry speaks an API version this protostar does not, or is too old to offer the feature: it does not list the capability in `/v1/meta` (the message reads "This registry is too old for …"), or, listing none, answered `404`. The sessions commands need `sessions`, `status --verify` also `transcript-lookup`, `search` needs `search`. The MCP tools refuse a registry that does not list theirs, even one that lists none: `get_session` needs `redacted-read`, `get_session_skills` needs `session-skills`, `get_memory` needs `memory-redacted-read`, `get_agent` needs `agent-content`, and `search --kind agent` (or MCP `search` with `kind: agent`) needs `agent-search`. See [Troubleshooting](troubleshooting.md#registry-too-old). | as above |
+| `not_found` | No transcript has that id, and no session id starts with it. Run `protostar sessions list`. For `get_memory`, no project with memory matches (the error adds `projects`, those that have memory), or it has no file at that path. For `get_agent`, you have no agent of that name (in that project), or no such version. | `sessions show`; MCP `get_session`, `get_session_skills`, `get_memory`, `get_agent` |
 | `ambiguous_id` | More than one session id starts with the id given. The error adds `candidates`: up to 10 objects with `id`, `harness`, `title` and `lastActivityAt`. Give more of the id. | `sessions show`; MCP `get_session`, `get_session_skills` |
 | `invalid_argument` | A tool argument is out of range or malformed, such as `limit` 500. | MCP tools |
 | `ambiguous_project` | The project name matches more than one project with memory. The error adds `projects`: objects with `projectId`, `project` and `files`. Give the id. | MCP `get_memory` |
+| `ambiguous_agent` | More than one of your agents has that name (a personal and a project agent, or several projects). The error adds `agents`: objects with `name`, `projectId`, `project` and `version`. Give `project`. | MCP `get_agent` |
 | `incomplete` | The push ran, but some transcripts failed or were left part way; their records say which. | `sessions push` |
 | `interrupted` | Stopped with Ctrl+C. Nothing is lost; push again to carry on. | `sessions push` |
 
@@ -268,5 +278,7 @@ session record) and `skills` (each with `name`, `uses`, `firstUsedAt`,
 registry reports them), and `get_memory` gives `projectId`,
 `project`, `files` (each with `path`, `version`, `machineId`, `machineName`,
 `deletedEverywhere` when set, `content`, and `truncated` when cut) and `omitted`
-(paths that did not fit). A failed call is a tool error whose text is the
+(paths that did not fit), and `get_agent` gives `name`, `projectId`, `project`,
+`version`, `description`, `path`, `pushedAt`, `content` (the whole file) and
+`truncated` when cut. A failed call is a tool error whose text is the
 [error object](#errors).

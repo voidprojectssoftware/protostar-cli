@@ -72,6 +72,9 @@ internal static class RegistryCapability
     public const string Search = "search";
     public const string MemoryRedactedRead = "memory-redacted-read";
     public const string Agents = "agents";
+    public const string AgentContent = "agent-content";
+    public const string SessionAgents = "session-agents";
+    public const string AgentSearch = "agent-search";
 
     /// <summary>What a person calls the feature <paramref name="capability"/> names, to finish "too old for ...".</summary>
     public static string Feature(string capability) => capability switch
@@ -93,6 +96,9 @@ internal static class RegistryCapability
         Search => "search",
         MemoryRedactedRead => "serving memory with secrets redacted",
         Agents => "agent backups",
+        AgentContent => "reading agents",
+        SessionAgents => "listing the agents a session used",
+        AgentSearch => "searching agents",
         _ => capability,
     };
 }

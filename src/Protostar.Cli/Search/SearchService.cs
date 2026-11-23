@@ -5,7 +5,7 @@ using Protostar.Cli.Sessions;
 
 namespace Protostar.Cli.Search;
 
-/// <summary>Searches the user's backed-up sessions and memory in the registry: <c>protostar search</c>.</summary>
+/// <summary>Searches the user's backed-up sessions and memory, or custom agents, in the registry: <c>protostar search</c>.</summary>
 internal interface ISearchService
 {
     /// <summary>The hits for <paramref name="request"/>, best match first, or why there are none to give.</summary>
@@ -15,7 +15,7 @@ internal interface ISearchService
 /// <summary>A <c>protostar search</c>.</summary>
 /// <param name="Registry">The <c>--registry</c> option, or <c>null</c> for the default.</param>
 /// <param name="Text">The query.</param>
-/// <param name="Kind"><c>session</c> or <c>memory</c>, or <c>null</c> for both.</param>
+/// <param name="Kind"><c>session</c>, <c>memory</c> or <c>agent</c>, or <c>null</c> for sessions and memory.</param>
 /// <param name="Project">A project id or name text, <c>.</c> for the current folder's project, or <c>null</c> for every project.</param>
 /// <param name="Limit">The most hits, 1 to 100.</param>
 /// <param name="Directory">The folder <c>.</c> stands for.</param>
@@ -39,7 +39,9 @@ internal sealed record SearchResult(
 /// <para>
 /// The capability check (<see cref="IRegistryCapabilities.RequireAsync"/>): a registry that lists capabilities without
 /// <c>search</c> is refused without asking it to search. One that lists none predates the list, so it is asked anyway,
-/// and a bare 404 from it means the same thing (<see cref="ISearchApi.RegistryTooOldForSearch"/>).
+/// and a bare 404 from it means the same thing (<see cref="ISearchApi.RegistryTooOldForSearch"/>). Searching agents
+/// needs <c>agent-search</c> listed, strictly: a registry from before it ignores <c>kind=agent</c>'s meaning or refuses
+/// it, so one that cannot say it has it is not asked.
 /// </para>
 /// <para>
 /// <c>--project .</c> is resolved with the resolver session backups use, so it names the project this folder's
@@ -50,6 +52,9 @@ internal sealed record SearchResult(
 /// </remarks>
 internal sealed class SearchService : ISearchService
 {
+    /// <summary>The kind that searches custom agents rather than sessions and memory.</summary>
+    internal const string AgentKind = "agent";
+
     private readonly IAccessTokenProvider _tokens;
     private readonly IRegistryCapabilities _capabilities;
     private readonly ISearchApi _api;
@@ -94,6 +99,8 @@ internal sealed class SearchService : ISearchService
         }
 
         var check = await _capabilities.RequireAsync(registry, cancellationToken, RegistryCapability.Search);
+        if (check.Ok && request.Kind == AgentKind)
+            check = await _capabilities.RequireListedAsync(registry, cancellationToken, RegistryCapability.AgentSearch);
         if (!check.Ok)
             return new SearchResult(SessionSyncService.CheckFailure(check), check.Detail, registry, []);
 

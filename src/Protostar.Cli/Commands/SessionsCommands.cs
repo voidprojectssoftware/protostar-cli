@@ -189,12 +189,14 @@ internal sealed class SessionsShowCommand : AsyncCommand<SessionsShowCommand.Set
 {
     private readonly ISessionReader _reader;
     private readonly ISessionSkills _skills;
+    private readonly ISessionAgents _agents;
     private readonly IHarnessCatalog _catalog;
 
-    public SessionsShowCommand(ISessionReader reader, ISessionSkills skills, IHarnessCatalog catalog)
+    public SessionsShowCommand(ISessionReader reader, ISessionSkills skills, ISessionAgents agents, IHarnessCatalog catalog)
     {
         _reader = reader;
         _skills = skills;
+        _agents = agents;
         _catalog = catalog;
     }
 
@@ -236,6 +238,7 @@ internal sealed class SessionsShowCommand : AsyncCommand<SessionsShowCommand.Set
         var session = opened.Session!;
         // Started now and awaited by the presenter once the content download has started too, so the two overlap.
         var skills = _skills.GetAsync(session, settings.HarnessHome, Directory.GetCurrentDirectory(), cancellation);
-        return await SessionShowPresenter.RenderAsync(session, _reader.ReadAsync(session, settings.Full, cancellation), settings.Full, settings.Json, skills);
+        var agents = _agents.GetAsync(session, cancellation);
+        return await SessionShowPresenter.RenderAsync(session, _reader.ReadAsync(session, settings.Full, cancellation), settings.Full, settings.Json, skills, agents);
     }
 }

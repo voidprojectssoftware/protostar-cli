@@ -20,7 +20,8 @@ anything.
 - Your sessions and memory are backed up (`protostar sessions push`,
   `protostar memory push`, or the capture hooks do it as you work).
 - The registry is recent enough: it lists `search`, `redacted-read`,
-  `session-skills` and `memory-redacted-read` in its capabilities. A tool that needs one the registry
+  `session-skills` and `memory-redacted-read` in its capabilities, and for your
+  custom agents, `agent-search` and `agent-content`. A tool that needs one the registry
   lacks says so instead of answering.
 
 ## Add the server to Claude Code
@@ -43,16 +44,20 @@ speaks MCP over standard input and output.
 
 | Tool | Arguments | What it returns |
 |---|---|---|
-| `search` | `query`, and optionally `kind` (`session` or `memory`), `project` (an id, text in its name, or `.` for the project of the folder the agent runs in) and `limit` (1 to 100, default 20) | Hits, best first: each with `kind`, a session's `id`, `title` or memory `path`, `project`, `machineName`, `date` and a `snippet` with the matches between « and ». The same as `protostar search --json`. |
+| `search` | `query`, and optionally `kind` (`session` or `memory`, or `agent` to search your custom agents instead), `project` (an id, text in its name, or `.` for the project of the folder the agent runs in) and `limit` (1 to 100, default 20) | Hits, best first: each with `kind`, a session's `id`, `title` or memory `path`, `project`, `machineName`, `date` and a `snippet` with the matches between « and ». The same as `protostar search --json`. With `kind: agent`, each hit is one of your custom agents (Claude Code subagent definitions) by what its file says, with `name`, `version`, `description` and `project`, for `get_agent`. Agents are only searched when asked for. |
 | `list_sessions` | Optionally `project`, `machine` (a machine id), `since` (an ISO 8601 date or time) and `limit` (1 to 100, default 25) | Backed-up sessions, newest activity first, as `protostar sessions list --json` prints them. Sessions not backed up yet are not listed. |
 | `get_session` | `id` (a whole id or enough of its start), and optionally `full` and `offset` | The session's record and its messages in order: prompts, replies and tool calls, each with an `index`. With `full`, also tool inputs and results, and each subagent's conversation where it ran. The records are those of `protostar sessions show --json`. |
 | `get_session_skills` | `id` (a whole id or enough of its start) | The session's record and the skills it and its subagents used, earliest first: `name`, `uses`, `firstUsedAt`, `lastUsedAt`, and the registry skill it matched (`skillId`) with `version` and `versionInferred: true`. A transcript records only a skill's name, so the registry infers the version as the newest one pushed by the time the session used it; with none pushed by then, `version` is absent. A plugin skill (`plugin:skill`) matches no registry skill. `deleted: true` marks a skill since deleted. |
 | `get_memory` | `project` (an id or text in its name), and optionally `path` | The project's memory files as the registry has them now: `path`, `version`, the machine that wrote it and its `content`. |
+| `get_agent` | `name`, and optionally `project` (an id or text in its name) and `version` | One of your custom agents as the registry has it: `name`, `projectId`, `project`, `version`, `description`, `path` (in the agents folder), `pushedAt` and `content`, the whole Markdown file. `project` is needed only when the name is both a personal and a project agent, or in several projects; the error `ambiguous_agent` lists them. Installing an agent stays a CLI action. |
 
 A typical exchange: the agent calls `search` with "EF Core migration", takes the
 `id` of the session hit, calls `get_session` with it to read the prompts,
 replies and tool calls in order, and `get_session_skills` to see which skills it
-used, so it can repeat the approach with the same ones.
+used, so it can repeat the approach with the same ones. To delegate the way it
+did before, it calls `search` with `kind: agent` and what the work needs (for
+example "review migrations"), then `get_agent` with the hit's `name` to read the
+agent's definition.
 
 ## Secrets stay redacted
 

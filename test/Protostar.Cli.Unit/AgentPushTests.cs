@@ -392,6 +392,10 @@ public sealed class AgentPushTests : IDisposable
             return Task.FromResult(new AgentPushOutcome(AgentPushStatus.Created, agent.Version + 1, null, projectId));
         }
 
+        public Task<ApiResult<RemoteAgentContent>> GetRedactedAgentContentAsync(
+            Uri registry, string accessToken, string name, Guid? projectId, int? version, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
         public Task<RegistryAgentList> ListAgentsAsync(Uri registry, string accessToken, CancellationToken cancellationToken)
         {
             ListCalls++;
