@@ -21,10 +21,9 @@ namespace Protostar.Cli.Agents;
 /// the command confirms it with one list request per run.
 /// </para>
 /// <para>
-/// A record of a project agent that a link on another machine moved is followed when the list shows an agent of that
-/// name in another project at exactly the version and content the record synced, and none left in the recorded project.
-/// That is the cheap half of <see cref="Skills.MovedSkillLedger.FollowAsync"/>; the half that downloads an older version
-/// waits for agent downloads (7.2).
+/// A record of a project agent that a link on another machine moved is followed through
+/// <see cref="MovedAgentLedger.FollowAsync"/>: an agent of that name in another project, none left in the recorded
+/// project, and the recorded version's content (from the list, or one download when the agent moved on since) the same.
 /// </para>
 /// </remarks>
 internal sealed class AgentPushService : IAgentPushService
@@ -207,7 +206,7 @@ internal sealed class AgentPushService : IAgentPushService
             foreach (var (index, _, hash) in pending.ToList())
             {
                 var agent = selected[index];
-                if (StillInRegistry(registry, agent, agents))
+                if (await StillInRegistryAsync(registry, session.AccessToken, agent, agents, cancellationToken))
                     continue;
                 gone.Add(index);
                 if (Removal(registry, agent, list) is { } removal && !request.Force)
@@ -220,7 +219,7 @@ internal sealed class AgentPushService : IAgentPushService
             foreach (var (index, content, hash) in unconfirmed)
             {
                 var agent = selected[index];
-                if (StillInRegistry(registry, agent, agents))
+                if (await StillInRegistryAsync(registry, session.AccessToken, agent, agents, cancellationToken))
                 {
                     var recorded = _ledger.Get(registry, agent.Path)!;
                     entries[index] = new AgentPushEntry(agent, new AgentPushOutcome(AgentPushStatus.Unchanged, recorded.Version, null, recorded.ProjectId));
@@ -301,8 +300,8 @@ internal sealed class AgentPushService : IAgentPushService
 
     // Whether the registry agent this copy last synced as is still listed. A copy that never synced counts as present.
     // An agent of that name whose versions start after the copy's is a new agent that reused the name, not this one. One
-    // a link moved to another project, at exactly the synced version and content, is followed there.
-    private bool StillInRegistry(Uri registry, DiscoveredAgent agent, IReadOnlyList<RegistryAgent> agents)
+    // a link moved to another project is followed there (MovedAgentLedger.FollowAsync).
+    private async Task<bool> StillInRegistryAsync(Uri registry, string accessToken, DiscoveredAgent agent, IReadOnlyList<RegistryAgent> agents, CancellationToken cancellationToken)
     {
         if (Synced(registry, agent) is not { } recorded)
             return true;
@@ -311,14 +310,14 @@ internal sealed class AgentPushService : IAgentPushService
                             !(recorded.Version >= 1 && recorded.Version < a.FirstVersion)))
             return true;
 
-        if (recorded.ProjectId is null || agents.Any(a => a.ProjectId == recorded.ProjectId && string.Equals(a.Name, recorded.Name, StringComparison.Ordinal)))
-            return false;
-        var moved = agents.FirstOrDefault(a => a.ProjectId is not null && string.Equals(a.Name, recorded.Name, StringComparison.Ordinal) &&
-            a.Version == recorded.Version && string.Equals(a.ContentHash, recorded.ContentHash, StringComparison.OrdinalIgnoreCase));
-        if (moved is null)
-            return false;
-        _ledger.Record(registry, agent.Path, recorded with { ProjectId = moved.ProjectId });
-        return true;
+        foreach (var moved in agents.Where(a => a.ProjectId is not null && a.ProjectId != recorded.ProjectId && string.Equals(a.Name, recorded.Name, StringComparison.Ordinal)))
+        {
+            var followed = await MovedAgentLedger.FollowAsync(_api, _ledger, registry, accessToken, agent.Path, recorded, moved, agents, cancellationToken);
+            if (followed?.ProjectId == moved.ProjectId)
+                return true;
+        }
+
+        return false;
     }
 
     private RegistryRemovedAgent? Removal(Uri registry, DiscoveredAgent agent, RegistryAgentList list) =>

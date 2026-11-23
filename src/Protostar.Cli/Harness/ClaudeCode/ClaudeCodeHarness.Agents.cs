@@ -76,6 +76,12 @@ internal sealed partial class ClaudeCodeHarness : IAgentCapability
             return (null, null);
         }
 
+        return ParseAgentFrontMatter(text);
+    }
+
+    // The name and description from an agent file's text; nulls when its leading `---` block or its YAML cannot be read.
+    internal static (string? Name, string? Description) ParseAgentFrontMatter(string text)
+    {
         var lines = text.TrimStart('﻿').Replace("\r\n", "\n").Split('\n');
         var start = Array.FindIndex(lines, l => l.Trim().Length > 0);
         if (start < 0 || lines[start].Trim() != "---")

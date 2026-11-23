@@ -53,7 +53,7 @@ internal sealed partial class RegistryApi : IAgentApi
 
         return new RegistryAgentList(
             agents.Where(a => a.Name is not null && a.ContentHash is not null)
-                .Select(a => new RegistryAgent(a.Name!, a.Version, a.ContentHash!, a.ProjectId, a.ProjectName, a.FirstVersion ?? 1))
+                .Select(a => new RegistryAgent(a.Name!, a.Version, a.ContentHash!, a.ProjectId, a.ProjectName, a.FirstVersion ?? 1, a.Description, a.Path))
                 .ToList(),
             (body.Removed ?? []).Where(r => r.Name is not null)
                 .Select(r => new RegistryRemovedAgent(r.Name!, r.ProjectId, r.LastVersion, r.RenamedTo))
@@ -62,11 +62,27 @@ internal sealed partial class RegistryApi : IAgentApi
     }
 
     /// <inheritdoc />
-    public async Task<ApiResult<RemoteAgentContent>> GetRedactedAgentContentAsync(
-        Uri registry, string accessToken, string name, Guid? projectId, int? version, CancellationToken cancellationToken)
+    public Task<ApiResult<RemoteAgentContent>> GetRedactedAgentContentAsync(
+        Uri registry, string accessToken, string name, Guid? projectId, int? version, CancellationToken cancellationToken) =>
+        GetAgentContentAsync(registry, accessToken, name, projectId, version, redacted: true, cancellationToken);
+
+    /// <inheritdoc />
+    public async Task<ApiResult<RemoteAgentContent>> GetAgentContentAsync(
+        Uri registry, string accessToken, string name, Guid? projectId, int? version, CancellationToken cancellationToken) =>
+        MissingRoute(await GetAgentContentAsync(registry, accessToken, name, projectId, version, redacted: false, cancellationToken), RegistryCapability.AgentContent);
+
+    private async Task<ApiResult<RemoteAgentContent>> GetAgentContentAsync(
+        Uri registry, string accessToken, string name, Guid? projectId, int? version, bool redacted, CancellationToken cancellationToken)
     {
-        var query = "redacted=true" + (projectId is { } id ? $"&projectId={id}" : "") + (version is { } v ? $"&version={v}" : "");
-        using var request = Request(HttpMethod.Get, registry, $"/v1/agents/{Uri.EscapeDataString(name)}/content?{query}", accessToken);
+        var parameters = new List<string>();
+        if (redacted)
+            parameters.Add("redacted=true");
+        if (projectId is { } id)
+            parameters.Add($"projectId={id}");
+        if (version is { } v)
+            parameters.Add($"version={v}");
+        var query = parameters.Count == 0 ? "" : "?" + string.Join('&', parameters);
+        using var request = Request(HttpMethod.Get, registry, $"/v1/agents/{Uri.EscapeDataString(name)}/content{query}", accessToken);
         return await SendAsync(
             request,
             async response => await response.Content.ReadFromJsonAsync<RemoteAgentContent>(TranscriptJson.Options) ?? throw new JsonException("Empty response."),
@@ -120,5 +136,7 @@ internal sealed partial class RegistryApi : IAgentApi
         [JsonPropertyName("projectId")] public Guid? ProjectId { get; init; }
         [JsonPropertyName("projectName")] public string? ProjectName { get; init; }
         [JsonPropertyName("firstVersion")] public int? FirstVersion { get; init; }
+        [JsonPropertyName("description")] public string? Description { get; init; }
+        [JsonPropertyName("path")] public string? Path { get; init; }
     }
 }
