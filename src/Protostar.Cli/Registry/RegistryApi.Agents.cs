@@ -61,6 +61,18 @@ internal sealed partial class RegistryApi : IAgentApi
             null);
     }
 
+    /// <inheritdoc />
+    public async Task<ApiResult<RemoteAgentContent>> GetRedactedAgentContentAsync(
+        Uri registry, string accessToken, string name, Guid? projectId, int? version, CancellationToken cancellationToken)
+    {
+        var query = "redacted=true" + (projectId is { } id ? $"&projectId={id}" : "") + (version is { } v ? $"&version={v}" : "");
+        using var request = Request(HttpMethod.Get, registry, $"/v1/agents/{Uri.EscapeDataString(name)}/content?{query}", accessToken);
+        return await SendAsync(
+            request,
+            async response => await response.Content.ReadFromJsonAsync<RemoteAgentContent>(TranscriptJson.Options) ?? throw new JsonException("Empty response."),
+            cancellationToken);
+    }
+
     // As ToOutcomeAsync for skills: 201 new, 200 unchanged, 409 by problem type, other 4xx refused, the rest failed. A bare
     // 404 (no problem body) is a registry without agents.
     private static async Task<AgentPushOutcome> ToAgentOutcomeAsync(HttpResponseMessage response, CancellationToken cancellationToken)

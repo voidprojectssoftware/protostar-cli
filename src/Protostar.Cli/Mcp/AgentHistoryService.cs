@@ -4,7 +4,7 @@ using Protostar.Cli.Sessions;
 
 namespace Protostar.Cli.Mcp;
 
-/// <summary>Reads the user's backed-up sessions and memory from the registry for <c>protostar mcp</c>, never changing anything.</summary>
+/// <summary>Reads the user's backed-up sessions, memory and custom agents from the registry for <c>protostar mcp</c>, never changing anything.</summary>
 internal interface IAgentHistoryService
 {
     /// <summary>The registry's sessions matching <paramref name="query"/>, newest activity first.</summary>
@@ -30,6 +30,49 @@ internal interface IAgentHistoryService
     /// <param name="project">The project's id, or text in its name, matched against the projects that have memory.</param>
     /// <remarks>Refused on a registry that does not list <c>memory-redacted-read</c>, for the same reason as <see cref="OpenSessionAsync"/>.</remarks>
     Task<MemoryReadResult> GetMemoryAsync(string? registry, string project, string? path, CancellationToken cancellationToken);
+
+    /// <summary>One of the user's custom agents, its file with secrets redacted by the registry.</summary>
+    /// <param name="name">The agent's exact name, as search shows it.</param>
+    /// <param name="project">
+    /// The agent's project: its id, or text in its name. <c>null</c> picks the one agent of that name, which must be
+    /// unambiguous; when the name is both a personal and a project agent, or in several projects, the candidates come back.
+    /// </param>
+    /// <param name="version">The version to read; <c>null</c> for the current one.</param>
+    /// <remarks>
+    /// Refused on a registry that does not list <c>agent-content</c>, strictly, for the same reason as
+    /// <see cref="OpenSessionAsync"/>: the redacted read is part of that capability.
+    /// </remarks>
+    Task<AgentReadResult> GetAgentAsync(string? registry, string name, string? project, int? version, CancellationToken cancellationToken);
+}
+
+/// <summary>Whether <see cref="IAgentHistoryService.GetAgentAsync"/> found the agent it was asked for.</summary>
+internal enum AgentReadOutcome
+{
+    Found,
+
+    /// <summary>The user has no agent of that name (in that project), or no such version.</summary>
+    NotFound,
+
+    /// <summary>The name matches agents in more than one scope; <see cref="AgentReadResult.Candidates"/> lists them.</summary>
+    Ambiguous,
+
+    /// <summary>The registry could not be asked; <see cref="AgentReadResult.Failure"/> says why.</summary>
+    Failed,
+}
+
+/// <summary>The result of reading one custom agent.</summary>
+/// <param name="Detail">For <see cref="AgentReadOutcome.Failed"/> or <see cref="AgentReadOutcome.NotFound"/>, the reason in words.</param>
+/// <param name="ProjectName">The project of the agent found, for a project agent.</param>
+/// <param name="Candidates">For <see cref="AgentReadOutcome.Ambiguous"/>, the agents of that name to choose from.</param>
+internal sealed record AgentReadResult(
+    AgentReadOutcome Outcome, SessionSyncFailure Failure, string? Detail, Uri? Registry, RemoteAgentContent? Content, string? ProjectName,
+    IReadOnlyList<RegistryAgent> Candidates)
+{
+    public static AgentReadResult Fail(SessionSyncFailure failure, string? detail, Uri? registry) =>
+        new(AgentReadOutcome.Failed, failure, detail, registry, null, null, []);
+
+    public static AgentReadResult NotFound(string detail, Uri registry) =>
+        new(AgentReadOutcome.NotFound, SessionSyncFailure.None, detail, registry, null, null, []);
 }
 
 /// <summary>The skills a session used, or why they could not be listed.</summary>
@@ -78,18 +121,24 @@ internal sealed class AgentHistoryService : IAgentHistoryService
     /// <summary>The capability that serves the skills a session used (registry#14).</summary>
     internal const string SessionSkills = RegistryCapability.SessionSkills;
 
+    /// <summary>The capability that serves an agent's file, with <c>redacted=true</c> honoured.</summary>
+    internal const string AgentContent = RegistryCapability.AgentContent;
+
     private readonly IAccessTokenProvider _tokens;
     private readonly IRegistryCapabilities _capabilities;
     private readonly ITranscriptApi _transcripts;
     private readonly IMemoryApi _memory;
+    private readonly IAgentApi _agents;
     private readonly ISessionReader _reader;
 
-    public AgentHistoryService(IAccessTokenProvider tokens, IRegistryCapabilities capabilities, ITranscriptApi transcripts, IMemoryApi memory, ISessionReader reader)
+    public AgentHistoryService(
+        IAccessTokenProvider tokens, IRegistryCapabilities capabilities, ITranscriptApi transcripts, IMemoryApi memory, IAgentApi agents, ISessionReader reader)
     {
         _tokens = tokens;
         _capabilities = capabilities;
         _transcripts = transcripts;
         _memory = memory;
+        _agents = agents;
         _reader = reader;
     }
 
@@ -163,6 +212,40 @@ internal sealed class AgentHistoryService : IAgentHistoryService
             : MemoryReadResult.Fail(SessionSyncFailure.RegistryUnreachable, content.Error, url);
     }
 
+    /// <inheritdoc />
+    public async Task<AgentReadResult> GetAgentAsync(string? registry, string name, string? project, int? version, CancellationToken cancellationToken)
+    {
+        var connection = await ConnectAsync(registry, AgentContent, cancellationToken);
+        if (connection.Failure != SessionSyncFailure.None)
+            return AgentReadResult.Fail(connection.Failure, connection.Detail, connection.Registry);
+        var (url, token) = (connection.Registry!, connection.Token!);
+
+        // The list says which scopes have an agent of that name, so a project can be given by name and left out when only one has it.
+        var listed = await _agents.ListAgentsAsync(url, token, cancellationToken);
+        if (listed.Agents is not { } agents)
+            return AgentReadResult.Fail(SessionSyncFailure.RegistryUnreachable, listed.Error, url);
+
+        var named = agents.Where(a => string.Equals(a.Name, name, StringComparison.Ordinal)).ToList();
+        var matches = project is null ? named
+            : Guid.TryParse(project, out var id) ? named.Where(a => a.ProjectId == id).ToList()
+            : named.Where(a => a.ProjectName?.Contains(project, StringComparison.OrdinalIgnoreCase) == true).ToList();
+        if (matches.Count == 0)
+        {
+            var where = project is null ? "" : $" in a project matching '{project}'";
+            return AgentReadResult.NotFound($"You have no agent named '{name}'{where}. Use search with kind agent to find one.", url);
+        }
+        if (matches.Count > 1)
+            return new AgentReadResult(AgentReadOutcome.Ambiguous, SessionSyncFailure.None, null, url, null, null, matches);
+
+        var agent = matches[0];
+        var content = await _agents.GetRedactedAgentContentAsync(url, token, agent.Name, agent.ProjectId, version, cancellationToken);
+        if (content.Ok)
+            return new AgentReadResult(AgentReadOutcome.Found, SessionSyncFailure.None, null, url, content.Value, agent.ProjectName, []);
+        return content.AgentUnknown
+            ? AgentReadResult.NotFound(content.Error!, url)
+            : AgentReadResult.Fail(SessionSyncFailure.RegistryUnreachable, content.Error, url);
+    }
+
     private sealed record Connection(SessionSyncFailure Failure, string? Detail, Uri? Registry, string? Token);
 
     // The registry, a current access token, and a registry that speaks this CLI's API and has `capability`.
@@ -193,7 +276,7 @@ internal sealed class AgentHistoryService : IAgentHistoryService
 
     // Strict: a registry too old to list capabilities is refused, not asked. The redacted reads must never be assumed,
     // because a registry that ignores `redacted=true` serves the stored lines, secrets included, and refusing is the
-    // lesser harm. Session skills came after the list itself, so a registry without the list cannot have them.
-    // (redacted-read is checked by ISessionReader.OpenAsync, for sessions show too.)
-    private static bool Strict(string capability) => capability is MemoryRedactedRead or SessionSkills;
+    // lesser harm. Session skills and agent content came after the list itself, so a registry without the list cannot
+    // have them. (redacted-read is checked by ISessionReader.OpenAsync, for sessions show too.)
+    private static bool Strict(string capability) => capability is MemoryRedactedRead or SessionSkills or AgentContent;
 }

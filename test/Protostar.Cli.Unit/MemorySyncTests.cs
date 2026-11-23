@@ -1017,6 +1017,9 @@ public sealed class MemorySyncTests : IDisposable
         public Task<ApiResult<IReadOnlyList<SessionSkill>>> GetSkillsAsync(Uri registry, string accessToken, string harness, string key, CancellationToken cancellationToken) =>
             throw new NotSupportedException();
 
+        public Task<ApiResult<IReadOnlyList<SessionAgent>>> GetAgentsAsync(Uri registry, string accessToken, string harness, string key, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
         public Task<ApiResult<Stream>> OpenRedactedContentAsync(Uri registry, string accessToken, string harness, string key, CancellationToken cancellationToken) =>
             throw new NotSupportedException();
 

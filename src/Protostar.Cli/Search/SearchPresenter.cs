@@ -74,17 +74,19 @@ internal static partial class SearchPresenter
     /// <summary>A hit as <c>search --json</c> prints it.</summary>
     /// <remarks>
     /// <c>id</c> is a session's harness key, the id <c>sessions show</c> takes; memory has none, and is named by
-    /// <c>projectId</c> and <c>path</c>. The snippet keeps the registry's « and » around each match.
+    /// <c>projectId</c> and <c>path</c>; an agent is named by <c>name</c> and <c>projectId</c>, with its <c>version</c> and
+    /// <c>description</c>, and has no machine. Fields a hit does not have are left out. The snippet keeps the registry's
+    /// « and » around each match.
     /// </remarks>
     public static JsonNode Record(SearchHit hit) => JsonSerializer.SerializeToNode(
         new HitRow(
-            hit.Kind, hit.Key, hit.Harness, hit.ParentKey, hit.Title, hit.Path, hit.ProjectId, hit.ProjectName, hit.MachineId,
-            hit.MachineName, hit.Date, hit.Snippet),
+            hit.Kind, hit.Key, hit.Harness, hit.ParentKey, hit.Title, hit.Path, hit.Name, hit.Version, hit.Description, hit.ProjectId,
+            hit.ProjectName, hit.MachineId, hit.MachineName, hit.Date, hit.Snippet),
         TranscriptJson.Options)!;
 
     private sealed record HitRow(
-        string Kind, string? Id, string? Harness, string? ParentId, string? Title, string? Path, Guid? ProjectId, string? Project,
-        Guid MachineId, string? MachineName, DateTimeOffset? Date, string Snippet);
+        string Kind, string? Id, string? Harness, string? ParentId, string? Title, string? Path, string? Name, int? Version,
+        string? Description, Guid? ProjectId, string? Project, Guid? MachineId, string? MachineName, DateTimeOffset? Date, string Snippet);
 
     /// <summary>The snippet as runs of plain and matched text, its whitespace collapsed and cut to <paramref name="max"/> characters.</summary>
     /// <remarks>
@@ -132,14 +134,25 @@ internal static partial class SearchPresenter
     private static string Highlight(IEnumerable<(string Text, bool Match)> runs) =>
         string.Concat(runs.Select(r => r.Match ? $"[bold yellow]{Markup.Escape(r.Text)}[/]" : Markup.Escape(r.Text)));
 
-    private static string Kind(SearchHit hit) => hit.Kind == "memory" ? "memory" : hit.ParentKey is null ? "session" : "subagent";
+    private static string Kind(SearchHit hit) => hit.Kind switch
+    {
+        "memory" or SearchService.AgentKind => hit.Kind,
+        _ => hit.ParentKey is null ? "session" : "subagent",
+    };
 
-    private static string Title(SearchHit hit) => hit.Kind == "memory" ? hit.Path ?? "(unnamed)" : hit.Title ?? "(untitled)";
+    private static string Title(SearchHit hit) => hit.Kind switch
+    {
+        "memory" => hit.Path ?? "(unnamed)",
+        SearchService.AgentKind => $"{hit.Name} v{hit.Version}" + (hit.Description is { Length: > 0 } d ? $": {d}" : ""),
+        _ => hit.Title ?? "(untitled)",
+    };
 
     // "project · machine · 2026-11-20 10:00 · 7d3c9a52": the session's short id last, as sessions show takes it.
     private static string Meta(SearchHit hit)
     {
-        var parts = new List<string> { hit.ProjectName ?? "(no project)", hit.MachineName ?? "(unknown machine)" };
+        var parts = hit.Kind == SearchService.AgentKind
+            ? new List<string> { hit.ProjectName ?? "personal" }
+            : new List<string> { hit.ProjectName ?? "(no project)", hit.MachineName ?? "(unknown machine)" };
         if (hit.Date is { } date)
             parts.Add(date.ToLocalTime().ToString("yyyy-MM-dd HH:mm"));
         if (hit.Key is { } key)

@@ -11,7 +11,7 @@ using Protostar.Cli.Sessions;
 
 namespace Protostar.Cli.Mcp;
 
-/// <summary>The tools <c>protostar mcp</c> serves: read-only views of the user's backed-up sessions and memory, as JSON.</summary>
+/// <summary>The tools <c>protostar mcp</c> serves: read-only views of the user's backed-up sessions, memory and custom agents, as JSON.</summary>
 /// <remarks>
 /// <para>
 /// This is the presenter of the MCP face: each tool maps its arguments to a service call and shapes the answer, with
@@ -22,7 +22,7 @@ namespace Protostar.Cli.Mcp;
 /// <para>
 /// There are no write tools, by construction: nothing here calls anything that changes the registry or the disk.
 /// Every text an agent sees was redacted by the registry: search snippets, transcripts read with <c>redacted=true</c>,
-/// and memory read with <c>redacted=true</c>, each behind the capability that says the registry honours it.
+/// and memory and agents read with <c>redacted=true</c>, each behind the capability that says the registry honours it.
 /// </para>
 /// <para>
 /// A result is at most <see cref="MaxResultChars"/> characters of JSON, about 20,000 tokens, under the 25,000-token
@@ -44,6 +44,9 @@ internal sealed class HistoryTools
 
     /// <summary>A project name matches more than one project with memory; the error's <c>projects</c> lists them.</summary>
     internal const string AmbiguousProject = "ambiguous_project";
+
+    /// <summary>An agent name matches agents in more than one scope; the error's <c>agents</c> lists them.</summary>
+    internal const string AmbiguousAgent = "ambiguous_agent";
 
     // Room left in a page for what is around the messages: the session's own record and the offsets.
     private const int EnvelopeChars = 4_000;
@@ -71,18 +74,19 @@ internal sealed class HistoryTools
     [McpServerTool(Name = "search", Title = "Search history and memory", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false)]
     [Description("Search the developer's backed-up sessions and memory, from every project and machine, by what they say. Returns hits best first: " +
         "kind (session or memory), id (a session's id, for get_session), project, machineName, date and a snippet with each match between « and ». " +
-        "Secrets are redacted by the registry.")]
+        "With kind agent, searches the developer's custom agents (Claude Code subagent definitions) by what they do instead: each hit has name, " +
+        "version, description and project, for get_agent. Secrets are redacted by the registry.")]
     public async Task<CallToolResult> SearchAsync(
         [Description("The words to find. All are required; \"quoted words\" are a phrase, `or` gives an alternative, -word excludes.")] string query,
-        [Description("Only `session` (sessions and their subagents) or `memory`. Both when left out.")] string? kind = null,
+        [Description("Only `session` (sessions and their subagents) or `memory`; or `agent` for custom agents, which are searched only then. Sessions and memory when left out.")] string? kind = null,
         [Description("Only this project: its id, text in its name, or `.` for the project of the folder the server runs in.")] string? project = null,
         [Description("How many hits, 1 to 100. Defaults to 20.")] int limit = 20,
         CancellationToken cancellationToken = default)
     {
         if (string.IsNullOrWhiteSpace(query) || query.Length > MaxQueryLength)
             return Invalid($"query must be 1 to {MaxQueryLength} characters.");
-        if (kind is not (null or "session" or "memory"))
-            return Invalid("kind must be session or memory.");
+        if (kind is not (null or "session" or "memory" or SearchService.AgentKind))
+            return Invalid("kind must be session, memory or agent.");
         if (limit is < 1 or > MaxSearchLimit)
             return Invalid($"limit must be 1 to {MaxSearchLimit}.");
 
@@ -218,6 +222,61 @@ internal sealed class HistoryTools
         }
 
         return Ok(MemoryRecord(result.Content!, MaxResultChars));
+    }
+
+    [McpServerTool(Name = "get_agent", Title = "Read a custom agent", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false)]
+    [Description("Read one of the developer's custom agents (a Claude Code subagent definition) as the registry has it, with secrets redacted: name, " +
+        "project, version, description, path (in the agents folder), pushedAt and content, the whole Markdown file with its front matter. Find agents " +
+        "with search, kind agent. Read-only: installing an agent is done with the protostar CLI.")]
+    public async Task<CallToolResult> GetAgentAsync(
+        [Description("The agent's name, as search shows it.")] string name,
+        [Description("The agent's project: its id, or text in its name. Needed only when the name is both a personal and a project agent, or in several projects.")] string? project = null,
+        [Description("The version to read. The current one when left out.")] int? version = null,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(name))
+            return Invalid("name is required: an agent's name from search with kind agent.");
+        if (version is < 1)
+            return Invalid("version must be 1 or more.");
+
+        var result = await _history.GetAgentAsync(_registry, name.Trim(), string.IsNullOrWhiteSpace(project) ? null : project.Trim(), version, cancellationToken);
+        switch (result.Outcome)
+        {
+            case AgentReadOutcome.NotFound:
+                return Error(SessionsJson.NotFound, result.Detail ?? "Not found.");
+            case AgentReadOutcome.Ambiguous:
+                return Error(AmbiguousAgent, $"More than one of your agents is named '{name}'. Give its project.", new JsonObject
+                {
+                    ["agents"] = new JsonArray([.. result.Candidates.Select(a => (JsonNode)new JsonObject
+                    {
+                        ["name"] = a.Name, ["projectId"] = a.ProjectId, ["project"] = a.ProjectName, ["version"] = a.Version,
+                    })]),
+                });
+            case AgentReadOutcome.Failed:
+                return Failure(result.Failure, result.Detail, result.Registry)!;
+        }
+
+        return Ok(AgentRecord(result.Content!, result.ProjectName, MaxResultChars));
+    }
+
+    /// <summary>An agent as get_agent returns it, its file cut to fit <paramref name="budget"/> characters of JSON, with <c>truncated</c> set when it was.</summary>
+    internal static JsonObject AgentRecord(RemoteAgentContent agent, string? projectName, int budget)
+    {
+        var record = new JsonObject
+        {
+            ["name"] = agent.Name, ["projectId"] = agent.ProjectId, ["project"] = projectName, ["version"] = agent.Version,
+            ["description"] = agent.Description, ["path"] = agent.Path, ["pushedAt"] = agent.PushedAt,
+            ["content"] = Encoding.UTF8.GetString(agent.Content),
+        };
+        var size = SessionsJson.Serialize(record).Length;
+        if (size > budget)
+        {
+            // Each character cut removes at least one character of JSON, so cutting the overflow (and a margin) fits.
+            var text = record["content"]!.GetValue<string>();
+            record["content"] = text[..Math.Max(0, text.Length - (size - budget) - 100)];
+            record["truncated"] = true;
+        }
+        return record;
     }
 
     /// <summary>One page of a session's messages and where the next page starts.</summary>

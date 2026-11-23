@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace Protostar.Cli.Registry;
 
 /// <summary>The registry's custom agent endpoints (<c>/v1/agents</c>), as the CLI uses them.</summary>
@@ -22,6 +24,42 @@ internal interface IAgentApi
 
     /// <summary>Lists every one of the caller's agents, personal and project, with the names removed (<c>GET /v1/agents?includeProjects=true</c>).</summary>
     Task<RegistryAgentList> ListAgentsAsync(Uri registry, string accessToken, CancellationToken cancellationToken);
+
+    /// <summary>Downloads one version of the caller's agent with known secrets redacted (<c>GET /v1/agents/{name}/content?redacted=true</c>).</summary>
+    /// <param name="registry">The registry base URL.</param>
+    /// <param name="accessToken">A current bearer token for that registry.</param>
+    /// <param name="name">The agent's exact name.</param>
+    /// <param name="projectId">The agent's project; <c>null</c> for the personal agent of that name.</param>
+    /// <param name="version">The version to read; <c>null</c> for the current one.</param>
+    /// <param name="cancellationToken">Cancels the download.</param>
+    /// <remarks>
+    /// Callers check the <c>agent-content</c> capability first, strictly: the redacted read is part of it. An agent or
+    /// version the caller does not have comes back with <see cref="ApiResult{T}.AgentUnknown"/> set.
+    /// </remarks>
+    Task<ApiResult<RemoteAgentContent>> GetRedactedAgentContentAsync(
+        Uri registry, string accessToken, string name, Guid? projectId, int? version, CancellationToken cancellationToken);
+}
+
+/// <summary>One version of an agent as the registry serves it, with its file.</summary>
+/// <remarks>Read with <c>redacted=true</c>, so <see cref="Content"/> may not hash to <see cref="ContentHash"/>, which is always the stored file's.</remarks>
+internal sealed record RemoteAgentContent
+{
+    [JsonPropertyName("name")] public string Name { get; init; } = "";
+    [JsonPropertyName("projectId")] public Guid? ProjectId { get; init; }
+    [JsonPropertyName("version")] public int Version { get; init; }
+    [JsonPropertyName("description")] public string? Description { get; init; }
+
+    /// <summary>The file's path relative to the agents folder, as it was pushed.</summary>
+    [JsonPropertyName("path")] public string Path { get; init; } = "";
+
+    [JsonPropertyName("contentHash")] public string ContentHash { get; init; } = "";
+    [JsonPropertyName("pushedAt")] public DateTimeOffset PushedAt { get; init; }
+
+    /// <summary>True when the registry replaced known secrets in <see cref="Content"/> with markers.</summary>
+    [JsonPropertyName("redacted")] public bool Redacted { get; init; }
+
+    /// <summary>The file's bytes (base64 in JSON).</summary>
+    [JsonPropertyName("content")] public byte[] Content { get; init; } = [];
 }
 
 /// <summary>One agent in the caller's registry, described by its current version.</summary>

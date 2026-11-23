@@ -12,4 +12,4 @@ Feature: Search my sessions and memory
   Scenario: An unknown kind is refused before anything runs
     When I run protostar with "search parentUuid --kind skills"
     Then the exit code is not 0
-    And the output contains "--kind must be session or memory."
+    And the output contains "--kind must be session, memory or agent."

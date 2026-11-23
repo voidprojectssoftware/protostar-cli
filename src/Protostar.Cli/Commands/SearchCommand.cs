@@ -30,7 +30,7 @@ internal sealed class SearchCommand : AsyncCommand<SearchCommand.Settings>
         public string Query { get; init; } = "";
 
         [CommandOption("-k|--kind <KIND>")]
-        [Description("Only `session` (sessions and their subagents) or `memory`. Both by default.")]
+        [Description("Only `session` (sessions and their subagents) or `memory`, or `agent` to search your custom agents instead. Sessions and memory by default.")]
         public string? Kind { get; init; }
 
         [CommandOption("-p|--project <ID|NAME|.>")]
@@ -52,7 +52,7 @@ internal sealed class SearchCommand : AsyncCommand<SearchCommand.Settings>
         public override ValidationResult Validate() =>
             string.IsNullOrWhiteSpace(Query) ? ValidationResult.Error("Give the words to search for.")
             : Query.Length > MaxQueryLength ? ValidationResult.Error($"The query may be at most {MaxQueryLength} characters.")
-            : Kind is not (null or "session" or "memory") ? ValidationResult.Error("--kind must be session or memory.")
+            : Kind is not (null or "session" or "memory" or SearchService.AgentKind) ? ValidationResult.Error("--kind must be session, memory or agent.")
             : Limit is < 1 or > MaxLimit ? ValidationResult.Error($"--limit must be 1 to {MaxLimit}.")
             : ValidationResult.Success();
     }

@@ -119,13 +119,14 @@ internal static class SessionsJson
             t.Status, t.BytesUploaded, t.BytesPending, t.Rewritten, t.Message, t.Verified),
         TranscriptJson.Options)!;
 
-    /// <summary>The first <c>sessions show</c> record: the session itself, and the skills it used when the registry lists them.</summary>
+    /// <summary>The first <c>sessions show</c> record: the session itself, and the skills and custom agents it used when the registry lists them.</summary>
     /// <remarks>
     /// <c>session</c> is the <c>sessions list</c> record. <c>skills</c> is left out when the registry cannot list them
     /// (it lacks <c>session-skills</c>, or the request failed); each has the registry's fields plus <c>installedHere</c>,
-    /// which is left out for a skill not looked for (a plugin's).
+    /// which is left out for a skill not looked for (a plugin's). <c>agents</c> is the same for <c>session-agents</c>,
+    /// with the registry's fields as they are: the user's own agents only, never built-in or plugin agent types.
     /// </remarks>
-    public static JsonNode SessionRecord(RemoteTranscript session, IReadOnlyList<UsedSkill>? skills)
+    public static JsonNode SessionRecord(RemoteTranscript session, IReadOnlyList<UsedSkill>? skills, IReadOnlyList<SessionAgent>? agents = null)
     {
         var record = new JsonObject
         {
@@ -134,6 +135,8 @@ internal static class SessionsJson
         };
         if (skills is not null)
             record["skills"] = new JsonArray([.. skills.Select(SkillRecord)]);
+        if (agents is not null)
+            record["agents"] = new JsonArray([.. agents.Select(a => JsonSerializer.SerializeToNode(a, TranscriptJson.Options))]);
         return record;
     }
 

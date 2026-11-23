@@ -68,6 +68,43 @@ internal interface ITranscriptApi
     /// comes back with <see cref="ApiResult{T}.TranscriptUnknown"/> set.
     /// </remarks>
     Task<ApiResult<IReadOnlyList<SessionSkill>>> GetSkillsAsync(Uri registry, string accessToken, string harness, string key, CancellationToken cancellationToken);
+
+    /// <summary><c>GET /v1/transcripts/{harness}/{key}/agents</c>: the caller's custom agents the transcript (and, for a session, its subagents) delegated to.</summary>
+    /// <remarks>
+    /// Callers check the <c>session-agents</c> capability first. Only the caller's own agents come back: the registry
+    /// leaves out built-in and plugin agent types. A transcript the registry does not hold comes back with
+    /// <see cref="ApiResult{T}.TranscriptUnknown"/> set.
+    /// </remarks>
+    Task<ApiResult<IReadOnlyList<SessionAgent>>> GetAgentsAsync(Uri registry, string accessToken, string harness, string key, CancellationToken cancellationToken);
+}
+
+/// <summary>One of the caller's custom agents a session delegated to, as the registry reports it.</summary>
+/// <remarks>A transcript records only the agent type, so the registry infers the version from push times; the prompt is never kept.</remarks>
+internal sealed record SessionAgent
+{
+    /// <summary>The agent type as the session named it.</summary>
+    [JsonPropertyName("name")] public string Name { get; init; } = "";
+
+    /// <summary>How many times the session delegated to it.</summary>
+    [JsonPropertyName("uses")] public int Uses { get; init; }
+
+    [JsonPropertyName("firstUsedAt")] public DateTimeOffset? FirstUsedAt { get; init; }
+    [JsonPropertyName("lastUsedAt")] public DateTimeOffset? LastUsedAt { get; init; }
+
+    /// <summary>The registry agent it matched; <c>null</c> when it was deleted.</summary>
+    [JsonPropertyName("agentId")] public Guid? AgentId { get; init; }
+
+    /// <summary>The project of the agent it matched; <c>null</c> for a personal agent.</summary>
+    [JsonPropertyName("projectId")] public Guid? ProjectId { get; init; }
+
+    /// <summary>The version inferred to have been used; <c>null</c> when none had been pushed by the end of the session.</summary>
+    [JsonPropertyName("version")] public int? Version { get; init; }
+
+    /// <summary>True when <see cref="Version"/> is set: inferred from push times, never read from the transcript.</summary>
+    [JsonPropertyName("versionInferred")] public bool VersionInferred { get; init; }
+
+    /// <summary>True when the agent has since been deleted from the registry.</summary>
+    [JsonPropertyName("deleted")] public bool Deleted { get; init; }
 }
 
 /// <summary>One skill a session used, as the registry reports it.</summary>
@@ -101,7 +138,10 @@ internal sealed record SessionSkill
 /// <param name="TranscriptUnknown">The registry answered that it holds no transcript with that harness and key.</param>
 /// <param name="MemoryUnknown">The registry answered that the caller has no such project, or no memory file at that path.</param>
 /// <param name="Refused">The registry refused the request as invalid (400), so asking again unchanged would get the same answer.</param>
-internal sealed record ApiResult<T>(T? Value, string? Error, bool MachineUnknown = false, bool TranscriptUnknown = false, bool MemoryUnknown = false, bool Refused = false)
+/// <param name="AgentUnknown">The registry answered that the caller has no such agent, or no such version of it.</param>
+internal sealed record ApiResult<T>(
+    T? Value, string? Error, bool MachineUnknown = false, bool TranscriptUnknown = false, bool MemoryUnknown = false, bool Refused = false,
+    bool AgentUnknown = false)
 {
     public bool Ok => Error is null;
 
@@ -116,6 +156,8 @@ internal sealed record ApiResult<T>(T? Value, string? Error, bool MachineUnknown
     public static ApiResult<T> UnknownMemory(string error) => new(default, error, MemoryUnknown: true);
 
     public static ApiResult<T> RefusedRequest(string error) => new(default, error, Refused: true);
+
+    public static ApiResult<T> UnknownAgent(string error) => new(default, error, AgentUnknown: true);
 }
 
 /// <summary>Where a transcript's stored content ends in the registry.</summary>

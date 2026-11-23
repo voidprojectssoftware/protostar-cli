@@ -54,12 +54,16 @@ internal static class SessionShowPresenter
 
     /// <summary>Writes the session's entries as they are read and returns the exit code: 0, or 1 when the download failed part way.</summary>
     /// <param name="skills">The skills the session used, from <see cref="ISessionSkills"/>, started alongside the download; shown when it gives a list.</param>
-    public static Task<int> RenderAsync(OpenedSession session, IAsyncEnumerable<ShownEntry> entries, bool full, bool json, Task<IReadOnlyList<UsedSkill>?>? skills) =>
-        RenderAsync(session, entries, full, json, json ? null : ConversationWriter.ForConsole(), skills);
+    /// <param name="agents">The custom agents the session used, from <see cref="ISessionAgents"/>, started the same way; shown when it gives a list.</param>
+    public static Task<int> RenderAsync(
+        OpenedSession session, IAsyncEnumerable<ShownEntry> entries, bool full, bool json, Task<IReadOnlyList<UsedSkill>?>? skills,
+        Task<IReadOnlyList<SessionAgent>?>? agents) =>
+        RenderAsync(session, entries, full, json, json ? null : ConversationWriter.ForConsole(), skills, agents);
 
     /// <summary>Writes the session's entries through <paramref name="writer"/>, or as JSON Lines when it is <c>null</c>.</summary>
     internal static async Task<int> RenderAsync(
-        OpenedSession session, IAsyncEnumerable<ShownEntry> entries, bool full, bool json, ConversationWriter? writer, Task<IReadOnlyList<UsedSkill>?>? skills = null)
+        OpenedSession session, IAsyncEnumerable<ShownEntry> entries, bool full, bool json, ConversationWriter? writer, Task<IReadOnlyList<UsedSkill>?>? skills = null,
+        Task<IReadOnlyList<SessionAgent>?>? agents = null)
     {
         var harness = session.Detail.Transcript.Harness;
         var view = writer is null ? null : new ConversationView(writer);
@@ -77,16 +81,22 @@ internal static class SessionShowPresenter
                     writer?.Flush();
                 var more = await next;
 
-                // The skills are awaited once the download has answered, so their request runs alongside it rather
-                // than before it, and they are written before the first message.
+                // The skills and agents are awaited once the download has answered, so their requests run alongside it
+                // rather than before it, and they are written before the first message.
                 if (!headed)
                 {
                     headed = true;
                     var used = skills is null ? null : await skills;
+                    var delegated = agents is null ? null : await agents;
                     if (view is null)
-                        SessionsJson.WriteObject(SessionsJson.SessionRecord(session.Detail.Transcript, used));
-                    else if (used is not null)
-                        view.Skills(used);
+                        SessionsJson.WriteObject(SessionsJson.SessionRecord(session.Detail.Transcript, used, delegated));
+                    else
+                    {
+                        if (used is not null)
+                            view.Skills(used);
+                        if (delegated is not null)
+                            view.Agents(delegated);
+                    }
                 }
 
                 if (!more)
@@ -180,9 +190,43 @@ internal static class SessionShowPresenter
                 _out.Line(new Span("  ? the version in use then, inferred from when the skill's versions were pushed", "grey"));
         }
 
-        private static string Uses(SessionSkill skill) => skill.Uses == 1 ? "1 use" : $"{skill.Uses} uses";
+        // The user's custom agents the session delegated to, aligned as the skills are. Built-in and plugin agent types
+        // never reach here: the registry lists only the user's own agents.
+        public void Agents(IReadOnlyList<SessionAgent> used)
+        {
+            if (used.Count == 0)
+            {
+                _out.Line(new Span("Agents used: none of yours", "grey"));
+                return;
+            }
 
-        private static string Version(SessionSkill skill) => skill.Version is { } v ? $"v{v}{(skill.VersionInferred ? "?" : "")}" : "";
+            _out.Line(new Span("Agents used", "bold"));
+            var nameWidth = Math.Min(MaxSkillName, used.Max(a => a.Name.Length));
+            var usesWidth = used.Max(a => Uses(a.Uses).Length);
+            var versionWidth = used.Max(a => Version(a.Version, a.VersionInferred).Length);
+            foreach (var a in used)
+            {
+                var note = a.Deleted ? new Span("deleted from the registry", "yellow")
+                    : a.ProjectId is null ? new Span("personal", "grey")
+                    : new Span("project", "grey");
+                _out.Line(
+                    new Span("  " + Truncate(a.Name, MaxSkillName).PadRight(nameWidth) + "  "),
+                    new Span(Uses(a.Uses).PadLeft(usesWidth), "grey"),
+                    new Span("  " + Version(a.Version, a.VersionInferred).PadRight(versionWidth) + "  "),
+                    note);
+            }
+
+            if (used.Any(a => a.VersionInferred))
+                _out.Line(new Span("  ? the version in use then, inferred from when the agent's versions were pushed", "grey"));
+        }
+
+        private static string Uses(SessionSkill skill) => Uses(skill.Uses);
+
+        private static string Uses(int uses) => uses == 1 ? "1 use" : $"{uses} uses";
+
+        private static string Version(SessionSkill skill) => Version(skill.Version, skill.VersionInferred);
+
+        private static string Version(int? version, bool inferred) => version is { } v ? $"v{v}{(inferred ? "?" : "")}" : "";
 
         public void Write(ShownEntry shown, bool full)
         {

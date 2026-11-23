@@ -35,7 +35,7 @@ public sealed class McpServerTests
         var reader = new SessionReader(catalog, tokens, capabilities, api);
         return new HistoryTools(
             new SearchService(tokens, capabilities, api, new NotGit(), api, new FakeMachine()),
-            new AgentHistoryService(tokens, capabilities, api, api, reader),
+            new AgentHistoryService(tokens, capabilities, api, api, api, reader),
             reader, catalog, Registry);
     }
 
@@ -50,11 +50,11 @@ public sealed class McpServerTests
     }
 
     [Fact]
-    public void The_server_serves_exactly_five_tools_and_every_one_is_read_only()
+    public void The_server_serves_exactly_six_tools_and_every_one_is_read_only()
     {
         var tools = HistoryServer.Tools(Sut()).Select(t => t.ProtocolTool).ToList();
 
-        Assert.Equal(["search", "list_sessions", "get_session", "get_session_skills", "get_memory"], tools.Select(t => t.Name));
+        Assert.Equal(["search", "list_sessions", "get_session", "get_session_skills", "get_memory", "get_agent"], tools.Select(t => t.Name));
         Assert.All(tools, t =>
         {
             Assert.True(t.Annotations!.ReadOnlyHint);
@@ -114,6 +114,96 @@ public sealed class McpServerTests
 
         Assert.Equal(SessionsJson.RegistryIncompatible, ErrorCode(result));
         Assert.DoesNotContain(_registry.Asked, u => u.AbsolutePath.StartsWith("/v1/transcripts", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task search_with_kind_agent_asks_for_agents_and_returns_the_hits_name_version_and_description()
+    {
+        var result = await Sut().SearchAsync("flamingo", kind: "agent");
+
+        Assert.NotEqual(true, result.IsError);
+        var search = Assert.Single(_registry.Asked, u => u.AbsolutePath == "/v1/search");
+        Assert.Contains("kind=agent", search.Query, StringComparison.Ordinal);
+        var hit = Assert.Single(Body(result)["hits"]!.AsArray())!;
+        Assert.Equal(("agent", "migrator", 2), (hit["kind"]!.GetValue<string>(), hit["name"]!.GetValue<string>(), hit["version"]!.GetValue<int>()));
+        Assert.Equal("Plans migrations.", hit["description"]!.GetValue<string>());
+        Assert.Null(hit["machineId"]);
+    }
+
+    [Theory]
+    [InlineData("sessions,search,agent-content")]
+    [InlineData(null)]
+    public async Task search_with_kind_agent_on_a_registry_that_does_not_list_agent_search_is_refused_before_searching(string? capabilities)
+    {
+        _registry.Capabilities = capabilities?.Split(',');
+
+        Assert.Equal(SessionsJson.RegistryIncompatible, ErrorCode(await Sut().SearchAsync("flamingo", kind: "agent")));
+        Assert.DoesNotContain(_registry.Asked, u => u.AbsolutePath == "/v1/search");
+    }
+
+    [Fact]
+    public async Task get_agent_reads_the_file_redacted_and_returns_it_whole()
+    {
+        var result = await Sut().GetAgentAsync("migrator");
+
+        Assert.NotEqual(true, result.IsError);
+        var content = Assert.Single(_registry.Asked, u => u.AbsolutePath == "/v1/agents/migrator/content");
+        Assert.Equal("?redacted=true", content.Query);
+        var body = Body(result);
+        Assert.Equal(("migrator", 2, "migrator.md"), (body["name"]!.GetValue<string>(), body["version"]!.GetValue<int>(), body["path"]!.GetValue<string>()));
+        Assert.Contains("[redacted:github-token]", body["content"]!.GetValue<string>(), StringComparison.Ordinal);
+        Assert.Null(body["projectId"]);
+    }
+
+    [Fact]
+    public async Task get_agent_for_a_name_both_personal_and_in_a_project_lists_both_and_reads_the_one_whose_project_is_given()
+    {
+        var tools = Sut();
+
+        var ambiguous = await tools.GetAgentAsync("reviewer");
+        Assert.Equal(HistoryTools.AmbiguousAgent, ErrorCode(ambiguous));
+        Assert.Equal(2, Body(ambiguous)["error"]!["agents"]!.AsArray().Count);
+        Assert.DoesNotContain(_registry.Asked, u => u.AbsolutePath == "/v1/agents/reviewer/content");
+
+        var inProject = await tools.GetAgentAsync("reviewer", project: "demo", version: 1);
+        Assert.NotEqual(true, inProject.IsError);
+        var content = Assert.Single(_registry.Asked, u => u.AbsolutePath == "/v1/agents/reviewer/content");
+        Assert.Equal($"?redacted=true&projectId={ProjectId}&version=1", content.Query);
+        Assert.Equal("github.com/example/demo", Body(inProject)["project"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public async Task get_agent_for_a_name_the_user_has_no_agent_of_is_not_found()
+    {
+        Assert.Equal(SessionsJson.NotFound, ErrorCode(await Sut().GetAgentAsync("general-purpose")));
+    }
+
+    [Fact]
+    public async Task get_agent_for_a_version_the_registry_does_not_have_is_not_found()
+    {
+        Assert.Equal(SessionsJson.NotFound, ErrorCode(await Sut().GetAgentAsync("migrator", version: 9)));
+    }
+
+    [Theory]
+    [InlineData("sessions,search,agents,agent-search")]
+    [InlineData(null)]
+    public async Task get_agent_on_a_registry_that_does_not_list_agent_content_is_refused_before_anything_is_read(string? capabilities)
+    {
+        _registry.Capabilities = capabilities?.Split(',');
+
+        Assert.Equal(SessionsJson.RegistryIncompatible, ErrorCode(await Sut().GetAgentAsync("migrator")));
+        Assert.DoesNotContain(_registry.Asked, u => u.AbsolutePath.StartsWith("/v1/agents", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void A_long_agent_file_is_cut_to_fit_and_marked_truncated()
+    {
+        var agent = new RemoteAgentContent { Name = "big", Version = 1, Path = "big.md", Content = Encoding.UTF8.GetBytes(new string('x', 200_000)) };
+
+        var record = HistoryTools.AgentRecord(agent, null, HistoryTools.MaxResultChars);
+
+        Assert.True(record["truncated"]!.GetValue<bool>());
+        Assert.True(SessionsJson.Serialize(record).Length <= HistoryTools.MaxResultChars);
     }
 
     [Fact]
@@ -273,7 +363,8 @@ public sealed class McpServerTests
     private sealed class FakeRegistry : HttpMessageHandler
     {
         public List<Uri> Asked { get; } = [];
-        public string[]? Capabilities { get; set; } = ["sessions", "session-skills", "redacted-read", "memory", "memory-content", "search", "memory-redacted-read"];
+        public string[]? Capabilities { get; set; } =
+            ["sessions", "session-skills", "redacted-read", "memory", "memory-content", "search", "memory-redacted-read", "agents", "agent-content", "agent-search"];
         public bool Down { get; set; }
 
         /// <summary>The session's content lines; a prompt and a reply when not set.</summary>
@@ -319,6 +410,28 @@ public sealed class McpServerTests
                             ["skillId"] = Guid.NewGuid(), ["version"] = 3, ["versionInferred"] = true, ["deleted"] = false,
                         },
                         new JsonObject { ["name"] = "plugin:review", ["uses"] = 1, ["versionInferred"] = false, ["deleted"] = false }),
+                }),
+                "/v1/search" => Json(new JsonArray(new JsonObject
+                {
+                    ["kind"] = "agent", ["name"] = "migrator", ["version"] = 2, ["description"] = "Plans migrations.",
+                    ["date"] = "2026-11-19T10:00:00Z", ["snippet"] = "Plans «flamingo» migrations",
+                })),
+                "/v1/agents" => Json(new JsonObject
+                {
+                    ["agents"] = new JsonArray(
+                        new JsonObject { ["name"] = "migrator", ["version"] = 2, ["contentHash"] = "AB", ["firstVersion"] = 1 },
+                        new JsonObject { ["name"] = "reviewer", ["version"] = 1, ["contentHash"] = "CD", ["firstVersion"] = 1 },
+                        new JsonObject { ["name"] = "reviewer", ["version"] = 3, ["contentHash"] = "EF", ["projectId"] = ProjectId, ["projectName"] = "github.com/example/demo", ["firstVersion"] = 1 }),
+                    ["removed"] = new JsonArray(),
+                }),
+                var path when path.StartsWith("/v1/agents/", StringComparison.Ordinal) && url.Query.Contains("version=9", StringComparison.Ordinal) => Json(
+                    new JsonObject { ["type"] = "https://protostar.dev/problems/unknown-agent", ["title"] = "You have no version 9 of personal agent 'migrator'.", ["status"] = 404 },
+                    HttpStatusCode.NotFound, "application/problem+json"),
+                var path when path.StartsWith("/v1/agents/", StringComparison.Ordinal) && path.EndsWith("/content", StringComparison.Ordinal) => Json(new JsonObject
+                {
+                    ["name"] = path.Split('/')[3], ["version"] = 2, ["description"] = "Plans migrations.", ["path"] = path.Split('/')[3] + ".md",
+                    ["contentHash"] = "AB", ["pushedAt"] = "2026-11-19T10:00:00Z", ["redacted"] = true,
+                    ["content"] = Convert.ToBase64String(Encoding.UTF8.GetBytes("---\nname: migrator\n---\nUse [redacted:github-token].\n")),
                 }),
                 "/v1/memory" => Json(new JsonArray(
                     new JsonObject { ["projectId"] = ProjectId, ["projectName"] = "github.com/example/demo", ["files"] = 1 },
