@@ -13,7 +13,7 @@ $ protostar setup
 ```
 
 It runs these steps in order and prints one line for each: **done**,
-**already done**, **needs a decision** (skills only), **skipped** (with the
+**already done**, **needs a decision** (skills and agents), **skipped** (with the
 reason), or **failed**.
 
 | Step | What it does | Same as |
@@ -21,6 +21,7 @@ reason), or **failed**.
 | Sign-in | Signs you in to the registry in your browser, unless you already have a session the registry accepts | `protostar auth login` |
 | Hooks | Installs capture hooks into every harness it finds, so your skill use and sessions are captured | `protostar install-hooks --yes` |
 | Skills | Backs up this machine's skills, then installs or updates your skills from the registry | `protostar skills push`, then `protostar skills pull` |
+| Agents | Backs up this machine's personal custom agents, then installs or updates them from the registry, by the same rules as skills | `protostar agents push --personal-only`, then `protostar agents pull --personal-only` |
 | Memory | Brings your agents' memory to each project checked out here, never losing a change made here | `protostar memory pull` |
 | Configuration | Not available yet: syncing harness configuration is still to come, so this step always says so | |
 | Sessions | Offers to back up the sessions already on this machine | `protostar sessions push` |
@@ -78,6 +79,9 @@ Skills: done. Pushed: 1 backed up, 0 already backed up. Pulled: 2 installed, 0 u
   brew: new version v1
   greet-user: installed v1
   tidy-imports: installed v1
+Agents: done. Pushed: no personal agents on this machine. Pulled: 2 installed, 0 updated, 0 already up to date.
+  reviewer: installed v3
+  security-reviewer: installed v1
 Memory: done. Pulled memory for 1 project: 3 written, 0 updated, 0 already here, 1 conflicted, 1 project not on this machine.
   demo-app /home/alice/work/demo-app: 3 written, 0 updated, 0 already here (~/.claude/projects/-home-alice-work-demo-app/memory)
     notes.md: conflicted (here and on laptop). Kept this machine's; laptop's is beside it as notes.from-laptop.md, listed in MEMORY.md. Merge it by hand, then delete the copy.
@@ -112,6 +116,7 @@ $ protostar setup
 Sign-in: already done. Signed in to https://localhost:7443 as alice.
 Hooks: already done. Claude Code: capture hooks already up to date (~/.claude/settings.json)
 Skills: already done. Pushed: 0 backed up, 3 already backed up. Pulled: 0 installed, 0 updated, 3 already up to date.
+Agents: already done. Pushed: 0 backed up, 2 already backed up. Pulled: 0 installed, 0 updated, 2 already up to date.
 Memory: already done. Pulled memory for 1 project: 0 written, 0 updated, 3 already here.
   demo-app /home/alice/src/demo-app: 0 written, 0 updated, 3 already here (~/.claude/projects/-home-alice-src-demo-app/memory)
 Configuration: skipped. Not available yet: syncing harness configuration is still to come.
@@ -136,7 +141,10 @@ rest still run, so one run tells you everything that needs attention.
 
 Project skills are pushed and pulled the same way `skills push` and `skills pull`
 handle them: only those of the project the current folder belongs to. Run setup
-from your home folder to sync global skills only.
+from your home folder to sync global skills only. The Agents step syncs
+personal agents only, wherever you run it; a project's agents come with
+`protostar agents pull` in a checkout of it. A registry that does not support
+agents yet skips the Agents step and says so, without failing setup.
 
 The pages that follow explain each step on its own, for when you want to run one
 by itself.

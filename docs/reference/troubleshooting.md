@@ -98,6 +98,8 @@ What each command needs:
 | `skills push`, `pull`, `remote`, `setup` | `skills`; with project skills also `project-skills` and `projects` |
 | `skills push` without `--force` | `stale-skill-push` (see below) |
 | `skills rename`, `skills delete` | `skill-rename`, `skill-delete` |
+| `agents push` | `agents`; with project agents also `projects` |
+| `agents remote`, `agents pull`, the Agents step of `setup` | `agents`, `agent-content`; with project agents also `projects` |
 | `project` | `projects` |
 | `sessions push`, `list` | `sessions` |
 | `sessions show` (and `--json`) | `sessions`, `redacted-read` (`session-skills` and `session-agents` are used when listed) |
