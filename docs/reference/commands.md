@@ -438,6 +438,37 @@ registry refused, or confirmation was needed and not possible.
 | `--registry <URL>` | Registry to change. Defaults to `PROTOSTAR_REGISTRY_URL`, then the saved default, then `https://localhost:7443`. |
 | `-y`, `--yes` | Delete without asking. Needed when input is not a terminal. |
 
+## `protostar agents`
+
+Back up your Claude Code custom agents: the Markdown files in `~/.claude/agents/`
+(personal) and in a project's `.claude/agents/`, subfolders included. An agent is
+named by the `name` in its front matter, not by its file name, and is versioned in
+the registry like a skill: personal agents belong to you, project agents to the
+folder's project (the same one its sessions and skills go to).
+
+### `protostar agents push [NAME...]`
+
+Backs up every agent found (or the named ones) and uploads only what changed since
+its last backup. Run it inside a project to include that project's agents.
+
+| Option | Meaning |
+|---|---|
+| `--project <DIR>` | Where to look for project agents. Defaults to the current directory. |
+| `--personal-only` | Skip the project's agents. |
+| `--force` | Upload even if unchanged, replace the registry's version when it changed elsewhere since this copy was synced (keep mine; the replaced version stays in history), and restore an agent deleted or renamed in the registry. |
+| `-H, --harness`, `--harness-home`, `--registry` | As for `skills push`. |
+
+A file whose front matter has no `name` (or no `description`) is refused without
+being sent: Claude Code does not load it either. When an agent changed here and in
+the registry since this copy was synced, nothing is overwritten and the push says
+which version the registry has. `protostar agents push NAME --force` keeps your copy;
+taking the registry's copy arrives with `agents pull`. A copy of an agent deleted or
+renamed in the registry is reported, not uploaded. A registry from before agents is
+named as too old instead of failing. Exit code 1 when anything was not backed up.
+
+You rarely need to run it: at the end of each session the capture hook backs up the
+agents that changed (see [`capture`](#protostar-capture)).
+
 ## `protostar sessions`
 
 Back up your harness's session transcripts to the registry, see what is backed
@@ -1040,7 +1071,10 @@ marks its session in the local ledger; the next background push of any session
 that reaches the registry also sends up to three marked sessions, oldest failure
 first, and clears each mark once that session is fully backed up. Sessions that
 were never backed up but never failed are left to `protostar sessions push`.
-Other hook events are acknowledged and ignored for now.
+`SessionEnd` also compares your custom agents (personal ones, and the session
+folder's project's) with what was last backed up, without contacting the registry.
+When one changed, it starts a background `protostar agents push` for them; when none
+did, nothing more happens. Other hook events are acknowledged and ignored for now.
 
 The hook never blocks or fails your session: it gives up after 15 seconds,
 counted from when it starts reading the event from the harness, and always exits
