@@ -25,6 +25,10 @@ namespace Protostar.Cli.Agents;
 /// a file is already there it is not this agent (no local agent has its name), so that is a conflict, never written.
 /// </para>
 /// <para>
+/// A project copy pulled while its folder was linked to another project, and left alone since, still compares with and
+/// updates from that project's agent (<see cref="LinkedAgentCopy"/>, <c>Target.Held</c>); an edited one is only here.
+/// </para>
+/// <para>
 /// A local copy whose ledger record names an agent the registry has deleted or renamed since is
 /// <see cref="AgentSyncState.RemovedInRegistry"/>. A pull renames an unedited copy of a renamed agent to follow it (its
 /// <c>name</c> line only; the file stays where it is, which is where a fresh pull of the agent puts it too) and keeps every

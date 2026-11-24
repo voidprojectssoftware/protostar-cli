@@ -27,6 +27,11 @@ namespace Protostar.Cli.Agents;
 /// project cannot be told is not sent.
 /// </para>
 /// <para>
+/// The command also settles an unedited copy recorded under another project by <see cref="LinkedAgentCopy"/>: still that
+/// project's agent, so reported unchanged, or this folder's project's, so sent with base 0 like an edited one. The hook
+/// lists nothing, so it only ever sends edited copies, and names the project they went to from the push's answer.
+/// </para>
+/// <para>
 /// A record of a project agent that a link on another machine moved is followed through
 /// <see cref="MovedAgentLedger.FollowAsync"/>: an agent of that name in another project, none left in the recorded
 /// project, and the recorded version's content (from the list, or one download when the agent moved on since) the same.

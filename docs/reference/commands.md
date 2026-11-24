@@ -519,13 +519,16 @@ its last backup. Run it inside a project to include that project's agents.
 | `--project <DIR>` | Where to look for project agents. Defaults to the current directory. |
 | `--personal-only` | Skip the project's agents. |
 | `--force` | Upload even if unchanged, replace the registry's version when it changed elsewhere since this copy was synced (keep mine; the replaced version stays in history), and restore an agent deleted or renamed in the registry. |
+| `--as <NEW-NAME>` | Push the one named agent as a new registry agent called `NEW-NAME` (keep both), and move the file here to `NEW-NAME.md` in the same folder, with its `name` line set to match. The registry keeps that new path, so the original agent can be pulled back to the path it had, on this machine and on any other. Refused before anything is pushed or changed when `NEW-NAME` is already taken in the agent's scope (personal, or its project): by another agent here (in any harness), by a file of that name beside it, or by a registry agent, or one deleted or renamed away from the registry. The refusal names what holds the name and suggests a free one. |
 | `-H, --harness`, `--harness-home`, `--registry` | As for `skills push`. |
 
 A file whose front matter has no `name` (or no `description`) is refused without
 being sent: Claude Code does not load it either. When an agent changed here and in
 the registry since this copy was synced, nothing is overwritten and the push says
 which version the registry has, with the ways out: `protostar agents push NAME --force`
-keeps your copy, `protostar agents pull NAME --force` takes the registry's. A copy of an
+keeps your copy, `protostar agents pull NAME --force` takes the registry's, and
+`protostar agents push NAME --as NEW-NAME` followed by `protostar agents pull NAME`
+keeps both. A copy of an
 agent deleted or renamed in the registry is reported, not uploaded. A registry from before agents is
 named as too old instead of failing. Exit code 1 when anything was not backed up.
 
@@ -573,7 +576,8 @@ file still says its old name. An edited copy of a renamed agent, and any copy of
 deleted agent, is kept and reported; local files are never deleted.
 
 Project agents follow the folder's project exactly as project skills do,
-including after `protostar project link`. Like project skills, they are written
+including after `protostar project link`. That includes agents pulled while the folder
+was linked and left behind by an unlink (see [`project unlink`](#protostar-project-unlink)). Like project skills, they are written
 into the checkout, where git sees them; whether to commit them is yours to decide.
 Exit code 1 when an agent failed or conflicted.
 
@@ -1231,8 +1235,13 @@ Project        notes
 
 Other cases say that this folder's project has its own skill of that name (run
 `skills remote` to compare them), that the linked project no longer has it,
-or that it was deleted or renamed in the registry. Only skills are listed; agents
-follow their own rule (cli#133). When the capture hook later backs such a copy up
+or that it was deleted or renamed in the registry.
+
+Project agents pulled while the folder was linked follow the same rule, with
+`agents remote`, `agents pull` and `agents push`, and are listed the same way
+under the skills, as `1 agent of project ... stays in this folder`. An agent is
+named exactly, so only an agent of exactly that name in this folder's project
+counts as its own. When the capture hook later backs such a copy up
 into this folder's project, its line names the project, and the line is also
 written to `~/.protostar/capture.log` and shown as a note by `protostar status`.
 
