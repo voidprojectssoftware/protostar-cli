@@ -71,6 +71,28 @@ internal sealed partial class RegistryApi : IAgentApi
         Uri registry, string accessToken, string name, Guid? projectId, int? version, CancellationToken cancellationToken) =>
         MissingRoute(await GetAgentContentAsync(registry, accessToken, name, projectId, version, redacted: false, cancellationToken), RegistryCapability.AgentContent);
 
+    /// <inheritdoc />
+    public async Task<ApiResult<string>> RenameAgentAsync(
+        Uri registry, string accessToken, string name, Guid? projectId, string newName, CancellationToken cancellationToken)
+    {
+        using var request = Request(HttpMethod.Post, registry, AgentPath(name, "/rename", projectId), accessToken);
+        request.Content = JsonContent.Create(new { newName }, options: TranscriptJson.Options);
+        return MissingRoute(await SendAsync(
+            request,
+            async response => (await response.Content.ReadFromJsonAsync<RenameResponse>(TranscriptJson.Options))?.Name ?? newName,
+            cancellationToken), RegistryCapability.Agents);
+    }
+
+    /// <inheritdoc />
+    public async Task<ApiResult<bool>> DeleteAgentAsync(Uri registry, string accessToken, string name, Guid? projectId, CancellationToken cancellationToken)
+    {
+        using var request = Request(HttpMethod.Delete, registry, AgentPath(name, "", projectId), accessToken);
+        return MissingRoute(await SendAsync(request, _ => Task.FromResult(true), cancellationToken), RegistryCapability.Agents);
+    }
+
+    private static string AgentPath(string name, string suffix, Guid? projectId) =>
+        $"/v1/agents/{Uri.EscapeDataString(name)}{suffix}" + (projectId is { } id ? $"?projectId={id}" : "");
+
     private async Task<ApiResult<RemoteAgentContent>> GetAgentContentAsync(
         Uri registry, string accessToken, string name, Guid? projectId, int? version, bool redacted, CancellationToken cancellationToken)
     {

@@ -567,6 +567,80 @@ including after `protostar project link`. Like project skills, they are written
 into the checkout, where git sees them; whether to commit them is yours to decide.
 Exit code 1 when an agent failed or conflicted.
 
+### `protostar agents rename <OLD> <NEW>`
+
+Rename an agent in the registry. Its version history comes with it. This
+machine's copies get the new name in their `name:` line and nothing else: **the
+file is not renamed or moved**. Claude Code names an agent by that line, not by
+its file name, the registry keeps the path the agent was pushed from, and a pull
+on another machine follows the rename in place too, so every machine keeps the
+agent in the same file. No new version is pushed: the registry's stored file
+still says the old name, and a pull writes the new one as it installs. You must
+be [signed in](../get-started/authenticate.md) first.
+
+```console
+$ protostar agents rename reviewer code-reviewer
+Renamed the personal agent reviewer to code-reviewer in https://localhost:7727.
+Its version history came with it.
+Local copy renamed here (its `name:` line; the file stays where it is):
+~/.claude/agents/review/reviewer.md
+The registry remembers the old name, so other machines do not push it back.
+Their next `protostar agents pull` (or setup) renames an unedited copy to match;
+a copy edited there is kept and reported.
+```
+
+**A copy here with changes that were never pushed stops the rename** before the
+registry is asked, and nothing changes. Push the changes first
+(`protostar agents push OLD`), or drop them (`protostar agents pull OLD --force`),
+then rename again.
+
+`<OLD>` must be the registry agent's exact current name. Without options, the
+personal agent of that name or the current folder's project agent of that name
+is meant, whichever exists; when both do, the command refuses and names them, so
+pick one with `--personal-only` or `--project <DIR>`. A name the registry does
+not have, a taken new name, and unpushed changes are errors (exit `1`).
+
+| Option | Description |
+|---|---|
+| `--project <DIR>` | Only the agent of this folder's project. |
+| `--personal-only` | Only the personal agent of that name, even when this folder's project has one. |
+| `--registry <URL>` | Registry to change. Defaults to `PROTOSTAR_REGISTRY_URL`, then the saved default, then `https://localhost:7443`. |
+
+### `protostar agents delete <NAME>`
+
+Delete an agent and every one of its versions from the registry. It cannot be
+undone. **No local file is deleted**, on this machine or any other: the command
+lists this machine's copies, and afterwards `protostar agents remote` shows them
+as **gone from the registry**. The registry remembers the delete, so neither
+`protostar agents push`, the capture hook, nor `protostar setup`, on this machine
+or another, uploads a copy of it again, edited or not. Remove a copy you no
+longer want; `protostar agents push NAME --force` restores the agent on purpose,
+as a new agent.
+
+The command says what it is about to delete and asks first. With no terminal to
+ask on (a script, a pipe) it refuses unless you pass `--yes`:
+
+```console
+$ protostar agents delete migrator < /dev/null
+This deletes the personal agent migrator from https://localhost:7727, with all 2
+of its versions. It cannot be undone.
+This machine has a copy at ~/.claude/agents/migrator.md.
+Local files are not deleted: only the registry's copy goes.
+Not deleted: confirmation is needed and there is no terminal to ask on. Pass
+--yes to delete without asking.
+```
+
+Which agent a name means works as for `rename`. The exit code is `0` when the
+agent was deleted or you answered no, and `1` when it was not found or
+ambiguous, the registry refused, or confirmation was needed and not possible.
+
+| Option | Description |
+|---|---|
+| `--project <DIR>` | Only the agent of this folder's project. |
+| `--personal-only` | Only the personal agent of that name, even when this folder's project has one. |
+| `--registry <URL>` | Registry to change. Defaults to `PROTOSTAR_REGISTRY_URL`, then the saved default, then `https://localhost:7443`. |
+| `-y`, `--yes` | Delete without asking. Needed when input is not a terminal. |
+
 ## `protostar sessions`
 
 Back up your harness's session transcripts to the registry, see what is backed

@@ -91,6 +91,9 @@ internal enum AgentPullRunFailure
     /// <summary>A requested agent name is not in the registry.</summary>
     AgentNotFound,
 
+    /// <summary>A rename or delete named both a personal agent and this folder's project agent; the detail lists them and how to pick one.</summary>
+    Ambiguous,
+
     /// <summary><c>--version</c> was given without exactly one agent name, or is not a version number; see the detail.</summary>
     InvalidVersion,
 
