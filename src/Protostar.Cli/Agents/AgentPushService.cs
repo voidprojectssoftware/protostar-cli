@@ -254,7 +254,6 @@ internal sealed class AgentPushService : IAgentPushService
             // linked elsewhere) is still that project's agent, or this folder's project's and never synced there
             // (LinkedAgentCopy). An edited one is never still that project's: the folder check below sends it with no base.
             // A copy of an agent removed from the registry is reported as such below, like any other.
-            var held = new Dictionary<int, RegistryAgent>();
             foreach (var (index, content, hash) in unconfirmed.ToList())
             {
                 var agent = selected[index];
@@ -269,22 +268,11 @@ internal sealed class AgentPushService : IAgentPushService
                 if (!here.Ok || !LinkedAgentCopy.NamesOtherProject(recorded, here.Value!.ProjectId))
                     continue;
 
-                if (LinkedAgentCopy.StillOf(recorded, hash, here.Value.ProjectId, agents) is { } owner)
-                {
-                    held[index] = owner;
-                }
-                else
-                {
-                    unconfirmed.RemoveAll(u => u.Index == index);
-                    pending.Add((index, content, hash));
-                }
-            }
-
-            foreach (var (index, owner) in held)
-            {
                 unconfirmed.RemoveAll(u => u.Index == index);
-                entries[index] = new AgentPushEntry(selected[index], new AgentPushOutcome(AgentPushStatus.Unchanged, _ledger.Get(registry, selected[index].Path)!.Version,
-                    LinkedAgentCopy.StillNote(owner), owner.ProjectId, owner.ProjectName));
+                if (LinkedAgentCopy.StillOf(recorded, hash, here.Value.ProjectId, agents) is { } owner)
+                    entries[index] = new AgentPushEntry(agent, new AgentPushOutcome(AgentPushStatus.Unchanged, recorded.Version, LinkedAgentCopy.StillNote(owner), owner.ProjectId, owner.ProjectName));
+                else
+                    pending.Add((index, content, hash));
             }
 
             // A copy whose registry agent is gone: of an agent deleted or renamed since it synced, reported and not uploaded
