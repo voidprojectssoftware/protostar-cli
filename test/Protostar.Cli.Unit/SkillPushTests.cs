@@ -1434,6 +1434,10 @@ public sealed class SkillPushServiceTests : IDisposable
         Assert.Equal([0], api.Bases);
         Assert.Equal(1, _projects.Calls);
         Assert.Equal(0, api.ListCalls);
+
+        // The record may come from a backup made while unlinked, not a pull, so the reason does not claim one (#138).
+        Assert.Contains("which this folder is no longer in (it was in that project when this copy last synced)", outcome.Message);
+        Assert.DoesNotContain("pulled", outcome.Message);
     }
 
     [Fact]
