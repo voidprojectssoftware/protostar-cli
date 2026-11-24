@@ -42,7 +42,7 @@ public sealed class AgentPullTests : IDisposable
 
     private AgentPullService Sut() => new(Catalog, new Tokens(), _api, new RegistryCapabilities(_meta), _ledger, new FakeFacts(), _projects, new FakeMachine());
 
-    private AgentPushService Push() => new(Catalog, new Tokens(), _api, new RegistryCapabilities(_meta), _ledger, new FakeFacts(), new FakeMachine());
+    private AgentPushService Push() => new(Catalog, new Tokens(), _api, new RegistryCapabilities(_meta), _ledger, new FakeFacts(), new FakeMachine(), _projects);
 
     private Task<AgentPullRunResult> Pull(bool force = false, string? project = null, int? version = null, params string[] names) =>
         Sut().PullAsync(new AgentPullRequest(names, null, Home, RegistryUrl, force, project, version), CancellationToken.None);

@@ -23,6 +23,7 @@ public sealed class AgentPushTests : IDisposable
     private readonly FakeAgentLedger _ledger = new();
     private readonly FakeAgentApi _api = new();
     private readonly MetaOnlyRegistry _meta = new();
+    private readonly SkillPushServiceTests.FakeProjects _projects = new() { ByFolder = true };
     private SessionLookup _session = SessionLookups.Of(new StoredToken { Registry = RegistryUrl, AccessToken = "tok", ExpiresAtUtc = DateTimeOffset.UtcNow.AddHours(1) });
 
     public void Dispose() => Directory.Delete(_root, recursive: true);
@@ -47,7 +48,7 @@ public sealed class AgentPushTests : IDisposable
 
     private AgentPushService Sut() => new(
         new HarnessCatalog([new ClaudeCodeHarness(new ClaudeCodeSkillParser(), new ClaudeCodeSkillMapper())]),
-        new FakeTokens(() => _session), _api, new RegistryCapabilities(_meta), _ledger, new SkillPushServiceTests.FakeFacts(), new SkillPushServiceTests.FakeMachine());
+        new FakeTokens(() => _session), _api, new RegistryCapabilities(_meta), _ledger, new SkillPushServiceTests.FakeFacts(), new SkillPushServiceTests.FakeMachine(), _projects);
 
     private AgentPushRequest Request(bool fromHook = false, bool force = false, params string[] names) =>
         new(names, null, Home, Repo, RegistryUrl, force, fromHook);
@@ -208,6 +209,69 @@ public sealed class AgentPushTests : IDisposable
         Write(reviewer, "reviewer", "edited");
 
         Assert.Equal("reviewer", Assert.Single(Sut().Changed(Home, Repo, RegistryUrl)).Name);
+    }
+
+    // A project agent whose record says it last synced at v1 of another project (backed up there while the folder was
+    // unlinked), in a folder whose own project has an agent of that name at v1 too: the #138 repro, for agents.
+    private string SyncedInAnotherProject()
+    {
+        var file = Project("linter.md", "linter");
+        Sut().PushAsync(Request(), CancellationToken.None).GetAwaiter().GetResult();
+        var other = Guid.NewGuid();
+        Write(file, "linter", "edited while unlinked");
+        _api.Publish(other, "linter.md", "linter", "edited while unlinked");
+        _ledger.Record(Registry, file, new AgentLedgerEntry(AgentPushService.Hash(File.ReadAllBytes(file)), 1, "linter", other));
+        Write(file, "linter", "edited after the re-link");
+        return file;
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task A_base_recorded_against_another_project_is_not_sent_to_the_folders_project(bool fromHook)
+    {
+        var file = SyncedInAnotherProject();
+        _api.Bases.Clear();
+
+        var outcome = Assert.Single((await Sut().PushAsync(Request(fromHook), CancellationToken.None)).Entries).Outcome;
+
+        Assert.Equal(AgentPushStatus.Stale, outcome.Status);
+        Assert.Equal([0], _api.Bases);
+        Assert.Equal(
+            "Changed here and in the registry: the registry has v1, but this copy last synced as another project's agent, not as this project's, " +
+            "so it is based on none of its versions. Nothing was overwritten.", outcome.Message);
+        Assert.Equal(AgentPushService.Hash(File.ReadAllBytes(file)), _ledger.Get(Registry, file)!.RefusedHash);
+
+        // The ways out still work: keep mine replaces the folder's project's v1, on purpose.
+        var forced = Assert.Single((await Sut().PushAsync(Request(force: true), CancellationToken.None)).Entries).Outcome;
+        Assert.Equal((AgentPushStatus.Created, 2), (forced.Status, forced.Version));
+    }
+
+    [Fact]
+    public async Task A_project_agent_whose_folders_project_cannot_be_told_is_not_sent_with_its_base()
+    {
+        SyncedInAnotherProject();
+        _projects.ByFolder = false;
+        var pushes = _api.Pushed.Count;
+
+        var outcome = Assert.Single((await Sut().PushAsync(Request(fromHook: true), CancellationToken.None)).Entries).Outcome;
+
+        Assert.Equal(AgentPushStatus.Failed, outcome.Status);
+        Assert.StartsWith("Could not tell which project this folder is in now", outcome.Message);
+        Assert.Equal(pushes, _api.Pushed.Count);
+    }
+
+    [Fact]
+    public async Task The_hook_asks_nothing_for_an_unchanged_project_agent()
+    {
+        Project("linter.md", "linter");
+        await Sut().PushAsync(Request(), CancellationToken.None);
+        var calls = _projects.Calls;
+
+        var outcome = Assert.Single((await Sut().PushAsync(Request(fromHook: true), CancellationToken.None)).Entries).Outcome;
+
+        Assert.Equal(AgentPushStatus.Unchanged, outcome.Status);
+        Assert.Equal(calls, _projects.Calls);
     }
 
     [Fact]

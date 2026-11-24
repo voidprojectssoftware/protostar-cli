@@ -21,6 +21,12 @@ namespace Protostar.Cli.Agents;
 /// the command confirms it with one list request per run.
 /// </para>
 /// <para>
+/// A recorded base is a version of the project the record names, so a project agent is sent with it only when its folder is
+/// still in that project (#138, as <see cref="Skills.SkillPushService"/>): the command and the hook ask once per folder, and
+/// only for a copy about to be uploaded. A copy recorded under another project is sent with base 0, and one whose folder's
+/// project cannot be told is not sent.
+/// </para>
+/// <para>
 /// A record of a project agent that a link on another machine moved is followed through
 /// <see cref="MovedAgentLedger.FollowAsync"/>: an agent of that name in another project, none left in the recorded
 /// project, and the recorded version's content (from the list, or one download when the agent moved on since) the same.
@@ -35,10 +41,11 @@ internal sealed class AgentPushService : IAgentPushService
     private readonly IAgentLedger _ledger;
     private readonly IProjectFactsResolver _facts;
     private readonly IMachineIdentity _machine;
+    private readonly IProjectApi _projects;
 
     public AgentPushService(
         IHarnessCatalog catalog, IAccessTokenProvider tokens, IAgentApi api, IRegistryCapabilities capabilities, IAgentLedger ledger,
-        IProjectFactsResolver facts, IMachineIdentity machine)
+        IProjectFactsResolver facts, IMachineIdentity machine, IProjectApi projects)
     {
         _catalog = catalog;
         _tokens = tokens;
@@ -47,6 +54,7 @@ internal sealed class AgentPushService : IAgentPushService
         _ledger = ledger;
         _facts = facts;
         _machine = machine;
+        _projects = projects;
     }
 
     /// <inheritdoc />
@@ -238,19 +246,47 @@ internal sealed class AgentPushService : IAgentPushService
             }
         }
 
+        // A recorded base is a version of the project the record names, so it is sent only to that project (#138). For each
+        // project agent about to be sent with one, ask once per folder which project the folder is in now: a copy recorded under
+        // another project goes with no base, and one whose folder's project cannot be told is not sent. The hook asks too, but
+        // only for an edited copy it was about to upload anyway, so an unchanged agent still costs it nothing.
+        var elsewhere = new HashSet<int>();
+        var heres = new Dictionary<string, ApiResult<RemoteProject>>(StringComparer.Ordinal);
+        foreach (var (index, _, _) in pending.ToList())
+        {
+            var agent = selected[index];
+            if (agent.Scope != AgentScope.Project || gone.Contains(index) || Synced(registry, agent) is not { ProjectId: { } syncedIn } recorded)
+                continue;
+            if (!heres.TryGetValue(agent.ProjectRoot!, out var here))
+                heres[agent.ProjectRoot!] = here = await _projects.ResolveProjectAsync(registry, session.AccessToken, _machine.Get().Id, _facts.Resolve(agent.ProjectRoot!), cancellationToken);
+            if (!here.Ok)
+            {
+                pending.RemoveAll(p => p.Index == index);
+                entries[index] = new AgentPushEntry(agent, new AgentPushOutcome(AgentPushStatus.Failed, null,
+                    $"Could not tell which project this folder is in now, so this copy's base (v{recorded.Version}, recorded against the project it last synced in) " +
+                    "could not be checked against it. Nothing was sent; the next push tries again."));
+            }
+            else if (here.Value!.ProjectId != syncedIn)
+            {
+                elsewhere.Add(index);
+            }
+        }
+
         foreach (var (index, content, hash) in pending.OrderBy(p => p.Index))
-            entries[index] = new AgentPushEntry(selected[index], await PushOneAsync(registry, session.AccessToken, selected[index], content, hash, request.Force, gone.Contains(index), cancellationToken));
+            entries[index] = new AgentPushEntry(selected[index], await PushOneAsync(
+                registry, session.AccessToken, selected[index], content, hash, request.Force, gone.Contains(index), elsewhere.Contains(index), cancellationToken));
 
         return new AgentPushRunResult(AgentPushRunFailure.None, null, registry, entries.Select(e => e!).ToList());
     }
 
     // Pushes one agent on the base its copy last synced, and records the result. With force a stale refusal is answered by
-    // pushing on the version the registry just named (keep mine), and a removed one by pushing as new (base 0).
+    // pushing on the version the registry just named (keep mine), and a removed one by pushing as new (base 0). A copy last
+    // synced in a project its folder has since left (elsewhere) has no base in the folder's project, so it pushes base 0.
     private async Task<AgentPushOutcome> PushOneAsync(
-        Uri registry, string accessToken, DiscoveredAgent agent, byte[] content, string hash, bool force, bool gone, CancellationToken cancellationToken)
+        Uri registry, string accessToken, DiscoveredAgent agent, byte[] content, string hash, bool force, bool gone, bool elsewhere, CancellationToken cancellationToken)
     {
         var name = agent.Name!;
-        var basis = gone ? null : Synced(registry, agent);
+        var basis = gone || elsewhere ? null : Synced(registry, agent);
         var based = basis?.Version ?? 0;
         var project = ProjectOf(agent);
 
@@ -269,7 +305,14 @@ internal sealed class AgentPushService : IAgentPushService
                 outcome = outcome with { Message = $"Replaced v{current}, which reached the registry after this copy's {Basis(based)}. v{current} stays in its history." };
         }
 
-        if (gone && outcome.Succeeded && !replaced)
+        if (elsewhere && outcome.Succeeded && !replaced)
+        {
+            outcome = outcome with
+            {
+                Message = $"Last synced as another project's agent, which this folder is no longer in, so it now belongs to this folder's project: backed it up there as a new agent.",
+            };
+        }
+        else if (gone && outcome.Succeeded && !replaced)
         {
             outcome = outcome with
             {
@@ -287,7 +330,7 @@ internal sealed class AgentPushService : IAgentPushService
         {
             var entry = basis ?? new AgentLedgerEntry(string.Empty, 0, name, outcome.ProjectId);
             _ledger.Record(registry, agent.Path, entry with { RefusedHash = hash, RefusedVersion = outcome.Version, RefusedAsRemoved = false, RefusedRenamedTo = null });
-            outcome = outcome with { Message = StaleMessage(based, outcome.Version) };
+            outcome = outcome with { Message = StaleMessage(based, outcome.Version, syncedElsewhere: elsewhere) };
         }
         else if (outcome.Status == AgentPushStatus.Removed && basis is not null)
         {
@@ -401,9 +444,13 @@ internal sealed class AgentPushService : IAgentPushService
 
     private static string Basis(int based) => based == 0 ? "last sync (it never synced a version)" : $"v{based}";
 
-    internal static string StaleMessage(int based, int? current) =>
-        $"Changed here and in the registry: the registry has v{current}, but this copy is based on " +
-        (based == 0 ? "no registry version (it was never pushed from here)." : $"v{based}.") + " Nothing was overwritten.";
+    internal static string StaleMessage(int based, int? current, bool syncedElsewhere = false) =>
+        $"Changed here and in the registry: the registry has v{current}, but " + (based != 0
+            ? $"this copy is based on v{based}."
+            : syncedElsewhere
+                ? "this copy last synced as another project's agent, not as this project's, so it is based on none of its versions."
+                : "this copy is based on no registry version (it was never pushed from here).") +
+        " Nothing was overwritten.";
 
     // Why a copy of a removed agent was not backed up, and the ways out.
     internal static string RemovedMessage(string name, RegistryRemovedAgent removal, bool edited)
