@@ -55,10 +55,14 @@ internal enum CaptureFailure
 /// <param name="Bytes">Session bytes uploaded; <c>null</c> for the other kinds.</param>
 /// <param name="Reason">Why it failed; <c>null</c> when <paramref name="Ok"/>.</param>
 /// <param name="Error">The error message a person would read; <c>null</c> when <paramref name="Ok"/>.</param>
-/// <remarks>Never holds transcript or memory content: counts, kinds, timestamps and error messages only.</remarks>
+/// <param name="Note">
+/// On a backup that worked, something it did that a person should hear about although nothing failed, such as a skill
+/// filed in a project other than the one its copy last synced in (cli#129); <c>null</c> otherwise.
+/// </param>
+/// <remarks>Never holds transcript or memory content: counts, kinds, timestamps and messages only.</remarks>
 internal sealed record CaptureRecord(
     DateTimeOffset At, CaptureKind Kind, bool Ok, string? Registry, int Items, long? Bytes = null,
-    CaptureFailure? Reason = null, string? Error = null);
+    CaptureFailure? Reason = null, string? Error = null, string? Note = null);
 
 /// <summary>
 /// Appends <see cref="CaptureRecord"/>s to <c>~/.protostar/capture-records.jsonl</c> and reads them back, so

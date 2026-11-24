@@ -1396,6 +1396,61 @@ public sealed class SkillPushServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task A_copy_refused_because_it_last_synced_as_another_projects_skill_says_so_not_that_it_never_synced()
+    {
+        // The re-link case of cli#129: synced (pushed) as one project's skill, now in a folder whose project has its own.
+        var copy = PulledFromLib(App);
+        Edit(copy, "changed here");
+        var (sut, api) = Build([copy], Session(), AtVersion(3));
+        api.Skills.Add(new RegistrySkill("shared", null, 3, "", DateTimeOffset.UnixEpoch, App, "app"));
+
+        var outcome = Assert.Single((await sut.PushAsync(Request(), CancellationToken.None)).Entries).Outcome;
+
+        Assert.Equal(SkillPushStatus.Stale, outcome.Status);
+        Assert.Equal(
+            "Changed here and in the registry: the registry has v3, but this copy last synced as another project's skill, not as this project's, " +
+            "so it is based on none of its versions. Nothing was overwritten.", outcome.Message);
+        Assert.DoesNotContain("never pulled or pushed", outcome.Message);
+
+        // The hook, which resolves nothing, later sees only the record the refusal left, and says what that record can vouch for.
+        Edit(copy, "changed again");
+        var hook = Assert.Single((await sut.PushAsync(Request() with { FromHook = true }, CancellationToken.None)).Entries).Outcome;
+        Assert.Equal(SkillPushStatus.Stale, hook.Status);
+        Assert.Contains("this machine has no record of this copy being based on any of its versions.", hook.Message);
+    }
+
+    [Fact]
+    public async Task The_hook_that_backs_up_an_edited_copy_into_the_folders_project_says_which_project_it_left()
+    {
+        var copy = PulledFromLib(App);
+        Edit(copy, "changed here");
+        var (sut, api) = Build([copy], Session());
+
+        var outcome = Assert.Single((await sut.PushAsync(Request() with { FromHook = true }, CancellationToken.None)).Entries).Outcome;
+
+        Assert.Equal(SkillPushStatus.Created, outcome.Status);
+        Assert.Equal(Lib, outcome.LeftProject);
+        Assert.NotEqual(Lib, outcome.ProjectId);
+        Assert.Equal(0, _projects.Calls);
+        Assert.Equal(0, api.ListCalls);
+    }
+
+    [Fact]
+    public async Task A_hook_backup_into_the_project_the_copy_synced_in_left_no_project()
+    {
+        var copy = Skill("deploy", SkillScope.Project);
+        var (sut, _) = Build([copy], Session());
+        var first = Assert.Single((await sut.PushAsync(Request(), CancellationToken.None)).Entries).Outcome;
+        Edit(copy, "changed here");
+
+        var outcome = Assert.Single((await sut.PushAsync(Request() with { FromHook = true }, CancellationToken.None)).Entries).Outcome;
+
+        Assert.Equal(SkillPushStatus.Created, outcome.Status);
+        Assert.Equal(first.ProjectId, outcome.ProjectId);
+        Assert.Null(outcome.LeftProject);
+    }
+
+    [Fact]
     public async Task A_record_a_link_moved_into_the_folders_project_is_followed_not_taken_for_a_copy_left_by_an_unlink()
     {
         var copy = PulledFromLib(App);
@@ -1487,7 +1542,7 @@ public sealed class SkillPushServiceTests : IDisposable
         public void Forget(Uri registry, string skillPath) => _entries.Remove(registry + "|" + skillPath);
     }
 
-    private sealed class FakeSkillService(IReadOnlyList<DiscoveredSkill> skills) : ISkillService
+    internal sealed class FakeSkillService(IReadOnlyList<DiscoveredSkill> skills) : ISkillService
     {
         public SkillDiscoveryResult Discover(string? harnessId, string? harnessHome, string? projectStart) =>
             new(skills, SkillQueryFailure.None, null);

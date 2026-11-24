@@ -70,11 +70,12 @@ internal static class CapturePresenter
             _ => CaptureFailure.Other,
         };
         return reason is null
-            ? new CaptureRecord(now, CaptureKind.Skills, true, registry, push.Entries.Count)
+            ? new CaptureRecord(now, CaptureKind.Skills, true, registry, push.Entries.Count,
+                Note: push.Entries.Any(e => e.Outcome is { Status: SkillPushStatus.Created, LeftProject: not null }) ? ErrorText(line) : null)
             : new CaptureRecord(now, CaptureKind.Skills, false, registry, push.Entries.Count, Reason: reason, Error: ErrorText(line));
     }
 
-    // The human line without its "protostar capture (Event): " prefix, so status can quote it as the error.
+    // The human line without its "protostar capture (Event): " prefix, so status can quote it as the error or note.
     private static string ErrorText(string line) => line[(line.IndexOf(": ", StringComparison.Ordinal) + 2)..];
 
     internal static string Describe(string hookEvent, CaptureResult result)
@@ -108,6 +109,8 @@ internal static class CapturePresenter
         var outcome = push.Entries.FirstOrDefault()?.Outcome;
         var line = outcome?.Status switch
         {
+            SkillPushStatus.Created when outcome.LeftProject is not null =>
+                $"{prefix}: backed up skill '{result.SkillName}' as v{outcome.Version} {LeftProjectNote(outcome)}",
             SkillPushStatus.Created => $"{prefix}: backed up skill '{result.SkillName}' as v{outcome.Version}.",
             SkillPushStatus.Unchanged => $"{prefix}: skill '{result.SkillName}' unchanged.",
             SkillPushStatus.Stale => $"{prefix}: skill '{result.SkillName}' not backed up: {outcome.Message} Run `protostar skills remote` to choose which to keep.",
@@ -124,11 +127,18 @@ internal static class CapturePresenter
         var scope = entry.Outcome.ProjectName is { } project ? $"project ({project})" : entry.Skill.Scope.ToString().ToLowerInvariant();
         return entry.Outcome.Status switch
         {
+            SkillPushStatus.Created when entry.Outcome.LeftProject is not null =>
+                $"{scope} backed up as v{entry.Outcome.Version} {LeftProjectNote(entry.Outcome).TrimEnd('.')}",
             SkillPushStatus.Created => $"{scope} backed up as v{entry.Outcome.Version}",
             SkillPushStatus.Unchanged => $"{scope} unchanged",
             _ => $"{scope} at {entry.Skill.Path} not backed up: {entry.Outcome.Message}",
         };
     }
+
+    // The hook resolves nothing, so the project's name is the one the push's answer carried.
+    private static string LeftProjectNote(SkillPushOutcome outcome) =>
+        $"in project {outcome.ProjectName ?? outcome.ProjectId?.ToString()}, this folder's project. It last synced as a skill of another project, " +
+        "which this folder is no longer in, and has changed here since, so it now belongs to this folder's project. `protostar skills remote` shows both.";
 
     /// <summary>Writes the line for the background agent push a <c>SessionEnd</c> started, logs it when it needs attention, records it, and returns 0.</summary>
     /// <remarks>A refusal answered from the ledger (<see cref="Registry.AgentPushOutcome.Remembered"/>) is not logged again.</remarks>
@@ -318,13 +328,15 @@ internal static class CapturePresenter
         _ => $"{push.Detail ?? push.Failure.ToString()}",
     };
 
-    // Worth a log line: anything other than success, ignore, or "not a local skill". A stale refusal, or one as a copy of a
-    // skill removed from the registry, is logged once:
-    // later uses of the same content are answered from the ledger (Remembered) and not logged again.
+    // Worth a log line: anything other than success, ignore, or "not a local skill", and a success that filed the skill in a
+    // project other than the one its copy last synced in (cli#129), since the hook's own line is out of sight. A stale
+    // refusal, or one as a copy of a skill removed from the registry, is logged once: later uses of the same content are
+    // answered from the ledger (Remembered) and not logged again.
     private static bool NeedsAttention(CaptureResult result) =>
         result.Action == CaptureAction.Failed ||
         (result.Push is { } push &&
          (push.Failure is not (SkillPushRunFailure.None or SkillPushRunFailure.SkillNotFound) ||
           push.Entries.Any(e => e.Outcome.Status is SkillPushStatus.Refused or SkillPushStatus.Failed or SkillPushStatus.Conflict ||
-                                e.Outcome is { Status: SkillPushStatus.Stale or SkillPushStatus.Removed, Remembered: false })));
+                                e.Outcome is { Status: SkillPushStatus.Stale or SkillPushStatus.Removed, Remembered: false } ||
+                                e.Outcome is { Status: SkillPushStatus.Created, LeftProject: not null })));
 }

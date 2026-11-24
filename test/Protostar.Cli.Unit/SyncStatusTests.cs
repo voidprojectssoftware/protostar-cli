@@ -162,6 +162,29 @@ public sealed class SyncStatusTests : IDisposable
         Assert.Equal(t, recovered.LastFailureAt);
     }
 
+    [Fact]
+    public void The_newest_note_is_kept_beside_the_counts_and_neither_fails_nor_clears_anything()
+    {
+        var t = DateTimeOffset.Parse("2026-11-20T10:00:00Z");
+        var noted = Ok(CaptureKind.Skills, t) with { Note = "backed up skill 'deploy' as v1 in project notes" };
+
+        var status = SyncStatusService.Summarize(CaptureKind.Skills, [noted, Ok(CaptureKind.Skills, t.AddMinutes(1)), Failed(CaptureKind.Skills, t.AddMinutes(2))]);
+
+        Assert.Equal((t, "backed up skill 'deploy' as v1 in project notes"), (status.LastNoteAt!.Value, status.LastNote));
+        Assert.Equal((true, 1), (status.Failing, status.FailuresSinceSuccess));
+    }
+
+    [Fact]
+    public void A_note_survives_the_records_file_round_trip()
+    {
+        var record = Ok(CaptureKind.Skills, DateTimeOffset.Parse("2026-11-20T10:00:00Z")) with { Note = "in project `notes`" };
+
+        CaptureRecords.Append(RecordsPath, record);
+
+        Assert.Equal(record, Assert.Single(CaptureRecords.Read(RecordsPath)));
+        Assert.Contains("\"note\":\"in project `notes`\"", File.ReadAllText(RecordsPath));
+    }
+
     // ── the service ─────────────────────────────────────────────────────────────
 
     [Fact]

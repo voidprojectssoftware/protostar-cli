@@ -79,6 +79,8 @@ internal static class SyncStatusPresenter
             failuresSinceSuccess = b.FailuresSinceSuccess,
             lastReason = b.LastReason,
             lastError = b.LastError,
+            lastNoteAt = b.LastNoteAt,
+            lastNote = b.LastNote,
         })),
         ["failedSessions"] = Node(status.FailedSessions.Select(f => new { id = f.Key, harness = f.Harness, path = f.Path, failedAt = f.FailedAt })),
         ["pending"] = Node(new { bytes = status.PendingBytes, transcripts = status.PendingTranscripts }),
@@ -120,12 +122,14 @@ internal static class SyncStatusPresenter
 
     private static string Backup(BackupStatus backup)
     {
+        // A note is news, not a problem: it sits under the row whether or not later backups failed.
+        var note = backup.LastNoteAt is { } noted ? $"\n[grey]Note from {When(noted)}:[/] {Markup.Escape(backup.LastNote!)}" : "";
         if (!backup.Failing)
-            return backup.LastSuccessAt is { } ok ? $"[green]last backed up {When(ok)}[/]" : "no background backup recorded yet";
+            return (backup.LastSuccessAt is { } ok ? $"[green]last backed up {When(ok)}[/]" : "no background backup recorded yet") + note;
         var failures = SessionsPresenter.Count(backup.FailuresSinceSuccess, "failure");
         var since = backup.LastSuccessAt is { } last ? $"since the last backup {When(last)}" : "and no backup recorded";
         return $"[red]{failures}[/] {since}; newest {When(backup.LastFailureAt!.Value)}: " +
-            Markup.Escape(backup.LastError ?? backup.LastReason?.ToString() ?? "unknown error");
+            Markup.Escape(backup.LastError ?? backup.LastReason?.ToString() ?? "unknown error") + note;
     }
 
     private static string When(DateTimeOffset at) => $"{SessionsPresenter.Ago(at)} [grey]({at.ToLocalTime():yyyy-MM-dd HH:mm})[/]";

@@ -1,4 +1,5 @@
 using Protostar.Cli.Auth;
+using Protostar.Cli.Harness;
 using Protostar.Cli.Projects;
 using Protostar.Cli.Registry;
 using Protostar.Cli.Sessions;
@@ -26,7 +27,26 @@ public sealed class ProjectServiceTests : IDisposable
 
     private readonly MetaOnlyRegistry _meta = new();
 
-    private ProjectService Sut() => new(_resolver, new FakeTokens(() => _session ?? SessionLookups.Of(_token)), new RegistryCapabilities(_meta), _api, new FakeMachine(), _ledger, _agentLedger);
+    private readonly List<DiscoveredSkill> _local = [];
+    private FakeRegistryApi _skills = new();
+
+    private ProjectService Sut() => new(
+        _resolver, new FakeTokens(() => _session ?? SessionLookups.Of(_token)), new RegistryCapabilities(_meta), _api, new FakeMachine(), _ledger, _agentLedger,
+        new FakeSkillService(_local), _skills);
+
+    // A project skill in the folder whose record says it synced at v1 as a skill of project synced; edited when changedHere.
+    private DiscoveredSkill Copy(string name, Guid synced, bool changedHere = false)
+    {
+        var path = Path.Combine(_folder, ".claude", "skills", name);
+        Directory.CreateDirectory(path);
+        File.WriteAllText(Path.Combine(path, "SKILL.md"), $"---\nname: {name}\ndescription: d\n---\nbody\n");
+        var copy = new DiscoveredSkill { Name = name, Scope = SkillScope.Project, Path = path, ProjectRoot = _folder };
+        _ledger.Record(new Uri(Registry), path, new SkillLedgerEntry(SkillFileReader.Hash(SkillFileReader.Read(path)), 1, name, synced));
+        if (changedHere)
+            File.AppendAllText(Path.Combine(path, "SKILL.md"), "changed here\n");
+        _local.Add(copy);
+        return copy;
+    }
 
     [Fact]
     public async Task Show_asks_the_registry_with_the_facts_the_session_resolver_gives()
@@ -177,6 +197,79 @@ public sealed class ProjectServiceTests : IDisposable
 
         Assert.Null(result.Change);
         Assert.Equal(from, _ledger.Get(registry, "/f/.claude/skills/notes")!.ProjectId);
+    }
+
+    // ----- skills an unlink leaves behind (cli#129) -----
+
+    [Fact]
+    public async Task An_unlink_lists_the_skills_it_leaves_behind_and_what_becomes_of_each()
+    {
+        var linked = Guid.NewGuid();
+        var own = Guid.NewGuid();
+        _api.ProjectBefore = linked;
+        _api.Unlinked = new ProjectLinkChange { Outcome = "unlinked", Project = new RemoteProject { ProjectId = own, Name = "notes" } };
+        Copy("deploy", linked, changedHere: true);
+        Copy("lint", linked);
+        Copy("gone", linked);
+        Copy("mine", linked);
+        _skills.Skills.Add(new RegistrySkill("deploy", null, 1, "", DateTimeOffset.UnixEpoch, linked, "widget"));
+        _skills.Skills.Add(new RegistrySkill("lint", null, 1, "", DateTimeOffset.UnixEpoch, linked, "widget"));
+        _skills.Skills.Add(new RegistrySkill("mine", null, 1, "", DateTimeOffset.UnixEpoch, linked, "widget"));
+        _skills.Skills.Add(new RegistrySkill("Mine", null, 2, "", DateTimeOffset.UnixEpoch, own, "notes"));
+        _skills.Removed.Add(new RegistryRemovedSkill("gone", linked, 1, "gone-now"));
+
+        var result = await Sut().UnlinkAsync(Registry, _folder, CancellationToken.None);
+
+        Assert.Equal("widget", result.LeftFrom);
+        Assert.Equal(
+            [
+                new SkillLeftBehind("deploy", LeftSkillFate.ChangedHere), new SkillLeftBehind("gone", LeftSkillFate.Removed),
+                new SkillLeftBehind("lint", LeftSkillFate.StillLinked), new SkillLeftBehind("mine", LeftSkillFate.FolderHasOwn),
+            ],
+            result.LeftSkills);
+        Assert.Equal(1, _skills.ListCalls);
+    }
+
+    [Fact]
+    public async Task Skills_that_moved_or_synced_in_another_project_are_not_left_behind_and_cost_no_list()
+    {
+        var linked = Guid.NewGuid();
+        var own = Guid.NewGuid();
+        _api.ProjectBefore = linked;
+        _api.Unlinked = new ProjectLinkChange { Outcome = "unlinked", Project = new RemoteProject { ProjectId = own, Name = "notes" }, MovedSkills = ["pushed"] };
+        Copy("pushed", linked);
+        Copy("elsewhere", Guid.NewGuid());
+
+        var result = await Sut().UnlinkAsync(Registry, _folder, CancellationToken.None);
+
+        Assert.Null(result.LeftSkills);
+        Assert.Equal(0, _skills.ListCalls);
+    }
+
+    [Fact]
+    public async Task A_list_the_registry_refuses_leaves_each_skill_unknown_but_still_listed()
+    {
+        var linked = Guid.NewGuid();
+        _api.ProjectBefore = linked;
+        _api.Unlinked = new ProjectLinkChange { Outcome = "unlinked", Project = new RemoteProject { Name = "notes" } };
+        Copy("lint", linked);
+        _skills = new FakeRegistryApi { ListError = "boom" };
+
+        var result = await Sut().UnlinkAsync(Registry, _folder, CancellationToken.None);
+
+        Assert.Equal([new SkillLeftBehind("lint", LeftSkillFate.Unknown)], result.LeftSkills);
+    }
+
+    [Fact]
+    public void Each_fate_says_what_happens_next()
+    {
+        Assert.StartsWith("unchanged here, so it stays widget's skill and `protostar skills pull` keeps it up to date from there.",
+            ProjectPresenter.Fate(new SkillLeftBehind("lint", LeftSkillFate.StillLinked), "widget", "notes"));
+        Assert.Equal(
+            "changed here since it was pulled, so it now belongs to notes: the next backup (the capture hook, `protostar skills push` or " +
+            "`protostar setup`) backs it up there as a new skill.",
+            ProjectPresenter.Fate(new SkillLeftBehind("deploy", LeftSkillFate.ChangedHere), "widget", "notes"));
+        Assert.Contains("notes has its own 'mine'", ProjectPresenter.Fate(new SkillLeftBehind("mine", LeftSkillFate.FolderHasOwn), "widget", "notes"));
     }
 
     private sealed class RecordingResolver : IProjectFactsResolver

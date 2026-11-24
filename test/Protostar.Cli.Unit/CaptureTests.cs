@@ -149,6 +149,46 @@ public sealed class CaptureServiceTests
     }
 
     [Fact]
+    public void A_hook_backup_into_another_project_names_it_logs_it_and_records_it_as_a_note()
+    {
+        var notes = Guid.NewGuid();
+        var push = new SkillPushRunResult(SkillPushRunFailure.None, null, new Uri("https://registry.test"),
+        [
+            new SkillPushEntry(new DiscoveredSkill { Name = "deploy", Scope = SkillScope.Project, Path = "/r/.claude/skills/deploy" },
+                new SkillPushOutcome(SkillPushStatus.Created, 1, null, notes, "notes", LeftProject: Guid.NewGuid())),
+        ]);
+        var output = new StringWriter();
+        var log = new List<string>();
+        var records = new List<CaptureRecord>();
+
+        CapturePresenter.Render("PostToolUse", new CaptureResult(CaptureAction.SkillBackedUp, "deploy", push, null), output, log.Add, records.Add);
+
+        const string line =
+            "protostar capture (PostToolUse): backed up skill 'deploy' as v1 in project notes, this folder's project. It last synced as a skill of " +
+            "another project, which this folder is no longer in, and has changed here since, so it now belongs to this folder's project. " +
+            "`protostar skills remote` shows both.";
+        Assert.Equal(line + Environment.NewLine, output.ToString());
+        Assert.EndsWith(line, Assert.Single(log));
+        var record = Assert.Single(records);
+        Assert.True(record.Ok);
+        Assert.Null(record.Error);
+        Assert.Equal(line["protostar capture (PostToolUse): ".Length..], record.Note);
+    }
+
+    [Fact]
+    public void An_ordinary_hook_backup_is_not_logged_and_records_no_note()
+    {
+        var records = new List<CaptureRecord>();
+        var log = new List<string>();
+
+        CapturePresenter.Render("PostToolUse", new CaptureResult(CaptureAction.SkillBackedUp, "alpha", Ok(SkillPushStatus.Created, 2), null),
+            new StringWriter(), log.Add, records.Add);
+
+        Assert.Empty(log);
+        Assert.Null(Assert.Single(records).Note);
+    }
+
+    [Fact]
     public void Presenter_logs_a_stale_refusal_once_and_not_when_it_is_remembered()
     {
         CaptureResult Stale(bool remembered) => new(CaptureAction.SkillBackedUp, "alpha", new SkillPushRunResult(

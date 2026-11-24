@@ -251,9 +251,14 @@ internal enum SkillPushStatus
 /// registry already refused this exact content; the capture hook does not log it again.
 /// </param>
 /// <param name="RenamedTo">For a <see cref="SkillPushStatus.Removed"/> rename, the skill's name in the registry now; <c>null</c> otherwise.</param>
+/// <param name="LeftProject">
+/// For a project skill the registry filed under <paramref name="ProjectId"/> although its copy last synced as a skill of
+/// another project, that other project: the copy was pulled while its folder was linked there, and changed after an
+/// unlink (cli#129). <c>null</c> otherwise.
+/// </param>
 internal sealed record SkillPushOutcome(
     SkillPushStatus Status, int? Version, string? Message, Guid? ProjectId = null, string? ProjectName = null, bool Remembered = false,
-    string? RenamedTo = null)
+    string? RenamedTo = null, Guid? LeftProject = null)
 {
     /// <summary>True when the skill is now safely in the registry.</summary>
     public bool Succeeded => Status is SkillPushStatus.Created or SkillPushStatus.Unchanged;
