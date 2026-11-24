@@ -33,6 +33,10 @@ internal sealed class AgentLedger : IAgentLedger
             ? agents
             : new Dictionary<string, AgentLedgerEntry>();
 
+    /// <inheritdoc />
+    public void Forget(Uri registry, string filePath) =>
+        Change(registry, agents => agents.Remove(Normalize(filePath)));
+
     private static void Change(Uri registry, Action<Dictionary<string, AgentLedgerEntry>> change)
     {
         try

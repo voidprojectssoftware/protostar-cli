@@ -75,10 +75,7 @@ internal static class AgentPushPresenter
     }
 
     /// <summary>The ways out of "changed here and in the registry" for the agent <paramref name="name"/>.</summary>
-    /// <remarks>
-    /// Keep yours and keep theirs are one command each. There is no <c>--as</c> for agents yet, so keeping both means merging
-    /// the other machine's change into the file by hand first.
-    /// </remarks>
+    /// <remarks>Each way out is one command, as for skills: keep both pushes this copy as a new agent, after which the pull puts the registry's back.</remarks>
     internal static void ResolutionHelp(string name, int? registryVersion)
     {
         var theirs = registryVersion is { } v ? $"v{v}" : "the registry's version";
@@ -86,7 +83,7 @@ internal static class AgentPushPresenter
         AnsiConsole.MarkupLine($"[yellow]'{Markup.Escape(name)}' changed here and in the registry.[/] Choose one:");
         AnsiConsole.MarkupLine($"  keep yours:   [blue]protostar agents push {quoted} --force[/] [grey](replaces {theirs}, which stays in history)[/]");
         AnsiConsole.MarkupLine($"  keep theirs:  [blue]protostar agents pull {quoted} --force[/] [grey](overwrites your copy here)[/]");
-        AnsiConsole.MarkupLine($"  keep both:    merge the change made on the other machine into this file, then [blue]protostar agents push {quoted} --force[/]");
+        AnsiConsole.MarkupLine($"  keep both:    [blue]protostar agents push {quoted} --as NEW-NAME[/] [grey](pushes yours as a new agent, then pull {quoted})[/]");
     }
 
     internal static string Describe(AgentPushOutcome outcome) => outcome.Status switch

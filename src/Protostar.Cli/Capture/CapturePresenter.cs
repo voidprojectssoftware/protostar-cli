@@ -149,7 +149,8 @@ internal static class CapturePresenter
 
         var attention = result.Failure != AgentPushRunFailure.None ||
             result.Entries.Any(e => e.Outcome.Status is AgentPushStatus.Refused or AgentPushStatus.Failed or AgentPushStatus.Conflict ||
-                                    e.Outcome is { Status: AgentPushStatus.Stale or AgentPushStatus.Removed, Remembered: false });
+                                    e.Outcome is { Status: AgentPushStatus.Stale or AgentPushStatus.Removed, Remembered: false } ||
+                                    e.Outcome is { Status: AgentPushStatus.Created, LeftProject: not null });
         if (attention)
             log($"{DateTimeOffset.UtcNow:O} {line}");
         record(Record(result, line));
@@ -173,9 +174,15 @@ internal static class CapturePresenter
             _ => CaptureFailure.Other,
         };
         return reason is null
-            ? new CaptureRecord(now, CaptureKind.Agents, true, registry, result.Entries.Count)
+            ? new CaptureRecord(now, CaptureKind.Agents, true, registry, result.Entries.Count,
+                Note: result.Entries.Any(e => e.Outcome is { Status: AgentPushStatus.Created, LeftProject: not null }) ? ErrorText(line) : null)
             : new CaptureRecord(now, CaptureKind.Agents, false, registry, result.Entries.Count, Reason: reason, Error: ErrorText(line));
     }
+
+    // The background push names the project the registry filed the agent in, from the push's answer (as for skills).
+    private static string LeftProjectNote(AgentPushOutcome outcome) =>
+        $"in project {outcome.ProjectName ?? outcome.ProjectId?.ToString()}, this folder's project. It last synced as an agent of another project, " +
+        "which this folder is no longer in, and has changed here since, so it now belongs to this folder's project. `protostar agents remote` shows both";
 
     // "agent 'reviewer' backed up as v3; agent 'linter' not backed up: ...", or why the run stopped.
     internal static string DescribeAgents(AgentPushRunResult result)
@@ -188,6 +195,8 @@ internal static class CapturePresenter
             return "agents already backed up.";
         return string.Join("; ", changed.Select(e => e.Outcome.Status switch
         {
+            AgentPushStatus.Created when e.Outcome.LeftProject is not null =>
+                $"agent '{e.Agent.Name}' backed up as v{e.Outcome.Version} {LeftProjectNote(e.Outcome)}",
             AgentPushStatus.Created => $"agent '{e.Agent.Name}' backed up as v{e.Outcome.Version}",
             AgentPushStatus.Stale => $"agent '{e.Agent.Name}' not backed up: {e.Outcome.Message} Run `protostar agents push {e.Agent.Name}` to choose which to keep",
             _ => $"agent '{e.Agent.Name ?? e.Agent.RelativePath}' not backed up: {e.Outcome.Message}",

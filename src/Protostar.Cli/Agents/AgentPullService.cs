@@ -25,6 +25,10 @@ namespace Protostar.Cli.Agents;
 /// a file is already there it is not this agent (no local agent has its name), so that is a conflict, never written.
 /// </para>
 /// <para>
+/// A project copy pulled while its folder was linked to another project, and left alone since, still compares with and
+/// updates from that project's agent (<see cref="LinkedAgentCopy"/>, <c>Target.Held</c>); an edited one is only here.
+/// </para>
+/// <para>
 /// A local copy whose ledger record names an agent the registry has deleted or renamed since is
 /// <see cref="AgentSyncState.RemovedInRegistry"/>. A pull renames an unedited copy of a renamed agent to follow it (its
 /// <c>name</c> line only; the file stays where it is, which is where a fresh pull of the agent puts it too) and keeps every
@@ -92,7 +96,8 @@ internal sealed class AgentPullService : IAgentPullService
                     comparisons.Add(RemovedCopyOf(context, target, leftover) is { } removed
                         ? new AgentComparison(target.Harness, leftover.Name!, AgentSyncState.RemovedInRegistry, null, leftover.Path, removed.Recorded.Version,
                             RemovalNote(removed, pulling: false), target.ProjectName)
-                        : new AgentComparison(target.Harness, leftover.Name!, AgentSyncState.LocalOnly, null, leftover.Path, null, Project: target.ProjectName));
+                        : new AgentComparison(target.Harness, leftover.Name!, AgentSyncState.LocalOnly, null, leftover.Path, null,
+                            NoLongerLinkedNote(context, target, leftover), target.ProjectName));
                 }
             }
 
@@ -314,7 +319,8 @@ internal sealed class AgentPullService : IAgentPullService
         var (current, installed) = match;
         var remote = pinned?.Agent ?? current;
         var harness = target.Harness;
-        var project = target.ProjectName;
+        var held = target.Held.Contains(current);
+        var project = held ? current.ProjectName : target.ProjectName;
 
         if (installed is null)
         {
@@ -361,7 +367,9 @@ internal sealed class AgentPullService : IAgentPullService
 
         var note = state == AgentSyncState.RemovedInRegistry
             ? $"This copy is of an earlier agent named '{current.Name}' (synced at v{recorded!.Version}), deleted from the registry since; the registry's " +
-              $"'{current.Name}' is a new agent that took the name. Run `protostar agents pull {Quote(current.Name)} --force` to replace this copy with it."
+              $"'{current.Name}' is a new agent that took the name. Run `protostar agents pull {Quote(current.Name)} --force` to replace this copy with it, or " +
+              $"`protostar agents push {Quote(current.Name)} --as NEW-NAME` to keep this copy as a separate agent."
+            : held ? LinkedAgentCopy.StillNote(current)
             : null;
         return new AgentComparison(harness, installed.Name!, state, remote, installed.Path, recorded?.Version, note, project);
     }
@@ -455,10 +463,27 @@ internal sealed class AgentPullService : IAgentPullService
 
     private static string Quote(string name) => name.Any(char.IsWhiteSpace) ? $"\"{name}\"" : name;
 
+    // Why a local copy no registry agent here claims, recorded under another project, is this folder's project's now
+    // (LinkedAgentCopy); null for any other copy that is only here.
+    private string? NoLongerLinkedNote(Context context, Target target, DiscoveredAgent local)
+    {
+        if (target.Scope != AgentScope.Project || _ledger.Get(context.Registry!, local.Path) is not { } recorded ||
+            !LinkedAgentCopy.NamesOtherProject(recorded, target.ProjectId))
+        {
+            return null;
+        }
+
+        return LinkedAgentCopy.WhyNotStill(recorded, HashOrNull(local.Path), context.Agents) + ". `protostar agents push` backs it up there.";
+    }
+
+    // The registry agents a target compares with: personal agents for a personal target; for a project target, this folder's
+    // project's agents and the other projects' agents its copies still belong to (Target.Held).
     private static List<RegistryAgent> InScope(Target target, IReadOnlyList<RegistryAgent> agents) => agents.Where(a => Covers(target, a)).ToList();
 
     private static bool Covers(Target target, RegistryAgent agent) =>
-        target.Scope == AgentScope.Personal ? agent.ProjectId is null : target.ProjectId is { } id && agent.ProjectId == id;
+        target.Scope == AgentScope.Personal
+            ? agent.ProjectId is null
+            : (target.ProjectId is { } id && agent.ProjectId == id) || target.Held.Contains(agent);
 
     // Project agents no project target here covers (another project's, as a rule): listed, never written. A run for personal
     // agents only (no project folder, as setup and --personal-only) leaves project agents out altogether.
@@ -596,7 +621,7 @@ internal sealed class AgentPullService : IAgentPullService
             if (here.Root is { } root)
             {
                 foreach (var personal in targets.ToList())
-                    AddProjectTarget(personal, here, root, targets);
+                    AddProjectTarget(personal, here, root, targets, registry, agents);
             }
         }
 
@@ -627,7 +652,7 @@ internal sealed class AgentPullService : IAgentPullService
     // The folder's project agents in one harness. Discovery walks up to the nearest project config, which may be above the
     // checkout (a fresh clone has none of its own yet), so only agents found under this root count. A root whose project
     // agents folder is the personal one (the home folder) is not a project.
-    private static void AddProjectTarget(Target personal, Here here, string root, List<Target> targets)
+    private void AddProjectTarget(Target personal, Here here, string root, List<Target> targets, Uri registry, IReadOnlyList<RegistryAgent> agents)
     {
         var directory = personal.Capability.ProjectAgentsDirectory(root);
         if (SamePath(directory, personal.AgentsDirectory))
@@ -636,8 +661,24 @@ internal sealed class AgentPullService : IAgentPullService
         var local = personal.Capability.DiscoverAgents(personal.Location, root)
             .Where(a => a.Scope == AgentScope.Project && a.Name is not null && a.ProjectRoot is { } r && SamePath(r, root))
             .ToList();
-        targets.Add(personal with { AgentsDirectory = directory, Scope = AgentScope.Project, ProjectId = here.ProjectId, ProjectName = here.Name, Local = local });
+        targets.Add(personal with
+        {
+            AgentsDirectory = directory, Scope = AgentScope.Project, ProjectId = here.ProjectId, ProjectName = here.Name, Local = local,
+            Held = Held(local, here.ProjectId, registry, agents),
+        });
     }
+
+    // The other projects' agents that copies among `local`, in a folder of project `folderProject`, still belong to: those
+    // pulled while the folder was linked elsewhere and left alone since (LinkedAgentCopy). Reads only copies whose record
+    // names another project.
+    private List<RegistryAgent> Held(IReadOnlyList<DiscoveredAgent> local, Guid? folderProject, Uri registry, IReadOnlyList<RegistryAgent> agents) =>
+        local
+            .Select(l => (Copy: l, Recorded: _ledger.Get(registry, l.Path)))
+            .Where(c => LinkedAgentCopy.NamesOtherProject(c.Recorded, folderProject))
+            .Select(c => LinkedAgentCopy.StillOf(c.Recorded, HashOrNull(c.Copy.Path), folderProject, agents))
+            .OfType<RegistryAgent>()
+            .Distinct()
+            .ToList();
 
     private static bool SamePath(string a, string b) =>
         string.Equals(
@@ -661,7 +702,11 @@ internal sealed class AgentPullService : IAgentPullService
     // folder has no project in the registry yet.
     private sealed record Target(
         IHarness Harness, IAgentCapability Capability, HarnessLocation Location, string AgentsDirectory, AgentScope Scope, Guid? ProjectId, string? ProjectName,
-        IReadOnlyList<DiscoveredAgent> Local);
+        IReadOnlyList<DiscoveredAgent> Local)
+    {
+        /// <summary>For a project target, the other projects' agents its copies still belong to (<see cref="LinkedAgentCopy"/>).</summary>
+        public IReadOnlyList<RegistryAgent> Held { get; init; } = [];
+    }
 
     // The project the command's folder is in. Root is null when the registry could not say; Problem says why.
     private sealed record Here(Guid? ProjectId, string? Name, string? Root, string? Problem);

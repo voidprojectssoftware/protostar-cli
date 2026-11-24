@@ -27,6 +27,11 @@ namespace Protostar.Cli.Agents;
 /// project cannot be told is not sent.
 /// </para>
 /// <para>
+/// The command also settles an unedited copy recorded under another project by <see cref="LinkedAgentCopy"/>: still that
+/// project's agent, so reported unchanged, or this folder's project's, so sent with base 0 like an edited one. The hook
+/// lists nothing, so it only ever sends edited copies, and names the project they went to from the push's answer.
+/// </para>
+/// <para>
 /// A record of a project agent that a link on another machine moved is followed through
 /// <see cref="MovedAgentLedger.FollowAsync"/>: an agent of that name in another project, none left in the recorded
 /// project, and the recorded version's content (from the list, or one download when the agent moved on since) the same.
@@ -115,10 +120,22 @@ internal sealed class AgentPushService : IAgentPushService
         if (request.FromHook)
             selected = selected.Where(a => a.Name is not null && a.Description is not null).ToList();
 
+        // --as moves the file to <NEW>.md once the registry has the new agent, so a name or a file another agent of the scope
+        // already uses here would leave two agents answering to it. Every harness's agents count, as they share the registry.
+        var local = request.HarnessId is null ? discovered : Discover(null, request.HarnessHome, request.ProjectStart, out _);
+        if (request.As is { } asName)
+        {
+            if (AsProblem(request.Names, selected, asName) is { } asProblem)
+                return AgentPushRunResult.Fail(AgentPushRunFailure.InvalidAs, asProblem, registry);
+            if (LocalHolder(selected[0], asName, local) is { } localHolder)
+                return AgentPushRunResult.Fail(AgentPushRunFailure.InvalidAs, Taken(asName, localHolder, selected[0], local, null), registry);
+        }
+
         var entries = new AgentPushEntry?[selected.Count];
         var pending = new List<(int Index, byte[] Content, string Hash)>();
         var unconfirmed = new List<(int Index, byte[] Content, string Hash)>();
-        var verify = !request.FromHook;
+        // --as pushes under a new name, so there is no record of it to confirm: it always uploads.
+        var verify = !request.FromHook && request.As is null;
         var seen = new Dictionary<(AgentScope, string?, string), (DiscoveredAgent Agent, string? Hash)>();
         for (var i = 0; i < selected.Count; i++)
         {
@@ -150,7 +167,7 @@ internal sealed class AgentPushService : IAgentPushService
             seen[key] = (agent, hash);
 
             var recorded = _ledger.Get(registry, agent.Path);
-            if (!request.Force && recorded is not null && Vouches(recorded, agent) && recorded.ContentHash == hash)
+            if (!request.Force && request.As is null && recorded is not null && Vouches(recorded, agent) && recorded.ContentHash == hash)
             {
                 if (verify)
                     unconfirmed.Add((i, content, hash));
@@ -202,12 +219,61 @@ internal sealed class AgentPushService : IAgentPushService
                 check.Failure == RegistryCheckFailure.Unreachable ? AgentPushRunFailure.RegistryUnreachable : AgentPushRunFailure.Incompatible, check.Detail, registry);
         }
 
+        if (request.As is { } asNew)
+        {
+            // Nothing pending means the one agent was refused locally (no name or description, unreadable): that is the answer.
+            if (pending.FirstOrDefault() is not { Content: { } asContent } asOne)
+                return new AgentPushRunResult(AgentPushRunFailure.None, null, registry, entries.Select(e => e!).ToList());
+            var taken = await RegistryNamesAsync(registry, session.AccessToken, selected[0], cancellationToken);
+            if (taken.Failure is { } takenFailure)
+                return takenFailure;
+            if (RegistryHolder(asNew, taken) is { } registryHolder)
+                return AgentPushRunResult.Fail(AgentPushRunFailure.InvalidAs, Taken(asNew, registryHolder, selected[0], local, taken), registry);
+            entries[asOne.Index] = new AgentPushEntry(selected[asOne.Index], await PushAsAsync(registry, session.AccessToken, selected[asOne.Index], asContent, asNew, cancellationToken));
+            return new AgentPushRunResult(AgentPushRunFailure.None, null, registry, entries.Select(e => e!).ToList());
+        }
+
         var gone = new HashSet<int>();
+
+        // Which project each project agent's folder is in now, asked at most once per folder.
+        var heres = new Dictionary<string, ApiResult<RemoteProject>>(StringComparer.Ordinal);
+        async Task<ApiResult<RemoteProject>> HereAsync(DiscoveredAgent agent)
+        {
+            if (!heres.TryGetValue(agent.ProjectRoot!, out var here))
+                heres[agent.ProjectRoot!] = here = await _projects.ResolveProjectAsync(registry, session.AccessToken, _machine.Get().Id, _facts.Resolve(agent.ProjectRoot!), cancellationToken);
+            return here;
+        }
+
         if (mustList)
         {
             var list = await _api.ListAgentsAsync(registry, session.AccessToken, cancellationToken);
             if (list.Agents is not { } agents)
                 return AgentPushRunResult.Fail(AgentPushRunFailure.ListFailed, list.Error, registry);
+
+            // An unedited project agent copy recorded under a project other than its folder's (pulled while the folder was
+            // linked elsewhere) is still that project's agent, or this folder's project's and never synced there
+            // (LinkedAgentCopy). An edited one is never still that project's: the folder check below sends it with no base.
+            // A copy of an agent removed from the registry is reported as such below, like any other.
+            foreach (var (index, content, hash) in unconfirmed.ToList())
+            {
+                var agent = selected[index];
+                if (agent.Scope != AgentScope.Project || Synced(registry, agent) is not { ProjectId: not null })
+                    continue;
+
+                // A record of an agent a link moved follows it first, so a move is never mistaken for a copy an unlink left.
+                await StillInRegistryAsync(registry, session.AccessToken, agent, agents, cancellationToken);
+                if (Synced(registry, agent) is not { ProjectId: { } syncedIn } recorded || list.RemovalOf(recorded.Name, syncedIn, recorded.Version) is not null)
+                    continue;
+                var here = await HereAsync(agent);
+                if (!here.Ok || !LinkedAgentCopy.NamesOtherProject(recorded, here.Value!.ProjectId))
+                    continue;
+
+                unconfirmed.RemoveAll(u => u.Index == index);
+                if (LinkedAgentCopy.StillOf(recorded, hash, here.Value.ProjectId, agents) is { } owner)
+                    entries[index] = new AgentPushEntry(agent, new AgentPushOutcome(AgentPushStatus.Unchanged, recorded.Version, LinkedAgentCopy.StillNote(owner), owner.ProjectId, owner.ProjectName));
+                else
+                    pending.Add((index, content, hash));
+            }
 
             // A copy whose registry agent is gone: of an agent deleted or renamed since it synced, reported and not uploaded
             // (that would undo the delete or rename) unless forced; or of one the registry has no memory of, backed up again.
@@ -251,14 +317,12 @@ internal sealed class AgentPushService : IAgentPushService
         // another project goes with no base, and one whose folder's project cannot be told is not sent. The hook asks too, but
         // only for an edited copy it was about to upload anyway, so an unchanged agent still costs it nothing.
         var elsewhere = new HashSet<int>();
-        var heres = new Dictionary<string, ApiResult<RemoteProject>>(StringComparer.Ordinal);
         foreach (var (index, _, _) in pending.ToList())
         {
             var agent = selected[index];
             if (agent.Scope != AgentScope.Project || gone.Contains(index) || Synced(registry, agent) is not { ProjectId: { } syncedIn } recorded)
                 continue;
-            if (!heres.TryGetValue(agent.ProjectRoot!, out var here))
-                heres[agent.ProjectRoot!] = here = await _projects.ResolveProjectAsync(registry, session.AccessToken, _machine.Get().Id, _facts.Resolve(agent.ProjectRoot!), cancellationToken);
+            var here = await HereAsync(agent);
             if (!here.Ok)
             {
                 pending.RemoveAll(p => p.Index == index);
@@ -286,6 +350,7 @@ internal sealed class AgentPushService : IAgentPushService
         Uri registry, string accessToken, DiscoveredAgent agent, byte[] content, string hash, bool force, bool gone, bool elsewhere, CancellationToken cancellationToken)
     {
         var name = agent.Name!;
+        var syncedIn = elsewhere ? Synced(registry, agent)?.ProjectId : null;
         var basis = gone || elsewhere ? null : Synced(registry, agent);
         var based = basis?.Version ?? 0;
         var project = ProjectOf(agent);
@@ -307,9 +372,11 @@ internal sealed class AgentPushService : IAgentPushService
 
         if (elsewhere && outcome.Succeeded && !replaced)
         {
+            // LeftProject lets the hook's line, which nobody watches, name where the copy went.
             outcome = outcome with
             {
                 Message = $"Last synced as another project's agent, which this folder is no longer in, so it now belongs to this folder's project: backed it up there as a new agent.",
+                LeftProject = syncedIn,
             };
         }
         else if (gone && outcome.Succeeded && !replaced)
@@ -340,6 +407,150 @@ internal sealed class AgentPushService : IAgentPushService
 
         return outcome;
     }
+
+    // Keep both: pushes the copy as a new registry agent named newName (its name line rewritten to match) at the path
+    // <newName>.md beside the file, then moves the file there the same way. Base 0: newName must be a new agent, so an
+    // existing agent of that name is refused, never overwritten.
+    //
+    // A new file, not the same one renamed in place as `agents rename` does: a rename replaces the agent, so its path stays
+    // its own, but here both agents live on. Two registry agents stored at one path could never both be installed on a
+    // machine, since a pull will not write over a file holding another agent, so the original's path is left free for it.
+    private async Task<AgentPushOutcome> PushAsAsync(
+        Uri registry, string accessToken, DiscoveredAgent agent, byte[] content, string newName, CancellationToken cancellationToken)
+    {
+        var renamed = AgentInstaller.Named(content, newName);
+        if (renamed.AsSpan().SequenceEqual(content))
+        {
+            return new AgentPushOutcome(AgentPushStatus.Refused, null,
+                "Its front matter has no `name:` line protostar can rewrite, so nothing was pushed. Set the name in the file by hand, then push it.");
+        }
+
+        var path = NewPath(agent, newName);
+        var directory = Path.GetDirectoryName(agent.RelativePath.Replace('/', Path.DirectorySeparatorChar));
+        var relative = (string.IsNullOrEmpty(directory) ? "" : directory.Replace(Path.DirectorySeparatorChar, '/') + "/") + newName + ".md";
+        var outcome = await _api.PushAgentAsync(registry, accessToken, relative, renamed, ProjectOf(agent), 0, cancellationToken);
+        if (outcome.Status == AgentPushStatus.Stale)
+            return new AgentPushOutcome(AgentPushStatus.Refused, null, $"The registry already has an agent named '{newName}' with other content, so nothing was pushed. Choose another name.");
+        if (!outcome.Succeeded)
+            return outcome;
+
+        var pushed = $"Pushed as '{newName}' (v{outcome.Version})";
+        try
+        {
+            AgentInstaller.Write(path, renamed);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return outcome with
+            {
+                Message = $"{pushed}, but {path} could not be written ({ex.Message}), so this file still holds '{agent.Name}' as it was. " +
+                    $"`protostar agents pull {Quote(newName)}` installs the new agent there.",
+            };
+        }
+
+        _ledger.Record(registry, path, new AgentLedgerEntry(Hash(renamed), outcome.Version ?? 0, newName, outcome.ProjectId));
+        try
+        {
+            File.Delete(agent.Path);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return outcome with
+            {
+                Message = $"{pushed} and written to {path}, but {agent.Path} could not be removed ({ex.Message}). Remove it by hand, then " +
+                    $"`protostar agents pull {Quote(agent.Name!)}` installs the registry's '{agent.Name}' there.",
+            };
+        }
+
+        _ledger.Forget(registry, agent.Path);
+        return outcome with
+        {
+            Message = $"{pushed} and moved here to {path}. `protostar agents pull {Quote(agent.Name!)}` installs the registry's '{agent.Name}' back at {agent.Path}.",
+        };
+    }
+
+    // Where --as moves the file: <newName>.md in the same folder.
+    private static string NewPath(DiscoveredAgent agent, string newName) => Path.Combine(Path.GetDirectoryName(agent.Path)!, newName + ".md");
+
+    // Why --as cannot go ahead: it pushes exactly one local agent under a name that can also be a file name.
+    private static string? AsProblem(IReadOnlyList<string> names, IReadOnlyList<DiscoveredAgent> selected, string newName)
+    {
+        if (names.Count != 1)
+            return "--as pushes one agent under a new name: name exactly one agent.";
+        if (selected.Count != 1)
+            return $"'{names[0]}' matches {selected.Count} local agents (a personal and a project agent, or several harnesses). Narrow it with --personal-only, --harness or --project.";
+        if (string.IsNullOrWhiteSpace(newName) || newName != newName.Trim() || newName.EndsWith('.') ||
+            newName.IndexOfAny(['/', '\\', ':', '*', '?', '"', '<', '>', '|']) >= 0 || newName.Any(char.IsControl))
+        {
+            return $"'{newName}' cannot name an agent: it becomes the file name too, so it must not be blank, start or end with a space, end with '.', " +
+                "or contain / \\ : * ? \" < > | or control characters.";
+        }
+
+        if (string.Equals(newName, selected[0].Name, StringComparison.Ordinal))
+            return $"'{newName}' is already this agent's name. --as takes a different one.";
+        return null;
+    }
+
+    // What already answers to newName in the scope of the agent being pushed, on this machine: another agent of that name,
+    // or the file it would move to. Null when free.
+    private static string? LocalHolder(DiscoveredAgent agent, string newName, IReadOnlyList<DiscoveredAgent> local)
+    {
+        if (local.FirstOrDefault(a => a.Path != agent.Path && a.Scope == agent.Scope && Root(a) == Root(agent) && string.Equals(a.Name, newName, StringComparison.Ordinal)) is { } other)
+            return $"the {Describe(other.Scope)} agent at {other.Path} is called '{other.Name}'";
+        var path = NewPath(agent, newName);
+        return File.Exists(path) || Directory.Exists(path) ? $"{path} already exists" : null;
+    }
+
+    // The registry's agent names, live and removed, in the scope of the agent being pushed: its folder's project's (or none
+    // when the folder has no project yet), or the personal ones.
+    private async Task<RegistryNames> RegistryNamesAsync(Uri registry, string accessToken, DiscoveredAgent agent, CancellationToken cancellationToken)
+    {
+        Guid? projectId = null;
+        if (ProjectOf(agent) is { } project)
+        {
+            var resolved = await _projects.ResolveProjectAsync(registry, accessToken, project.MachineId, project.Facts, cancellationToken);
+            if (!resolved.Ok)
+                return new RegistryNames(null, [], [], AgentPushRunResult.Fail(AgentPushRunFailure.ListFailed, resolved.Error, registry));
+            if (resolved.Value!.ProjectId is not { } id)
+                return new RegistryNames(null, [], [], null);
+            projectId = id;
+        }
+
+        var list = await _api.ListAgentsAsync(registry, accessToken, cancellationToken);
+        if (list.Agents is not { } agents)
+            return new RegistryNames(projectId, [], [], AgentPushRunResult.Fail(AgentPushRunFailure.ListFailed, list.Error, registry));
+        return new RegistryNames(projectId, agents.Where(a => a.ProjectId == projectId).ToList(), list.Removed.Where(r => r.ProjectId == projectId).ToList(), null);
+    }
+
+    // What answers to newName in the registry's scope: an agent, or a removed one whose copies may still be about. Null when free.
+    private static string? RegistryHolder(string newName, RegistryNames names)
+    {
+        var where = names.ProjectId is null ? "personal agent" : "agent in this project";
+        if (names.Agents.Any(a => string.Equals(a.Name, newName, StringComparison.Ordinal)))
+            return $"the registry already has a {where} named '{newName}'";
+        if (names.Removed.FirstOrDefault(r => string.Equals(r.Name, newName, StringComparison.Ordinal)) is { } removed)
+        {
+            var how = removed.RenamedTo is { } renamedTo ? $"renamed to '{renamedTo}'" : "deleted";
+            return $"the registry had a {where} named '{newName}' ({how} at v{removed.LastVersion}), and copies of it may still be synced under that name";
+        }
+
+        return null;
+    }
+
+    // Why --as cannot use newName, with a free name to try instead: the first of newName-2, newName-3, ... that nothing here,
+    // and nothing in the registry when it was asked, answers to.
+    private static string Taken(string newName, string holder, DiscoveredAgent agent, IReadOnlyList<DiscoveredAgent> local, RegistryNames? names)
+    {
+        var suggestion = Enumerable.Range(2, 98).Select(n => $"{newName}-{n}")
+            .FirstOrDefault(candidate => LocalHolder(agent, candidate, local) is null && (names is null || RegistryHolder(candidate, names) is null));
+        var instead = suggestion is null ? "Choose another name." : $"Choose another name, such as '{suggestion}'.";
+        return $"'{newName}' is already taken: {holder}. Nothing was pushed or changed. {instead}";
+    }
+
+    private static string Quote(string name) => name.Any(char.IsWhiteSpace) ? $"\"{name}\"" : name;
+
+    // The registry's agent names in one scope (a project, or personal when ProjectId is null), or the failure that stops the run.
+    private sealed record RegistryNames(Guid? ProjectId, IReadOnlyList<RegistryAgent> Agents, IReadOnlyList<RegistryRemovedAgent> Removed, AgentPushRunResult? Failure);
 
     // Whether the registry agent this copy last synced as is still listed. A copy that never synced counts as present.
     // An agent of that name whose versions start after the copy's is a new agent that reused the name, not this one. One

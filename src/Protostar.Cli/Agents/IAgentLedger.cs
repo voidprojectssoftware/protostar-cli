@@ -16,6 +16,10 @@ internal interface IAgentLedger
 
     /// <summary>Every record for <paramref name="registry"/>, keyed by full file path.</summary>
     IReadOnlyDictionary<string, AgentLedgerEntry> Entries(Uri registry);
+
+    /// <summary>Drops the record for the agent file at <paramref name="filePath"/>, when the file has moved.</summary>
+    /// <remarks>Never throws, like <see cref="Record"/>.</remarks>
+    void Forget(Uri registry, string filePath);
 }
 
 /// <summary>What was last pushed for one agent file, and any push the registry refused since.</summary>

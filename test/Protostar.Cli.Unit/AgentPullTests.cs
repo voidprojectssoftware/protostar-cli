@@ -300,6 +300,46 @@ public sealed class AgentPullTests : IDisposable
         Assert.Contains(("linter", (int?)1), _api.Downloads);
     }
 
+    // A project agent pulled at v1 while the repo was linked to another project, which still has it (cli#133).
+    private (string File, Guid Other) PulledWhileLinkedElsewhere()
+    {
+        var other = Guid.NewGuid();
+        var file = Write(Path.Combine(Repo, ".claude", "agents", "linter.md"), FakeAgentApi.File("linter", "v1"));
+        _api.Publish(other, "linter.md", "linter", "v1");
+        _ledger.Record(Registry, file, new AgentLedgerEntry(AgentPushService.Hash(File.ReadAllBytes(file)), 1, "linter", other));
+        return (file, other);
+    }
+
+    [Fact]
+    public async Task An_unedited_copy_pulled_while_linked_elsewhere_is_compared_with_and_updated_from_that_project()
+    {
+        var (file, other) = PulledWhileLinkedElsewhere();
+        _api.PushFromElsewhere(other, "linter", "v2");
+
+        var remote = Assert.Single((await Remote(Repo)).Agents, a => a.Name == "linter" && a.LocalPath is not null);
+        Assert.Equal((AgentSyncState.UpdateAvailable, "app"), (remote.State, remote.Project));
+        Assert.StartsWith("Still project app's agent", remote.Note);
+
+        var pulled = Assert.Single((await Pull(project: Repo)).Entries, e => e.Name == "linter" && e.Path == file);
+        Assert.Equal((AgentPullStatus.Updated, 2), (pulled.Status, pulled.Version));
+        Assert.Equal(FakeAgentApi.File("linter", "v2"), File.ReadAllText(file));
+        Assert.Equal(other, _ledger.Get(Registry, file)!.ProjectId);
+    }
+
+    [Fact]
+    public async Task An_edited_copy_pulled_while_linked_elsewhere_is_only_here_and_says_why()
+    {
+        var (file, _) = PulledWhileLinkedElsewhere();
+        Write(file, FakeAgentApi.File("linter", "edited after the unlink"));
+
+        var remote = Assert.Single((await Remote(Repo)).Agents, a => a.Name == "linter" && a.LocalPath is not null);
+
+        Assert.Equal(AgentSyncState.LocalOnly, remote.State);
+        Assert.Equal(
+            "Last synced as project app's agent, which this folder is no longer in (it was in that project when this copy last synced), but it has changed " +
+            "here since, so it now belongs to this folder's project. `protostar agents push` backs it up there.", remote.Note);
+    }
+
     [Fact]
     public void The_installer_refuses_a_download_that_does_not_match_its_hash_and_writes_nothing()
     {

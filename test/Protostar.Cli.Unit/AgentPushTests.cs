@@ -289,6 +289,146 @@ public sealed class AgentPushTests : IDisposable
         Assert.Equal(elsewhere, _ledger.Get(Registry, file)!.ProjectId);
     }
 
+    // ----- keep both: agents push --as (cli#133) -----
+
+    private AgentPushRequest As(string name, string newName) => Request(names: name) with { As = newName };
+
+    [Fact]
+    public async Task Keep_both_pushes_a_stale_edit_as_a_new_agent_in_its_own_file_and_leaves_the_original_alone()
+    {
+        var file = Personal("reviewer.md", "reviewer");
+        await Sut().PushAsync(Request(), CancellationToken.None);
+        _api.PushFromElsewhere(null, "reviewer", "changed on machine A");
+        Write(file, "reviewer", "changed on machine B");
+
+        var result = await Sut().PushAsync(As("reviewer", "reviewer-b"), CancellationToken.None);
+
+        var moved = Path.Combine(Home, "agents", "reviewer-b.md");
+        var outcome = Assert.Single(result.Entries).Outcome;
+        Assert.Equal((AgentPushStatus.Created, 1), (outcome.Status, outcome.Version));
+        Assert.Equal(
+            $"Pushed as 'reviewer-b' (v1) and moved here to {moved}. `protostar agents pull reviewer` installs the registry's 'reviewer' back at {file}.",
+            outcome.Message);
+        Assert.False(File.Exists(file));
+        Assert.Equal("---\nname: reviewer-b\ndescription: A test agent.\n---\nchanged on machine B\n", File.ReadAllText(moved));
+        Assert.Equal(("reviewer-b.md", 0), (_api.Pushed[^1].Path, _api.Bases[^1]));
+        Assert.Equal(new AgentLedgerEntry(AgentPushService.Hash(File.ReadAllBytes(moved)), 1, "reviewer-b", null), _ledger.Get(Registry, moved));
+        Assert.Null(_ledger.Get(Registry, file));
+
+        var theirs = (await _api.GetAgentContentAsync(Registry, "tok", "reviewer", null, null, CancellationToken.None)).Value!;
+        Assert.Equal((2, "reviewer.md"), (theirs.Version, theirs.Path));
+        Assert.Contains("changed on machine A", Encoding.UTF8.GetString(theirs.Content));
+
+        // Nothing is left to back up: the new file is recorded, and the next run confirms it.
+        Assert.Empty(Sut().Changed(Home, Repo, RegistryUrl));
+        Assert.Equal(AgentPushStatus.Unchanged, Assert.Single((await Sut().PushAsync(Request(), CancellationToken.None)).Entries).Outcome.Status);
+    }
+
+    [Fact]
+    public async Task Keep_both_keeps_a_nested_file_in_its_folder_and_a_project_agent_in_its_project()
+    {
+        Personal("review/nested.md", "deep");
+        Project("linter.md", "linter");
+
+        await Sut().PushAsync(As("deep", "deep-2"), CancellationToken.None);
+        await Sut().PushAsync(As("linter", "linter-2"), CancellationToken.None);
+
+        Assert.True(File.Exists(Path.Combine(Home, "agents", "review", "deep-2.md")));
+        Assert.True(File.Exists(Path.Combine(Repo, ".claude", "agents", "linter-2.md")));
+        Assert.Equal(["review/deep-2.md", "linter-2.md"], _api.Pushed.Select(p => p.Path));
+        Assert.Null(_api.Pushed[0].Project);
+        Assert.NotNull(_api.Pushed[1].Project);
+    }
+
+    [Fact]
+    public async Task Keep_both_refuses_a_name_taken_here_or_in_the_registry_and_changes_nothing()
+    {
+        var file = Personal("reviewer.md", "reviewer");
+        Personal("lint.md", "linter");
+        Personal("free.md", "something-else");
+        _api.Publish(null, "taken.md", "taken", "theirs");
+        _api.Publish(null, "gone.md", "gone", "theirs");
+        _api.Delete(null, "gone");
+        var before = File.ReadAllText(file);
+
+        async Task<string?> Refusal(string newName)
+        {
+            var result = await Sut().PushAsync(As("reviewer", newName), CancellationToken.None);
+            Assert.Equal(AgentPushRunFailure.InvalidAs, result.Failure);
+            return result.Detail;
+        }
+
+        Assert.Equal(
+            $"'linter' is already taken: the personal agent at {Path.Combine(Home, "agents", "lint.md")} is called 'linter'. Nothing was pushed or changed. " +
+            "Choose another name, such as 'linter-2'.", await Refusal("linter"));
+        Assert.StartsWith("'taken' is already taken: the registry already has a personal agent named 'taken'.", await Refusal("taken"));
+        Assert.StartsWith("'gone' is already taken: the registry had a personal agent named 'gone' (deleted at v1)", await Refusal("gone"));
+        Assert.StartsWith($"'free' is already taken: {Path.Combine(Home, "agents", "free.md")} already exists.", await Refusal("free"));
+        Assert.StartsWith("'a:b' cannot name an agent", await Refusal("a:b"));
+        Assert.Equal("'reviewer' is already this agent's name. --as takes a different one.", await Refusal("reviewer"));
+        Assert.Equal(before, File.ReadAllText(file));
+        Assert.DoesNotContain(_api.Pushed, p => p.Path.Contains("reviewer"));
+    }
+
+    // ----- copies left behind by an unlink (cli#133, the agents' half of cli#129) -----
+
+    private Guid RepoProject => SkillPushServiceTests.FakeRegistryApi.ProjectIdOf(Protostar.Cli.Projects.ProjectFacts.NotGit(Repo, Repo));
+
+    // A project agent pulled at v1 while its folder was linked to another project, which still has it.
+    private (string File, Guid Other) PulledWhileLinkedElsewhere()
+    {
+        var file = Project("linter.md", "linter");
+        var other = Guid.NewGuid();
+        _api.Publish(other, "linter.md", "linter", "You lint.");
+        _ledger.Record(Registry, file, new AgentLedgerEntry(AgentPushService.Hash(File.ReadAllBytes(file)), 1, "linter", other));
+        return (file, other);
+    }
+
+    [Fact]
+    public async Task An_unedited_copy_pulled_while_linked_elsewhere_is_still_that_projects_and_unchanged()
+    {
+        var (_, other) = PulledWhileLinkedElsewhere();
+
+        var outcome = Assert.Single((await Sut().PushAsync(Request(), CancellationToken.None)).Entries).Outcome;
+
+        Assert.Equal((AgentPushStatus.Unchanged, (Guid?)other), (outcome.Status, outcome.ProjectId));
+        Assert.Equal(
+            "Still project app's agent: pulled while this folder was linked to it, and unchanged here since. " +
+            "If you change it here, `protostar agents push` backs it up as this folder's project's agent instead.", outcome.Message);
+        Assert.Empty(_api.Pushed);
+    }
+
+    [Fact]
+    public async Task An_unedited_copy_whose_folders_project_has_its_own_agent_counts_as_that_ones()
+    {
+        PulledWhileLinkedElsewhere();
+        _api.Publish(RepoProject, "linter.md", "linter", "the folder's own");
+
+        var outcome = Assert.Single((await Sut().PushAsync(Request(), CancellationToken.None)).Entries).Outcome;
+
+        Assert.Equal(AgentPushStatus.Stale, outcome.Status);
+        Assert.Equal([0], _api.Bases);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task An_edited_copy_is_backed_up_as_the_folders_projects_and_the_hook_line_names_it(bool fromHook)
+    {
+        var (file, other) = PulledWhileLinkedElsewhere();
+        Write(file, "linter", "edited after the unlink");
+
+        var result = await Sut().PushAsync(Request(fromHook), CancellationToken.None);
+
+        var outcome = Assert.Single(result.Entries).Outcome;
+        Assert.Equal((AgentPushStatus.Created, (Guid?)RepoProject, (Guid?)other), (outcome.Status, outcome.ProjectId, outcome.LeftProject));
+        Assert.Equal([0], _api.Bases);
+        Assert.Contains(
+            $"agent 'linter' backed up as v1 in project {RepoProject}, this folder's project. It last synced as an agent of another project",
+            CapturePresenter.DescribeAgents(result));
+        Assert.Equal(RepoProject, _ledger.Get(Registry, file)!.ProjectId);
+    }
+
     [Fact]
     public void Moved_agent_records_follow_the_link_on_the_machine_that_ran_it()
     {
@@ -396,5 +536,7 @@ public sealed class AgentPushTests : IDisposable
         public void Record(Uri registry, string filePath, AgentLedgerEntry entry) => _entries[filePath] = entry;
 
         public IReadOnlyDictionary<string, AgentLedgerEntry> Entries(Uri registry) => _entries;
+
+        public void Forget(Uri registry, string filePath) => _entries.Remove(filePath);
     }
 }
