@@ -502,6 +502,7 @@ internal sealed class SkillPushService : ISkillPushService
         Uri registry, string accessToken, DiscoveredSkill skill, IReadOnlyList<SkillUploadFile> files, string hash, bool force, bool gone, string? disowned,
         CancellationToken cancellationToken)
     {
+        var syncedIn = gone ? null : Synced(registry, skill)?.ProjectId;
         var basis = gone || disowned is not null ? null : Synced(registry, skill);
         var based = basis is null ? 0 : basis.Version;
         var project = ProjectOf(skill);
@@ -543,13 +544,18 @@ internal sealed class SkillPushService : ISkillPushService
 
         if (outcome.Succeeded)
         {
+            // The registry files a project skill under its folder's project, which is not the one the copy last synced in
+            // after an unlink. The command explains that up front (disowned); the hook, which resolves nothing, learns it here
+            // from the push's answer, so its line and log can name where the copy went (cli#129).
+            if (syncedIn is { } left && outcome.ProjectId is { } filed && left != filed)
+                outcome = outcome with { LeftProject = left };
             _ledger.Record(registry, skill.Path, new SkillLedgerEntry(hash, outcome.Version, skill.Name, outcome.ProjectId));
         }
         else if (outcome.Status == SkillPushStatus.Stale)
         {
             var entry = basis ?? new SkillLedgerEntry(string.Empty, 0, skill.Name, outcome.ProjectId);
             _ledger.Record(registry, skill.Path, entry with { RefusedHash = hash, RefusedVersion = outcome.Version, RefusedAsRemoved = false, RefusedRenamedTo = null });
-            outcome = outcome with { Message = StaleMessage(based ?? 0, outcome.Version) };
+            outcome = outcome with { Message = StaleMessage(based ?? 0, outcome.Version, syncedElsewhere: disowned is not null) };
         }
         else if (outcome.Status == SkillPushStatus.Removed && basis is not null)
         {
@@ -709,9 +715,16 @@ internal sealed class SkillPushService : ISkillPushService
 
     private static string Basis(int based) => based == 0 ? "last sync (it never synced a version)" : $"v{based}";
 
-    private static string StaleMessage(int based, int? current) =>
-        $"Changed here and in the registry: the registry has v{current}, but this copy is based on " +
-        (based == 0 ? "no registry version (it was never pulled or pushed here)." : $"v{based}.") + " Nothing was overwritten.";
+    // Base 0 is named by a copy with no sync record of this skill. That is not the same as never synced: a copy pulled while
+    // its folder was linked elsewhere, then backed up as its own project's skill after an unlink, has none of the project it
+    // is in again after a re-link (cli#129). Only the command knows which (syncedElsewhere), so the hook says what is certain.
+    internal static string StaleMessage(int based, int? current, bool syncedElsewhere = false) =>
+        $"Changed here and in the registry: the registry has v{current}, but " + (based != 0
+            ? $"this copy is based on v{based}."
+            : syncedElsewhere
+                ? "this copy last synced as another project's skill, not as this project's, so it is based on none of its versions."
+                : "this machine has no record of this copy being based on any of its versions.") +
+        " Nothing was overwritten.";
 
     // Why a copy of a removed skill was not backed up, and the ways out. Pull follows a rename for an unedited copy; an
     // edited one, or a deleted skill, is the user's call: remove the copy, or restore it on purpose with --force.

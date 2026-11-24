@@ -55,4 +55,51 @@ internal static class LinkedSkillCopy
             : $"this folder's project has its own '{recorded.Name}'";
         return $"Last synced as {from}'s skill, which this folder is no longer in (it was linked there when this copy was pulled), but {reason}, so it now belongs to this folder's project";
     }
+
+    /// <summary>What <see cref="StillOf"/> and <see cref="WhyNotStill"/> settle for a copy left behind by a link or unlink, as one value.</summary>
+    /// <param name="list">The registry's skill list; a failed list gives <see cref="LeftSkillFate.Unknown"/>.</param>
+    /// <remarks>
+    /// A copy of a skill removed from the registry is <see cref="LeftSkillFate.Removed"/> first, as push and remote report it.
+    /// A folder project's own skill of the name comes before an edit here: the next backup is then refused as changed in both
+    /// places rather than filed as a new skill.
+    /// </remarks>
+    public static LeftSkillFate FateOf(SkillLedgerEntry recorded, string? hash, Guid? folderProject, RegistrySkillList list)
+    {
+        if (list.Skills is not { } skills || recorded.Name is not { } name)
+            return LeftSkillFate.Unknown;
+        if (list.RemovalOf(name, recorded.ProjectId, recorded.Version) is not null)
+            return LeftSkillFate.Removed;
+        if (StillOf(recorded, hash, folderProject, skills) is not null)
+            return LeftSkillFate.StillLinked;
+        if (folderProject is not null && skills.Any(s => s.ProjectId == folderProject && string.Equals(s.Name, name, StringComparison.OrdinalIgnoreCase)))
+            return LeftSkillFate.FolderHasOwn;
+        return hash != recorded.ContentHash ? LeftSkillFate.ChangedHere : LeftSkillFate.GoneFromProject;
+    }
 }
+
+/// <summary>What becomes of a project skill copy a link or unlink leaves in its folder (<see cref="LinkedSkillCopy"/>).</summary>
+internal enum LeftSkillFate
+{
+    /// <summary>Unedited, so still the other project's skill: pull keeps updating it from there; an edit would make it the folder's project's.</summary>
+    StillLinked,
+
+    /// <summary>Changed here since it synced, so the folder's project's: the next backup files it there as a new skill.</summary>
+    ChangedHere,
+
+    /// <summary>The folder's project has its own skill of that name, so the copy counts as that one's.</summary>
+    FolderHasOwn,
+
+    /// <summary>The other project no longer has it (and the registry has no memory of removing it), so the next backup files it in the folder's project.</summary>
+    GoneFromProject,
+
+    /// <summary>Deleted or renamed in the registry since it synced: push refuses it and remote says what to do.</summary>
+    Removed,
+
+    /// <summary>The registry could not list its skills, so it was not worked out.</summary>
+    Unknown,
+}
+
+/// <summary>A project skill copy a link or unlink left in its folder, and what becomes of it.</summary>
+/// <param name="Name">The skill's name.</param>
+/// <param name="Fate">What becomes of it.</param>
+internal sealed record SkillLeftBehind(string Name, LeftSkillFate Fate);

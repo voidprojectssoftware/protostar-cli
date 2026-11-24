@@ -58,9 +58,11 @@ internal sealed record HookStatus(string Harness, string SettingsPath, bool Inst
 /// <param name="FailuresSinceSuccess">Failures after <paramref name="LastSuccessAt"/>, or in all the records kept when there was none.</param>
 /// <param name="LastReason">Why the last failure happened.</param>
 /// <param name="LastError">The last failure's message.</param>
+/// <param name="LastNoteAt">When the newest backup with a <see cref="CaptureRecord.Note"/> finished; <c>null</c> for none.</param>
+/// <param name="LastNote">That note.</param>
 internal sealed record BackupStatus(
     CaptureKind Kind, DateTimeOffset? LastSuccessAt, DateTimeOffset? LastFailureAt, int FailuresSinceSuccess,
-    CaptureFailure? LastReason, string? LastError)
+    CaptureFailure? LastReason, string? LastError, DateTimeOffset? LastNoteAt = null, string? LastNote = null)
 {
     /// <summary>Whether the newest backup of this kind failed, so the latest work is not in the registry.</summary>
     public bool Failing => FailuresSinceSuccess > 0;
@@ -237,6 +239,7 @@ internal sealed class SyncStatusService : ISyncStatusService
         var lastSuccess = records.LastOrDefault(r => r.Ok);
         var lastFailure = records.LastOrDefault(r => !r.Ok);
         var since = records.Count(r => !r.Ok && (lastSuccess is null || r.At > lastSuccess.At));
-        return new BackupStatus(kind, lastSuccess?.At, lastFailure?.At, since, lastFailure?.Reason, lastFailure?.Error);
+        var lastNote = records.LastOrDefault(r => r.Note is not null);
+        return new BackupStatus(kind, lastSuccess?.At, lastFailure?.At, since, lastFailure?.Reason, lastFailure?.Error, lastNote?.At, lastNote?.Note);
     }
 }

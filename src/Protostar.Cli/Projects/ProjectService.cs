@@ -1,5 +1,6 @@
 using Protostar.Cli.Agents;
 using Protostar.Cli.Auth;
+using Protostar.Cli.Harness;
 using Protostar.Cli.Registry;
 using Protostar.Cli.Sessions;
 using Protostar.Cli.Skills;
@@ -20,7 +21,8 @@ internal interface IProjectService
     /// <remarks>
     /// The folder's project skills may move with it; this machine's skill ledger records of them then name their new
     /// project (<see cref="MovedSkillLedger.Follow"/>), and so do its project agents' records (<see cref="MovedAgentLedger.Follow"/>).
-    /// The same holds for <see cref="UnlinkAsync"/>.
+    /// The same holds for <see cref="UnlinkAsync"/>. Project skills that synced as the earlier project's and stay behind are
+    /// listed in the result with what becomes of each (<see cref="ProjectLinkResult.LeftSkills"/>).
     /// </remarks>
     Task<ProjectLinkResult> LinkAsync(string? registry, string directory, string project, CancellationToken cancellationToken);
 
@@ -57,7 +59,14 @@ internal sealed record ProjectShowResult(ProjectFacts Facts, Uri? Registry, Remo
 /// <param name="Change">What changed, or <c>null</c> on failure.</param>
 /// <param name="Failure">Why it did not happen.</param>
 /// <param name="Detail">The failure's message.</param>
-internal sealed record ProjectLinkResult(ProjectFacts Facts, Uri? Registry, ProjectLinkChange? Change, ProjectFailure Failure, string? Detail);
+/// <param name="LeftSkills">
+/// The project skills in the folder that synced as the folder's earlier project's and did not move with it, so stay
+/// behind (<see cref="LinkedSkillCopy"/>); <c>null</c> when the project did not change or none were left.
+/// </param>
+/// <param name="LeftFrom">The earlier project's name, when <paramref name="LeftSkills"/> is set.</param>
+internal sealed record ProjectLinkResult(
+    ProjectFacts Facts, Uri? Registry, ProjectLinkChange? Change, ProjectFailure Failure, string? Detail,
+    IReadOnlyList<SkillLeftBehind>? LeftSkills = null, string? LeftFrom = null);
 
 /// <summary>Production <see cref="IProjectService"/>.</summary>
 internal sealed class ProjectService : IProjectService
@@ -69,12 +78,16 @@ internal sealed class ProjectService : IProjectService
     private readonly IMachineIdentity _machine;
     private readonly ISkillLedger _ledger;
     private readonly IAgentLedger _agentLedger;
+    private readonly ISkillService _skills;
+    private readonly IRegistryApi _registry;
 
     public ProjectService(
         IProjectFactsResolver facts, IAccessTokenProvider tokens, IRegistryCapabilities capabilities, IProjectApi api, IMachineIdentity machine, ISkillLedger ledger,
-        IAgentLedger agentLedger)
+        IAgentLedger agentLedger, ISkillService skills, IRegistryApi registry)
     {
         _agentLedger = agentLedger;
+        _skills = skills;
+        _registry = registry;
         _facts = facts;
         _tokens = tokens;
         _capabilities = capabilities;
@@ -126,7 +139,47 @@ internal sealed class ProjectService : IProjectService
             MovedSkillLedger.Follow(_ledger, uri!, changed.Value.MovedSkills, from, to);
         if (changed.Value.MovedAgents.Count > 0 && before.Value?.ProjectId is { } agentsFrom && changed.Value.Project.ProjectId is { } agentsTo)
             MovedAgentLedger.Follow(_agentLedger, uri!, changed.Value.MovedAgents, agentsFrom, agentsTo);
-        return new ProjectLinkResult(facts, uri, changed.Value, ProjectFailure.None, null);
+
+        var left = before.Value is { ProjectId: { } earlier } && earlier != changed.Value.Project.ProjectId
+            ? await LeftBehindAsync(uri!, token!, directory, earlier, changed.Value, cancellationToken)
+            : [];
+        return new ProjectLinkResult(facts, uri, changed.Value, ProjectFailure.None, null,
+            left.Count > 0 ? left : null, left.Count > 0 ? before.Value!.Name : null);
+    }
+
+    // The folder's project skills whose records still name the project it was in: pulled while linked there, they stay
+    // behind (only skills pushed from the folder move, registry#43), and the rule push, pull and remote share settles what
+    // becomes of each. Worked out here so the user hears it when the move happens, not first from a hook nobody sees
+    // (cli#129). Costs one list request, and only when there is such a copy.
+    private async Task<IReadOnlyList<SkillLeftBehind>> LeftBehindAsync(
+        Uri registry, string token, string directory, Guid earlier, ProjectLinkChange change, CancellationToken cancellationToken)
+    {
+        var copies = _skills.Discover(null, null, Path.GetFullPath(directory)).Skills
+            .Where(s => s.Scope == SkillScope.Project && !change.MovedSkills.Contains(s.Name, StringComparer.Ordinal))
+            .Select(s => (Skill: s, Recorded: _ledger.Get(registry, s.Path)))
+            .Where(c => c.Recorded?.ProjectId == earlier)
+            .ToList();
+        if (copies.Count == 0)
+            return [];
+
+        var list = await _registry.ListSkillsAsync(registry, token, cancellationToken);
+        return copies
+            .Select(c => new SkillLeftBehind(c.Skill.Name, LinkedSkillCopy.FateOf(c.Recorded!, HashOrNull(c.Skill.Path), change.Project.ProjectId, list)))
+            .OrderBy(s => s.Name, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
+
+    // An unreadable copy hashes to nothing, which no record matches: it counts as changed, as push would find it.
+    private static string? HashOrNull(string path)
+    {
+        try
+        {
+            return SkillFileReader.Hash(SkillFileReader.Read(path));
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return null;
+        }
     }
 
     private async Task<(Uri? Registry, string? Token, ProjectFailure Failure, string? Detail)> ConnectAsync(string? registry, CancellationToken cancellationToken)
