@@ -49,7 +49,7 @@ public sealed class AgentChangeTests : IDisposable
             .PullAsync(new AgentPullRequest([], null, m.Home, RegistryUrl), CancellationToken.None);
 
     private Task<AgentPushRunResult> Push(Machine m, bool fromHook = false) =>
-        new AgentPushService(Catalog, new Tokens(), _api, new RegistryCapabilities(_meta), m.Ledger, new FakeFacts(), new FakeMachine())
+        new AgentPushService(Catalog, new Tokens(), _api, new RegistryCapabilities(_meta), m.Ledger, new FakeFacts(), new FakeMachine(), _projects)
             .PushAsync(new AgentPushRequest([], null, m.Home, null, RegistryUrl, FromHook: fromHook), CancellationToken.None);
 
     private async Task<AgentTarget> Find(Machine m, string name, string? projectStart = null, bool projectOnly = false)
@@ -91,7 +91,7 @@ public sealed class AgentChangeTests : IDisposable
         Assert.Equal("code-reviewer", Assert.Single(await Listed()).Name);
 
         // A: nothing to push and nothing to pull, by hand or from the hook.
-        Assert.Empty(new AgentPushService(Catalog, new Tokens(), _api, new RegistryCapabilities(_meta), _a.Ledger, new FakeFacts(), new FakeMachine()).Changed(_a.Home, null, RegistryUrl));
+        Assert.Empty(new AgentPushService(Catalog, new Tokens(), _api, new RegistryCapabilities(_meta), _a.Ledger, new FakeFacts(), new FakeMachine(), _projects).Changed(_a.Home, null, RegistryUrl));
         Assert.Equal(AgentPushStatus.Unchanged, Assert.Single((await Push(_a)).Entries).Outcome.Status);
         Assert.Equal(AgentPullStatus.UpToDate, Assert.Single((await Pull(_a)).Entries).Status);
 
@@ -170,7 +170,7 @@ public sealed class AgentChangeTests : IDisposable
         Assert.Equal(FakeAgentApi.File("migrator", "v1"), File.ReadAllText(onA));
         Assert.NotNull(_a.Ledger.Get(Registry, onA)); // kept, so the hook still sees an unchanged copy as backed up
 
-        Assert.Empty(new AgentPushService(Catalog, new Tokens(), _api, new RegistryCapabilities(_meta), _a.Ledger, new FakeFacts(), new FakeMachine()).Changed(_a.Home, null, RegistryUrl));
+        Assert.Empty(new AgentPushService(Catalog, new Tokens(), _api, new RegistryCapabilities(_meta), _a.Ledger, new FakeFacts(), new FakeMachine(), _projects).Changed(_a.Home, null, RegistryUrl));
         Assert.Equal(AgentPushStatus.Removed, Assert.Single((await Push(_a)).Entries).Outcome.Status);
         Assert.Equal(AgentPushStatus.Removed, Assert.Single((await Push(_b, fromHook: true)).Entries).Outcome.Status);
         Assert.Equal(AgentPushStatus.Removed, Assert.Single((await Push(_b)).Entries).Outcome.Status);

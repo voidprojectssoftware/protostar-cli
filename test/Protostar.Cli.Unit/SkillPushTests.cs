@@ -1431,14 +1431,20 @@ public sealed class SkillPushServiceTests : IDisposable
         Assert.Equal(SkillPushStatus.Created, outcome.Status);
         Assert.Equal(Lib, outcome.LeftProject);
         Assert.NotEqual(Lib, outcome.ProjectId);
-        Assert.Equal(0, _projects.Calls);
+        Assert.Equal([0], api.Bases);
+        Assert.Equal(1, _projects.Calls);
         Assert.Equal(0, api.ListCalls);
+
+        // The record may come from a backup made while unlinked, not a pull, so the reason does not claim one (#138).
+        Assert.Contains("which this folder is no longer in (it was in that project when this copy last synced)", outcome.Message);
+        Assert.DoesNotContain("pulled", outcome.Message);
     }
 
     [Fact]
     public async Task A_hook_backup_into_the_project_the_copy_synced_in_left_no_project()
     {
         var copy = Skill("deploy", SkillScope.Project);
+        _projects.ByFolder = true;
         var (sut, _) = Build([copy], Session());
         var first = Assert.Single((await sut.PushAsync(Request(), CancellationToken.None)).Entries).Outcome;
         Edit(copy, "changed here");
@@ -1448,6 +1454,76 @@ public sealed class SkillPushServiceTests : IDisposable
         Assert.Equal(SkillPushStatus.Created, outcome.Status);
         Assert.Equal(first.ProjectId, outcome.ProjectId);
         Assert.Null(outcome.LeftProject);
+    }
+
+    // ----- a base version recorded against another project is never sent to this one (#138) -----
+
+    [Fact]
+    public async Task The_hook_does_not_send_a_base_recorded_against_the_project_the_folder_has_left()
+    {
+        // The repro of #138: backed up as lib's v1 while unlinked, then re-linked to app, which has its own 'shared' at v1.
+        // Sending lib's v1 as the base would let app accept the edit as its v2 on top of a skill it was never based on.
+        var copy = PulledFromLib(App);
+        Edit(copy, "changed here");
+        var (sut, api) = Build([copy], Session(), AtVersion(1));
+        api.Skills.Add(new RegistrySkill("shared", null, 1, "", DateTimeOffset.UnixEpoch, App, "app"));
+
+        var outcome = Assert.Single((await sut.PushAsync(Request() with { FromHook = true }, CancellationToken.None)).Entries).Outcome;
+
+        Assert.Equal(SkillPushStatus.Stale, outcome.Status);
+        Assert.Equal([0], api.Bases);
+        Assert.Contains("this copy last synced as another project's skill, not as this project's", outcome.Message);
+        Assert.Equal(0, api.ListCalls);
+
+        // Cached as any stale refusal is: the same content is not sent, or resolved, again.
+        var again = Assert.Single((await sut.PushAsync(Request() with { FromHook = true }, CancellationToken.None)).Entries).Outcome;
+        Assert.Equal((SkillPushStatus.Stale, true), (again.Status, again.Remembered));
+        Assert.Single(api.Pushed);
+        Assert.Equal(1, _projects.Calls);
+    }
+
+    [Fact]
+    public async Task The_hook_still_sends_its_base_to_the_project_the_record_names()
+    {
+        var copy = PulledFromLib(Lib);
+        Edit(copy, "changed here");
+        var (sut, api) = Build([copy], Session(), AtVersion(1));
+
+        var outcome = Assert.Single((await sut.PushAsync(Request() with { FromHook = true }, CancellationToken.None)).Entries).Outcome;
+
+        Assert.Equal(SkillPushStatus.Created, outcome.Status);
+        Assert.Equal([1], api.Bases);
+    }
+
+    [Fact]
+    public async Task The_hook_asks_nothing_for_an_unchanged_project_skill()
+    {
+        var copy = PulledFromLib(App);
+        var (sut, api) = Build([copy], Session());
+
+        var outcome = Assert.Single((await sut.PushAsync(Request() with { FromHook = true }, CancellationToken.None)).Entries).Outcome;
+
+        Assert.Equal(SkillPushStatus.Unchanged, outcome.Status);
+        Assert.Equal(0, _projects.Calls);
+        Assert.Empty(api.Pushed);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task A_copy_whose_folders_project_cannot_be_told_is_not_sent_with_its_recorded_base(bool fromHook)
+    {
+        var copy = PulledFromLib(App);
+        _projects.HereKnown = false;
+        Edit(copy, "changed here");
+        var (sut, api) = Build([copy], Session(), AtVersion(1));
+
+        var outcome = Assert.Single((await sut.PushAsync(Request() with { FromHook = fromHook }, CancellationToken.None)).Entries).Outcome;
+
+        Assert.Equal(SkillPushStatus.Failed, outcome.Status);
+        Assert.StartsWith("Could not tell which project this folder is in now", outcome.Message);
+        Assert.Empty(api.Pushed);
+        Assert.Equal(1, _ledger.Get(RegistryUri, copy.Path)!.Version);
     }
 
     [Fact]

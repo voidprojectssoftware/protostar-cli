@@ -236,6 +236,16 @@ unchanged skill still costs it no network call; an edited copy of a removed skil
 is refused once, and the hook does not send that same content again. Use `--force`
 to upload every selected skill regardless.
 
+A project skill's base version is a version of the project its copy last synced
+in, so it is only ever sent to that project. When the folder has since moved to
+another project (an unlink, then a link back, say), the copy is pushed as one that
+has no base there: if that project has a skill of the same name, the push is refused
+as [changed here and in the registry](#changed-here-and-in-the-registry), with the
+usual ways out. To check, push and the capture hook ask the registry which project
+the folder is in, once per folder and only for an edited copy they are about to
+upload; when the registry cannot say, that copy is not sent and the next push tries
+again. `agents push` does the same for project agents.
+
 A copy this machine has no sync record of (a restored backup, dotfiles, or a lost
 `~/.protostar`) is recognised too, by content: when its files are byte-identical to a
 version of a skill deleted or renamed in the registry, it is that skill, and it is
