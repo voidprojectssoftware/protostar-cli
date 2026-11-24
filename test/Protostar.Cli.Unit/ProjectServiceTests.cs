@@ -1,3 +1,4 @@
+using Protostar.Cli.Agents;
 using Protostar.Cli.Auth;
 using Protostar.Cli.Harness;
 using Protostar.Cli.Projects;
@@ -32,7 +33,22 @@ public sealed class ProjectServiceTests : IDisposable
 
     private ProjectService Sut() => new(
         _resolver, new FakeTokens(() => _session ?? SessionLookups.Of(_token)), new RegistryCapabilities(_meta), _api, new FakeMachine(), _ledger, _agentLedger,
-        new FakeSkillService(_local), _skills);
+        new FakeSkillService(_local), _skills, new HarnessCatalog([new AgentHarness(_localAgents)]), _agentApi);
+
+    private readonly List<DiscoveredAgent> _localAgents = [];
+    private readonly FakeAgentApi _agentApi = new();
+
+    // A project agent in the folder whose record says it synced at v1 as an agent of project synced; edited when changedHere.
+    private void AgentCopy(string name, Guid synced, bool changedHere = false)
+    {
+        var path = Path.Combine(_folder, ".claude", "agents", name + ".md");
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        File.WriteAllText(path, FakeAgentApi.File(name, "body"));
+        _agentLedger.Record(new Uri(Registry), path, new AgentLedgerEntry(AgentPushService.Hash(File.ReadAllBytes(path)), 1, name, synced));
+        if (changedHere)
+            File.AppendAllText(path, "changed here\n");
+        _localAgents.Add(new DiscoveredAgent { Name = name, Description = "A test agent.", Scope = AgentScope.Project, Path = path, RelativePath = name + ".md", ProjectRoot = _folder });
+    }
 
     // A project skill in the folder whose record says it synced at v1 as a skill of project synced; edited when changedHere.
     private DiscoveredSkill Copy(string name, Guid synced, bool changedHere = false)
@@ -270,6 +286,83 @@ public sealed class ProjectServiceTests : IDisposable
             "`protostar setup`) backs it up there as a new skill.",
             ProjectPresenter.Fate(new SkillLeftBehind("deploy", LeftSkillFate.ChangedHere), "widget", "notes"));
         Assert.Contains("notes has its own 'mine'", ProjectPresenter.Fate(new SkillLeftBehind("mine", LeftSkillFate.FolderHasOwn), "widget", "notes"));
+    }
+
+    // ----- agents an unlink leaves behind (cli#133) -----
+
+    [Fact]
+    public async Task An_unlink_lists_the_agents_it_leaves_behind_and_what_becomes_of_each()
+    {
+        var linked = Guid.NewGuid();
+        var own = Guid.NewGuid();
+        _api.ProjectBefore = linked;
+        _api.Unlinked = new ProjectLinkChange { Outcome = "unlinked", Project = new RemoteProject { ProjectId = own, Name = "notes" }, MovedAgents = ["pushed"] };
+        AgentCopy("deploy", linked, changedHere: true);
+        AgentCopy("lint", linked);
+        AgentCopy("gone", linked);
+        AgentCopy("mine", linked);
+        AgentCopy("pushed", linked);
+        AgentCopy("elsewhere", Guid.NewGuid());
+        foreach (var name in new[] { "deploy", "lint", "gone", "mine" })
+            _agentApi.Publish(linked, name + ".md", name, "body");
+        _agentApi.Publish(own, "mine.md", "mine", "the folder's own");
+        _agentApi.Delete(linked, "gone");
+
+        var result = await Sut().UnlinkAsync(Registry, _folder, CancellationToken.None);
+
+        Assert.Equal("widget", result.LeftFrom);
+        Assert.Null(result.LeftSkills);
+        Assert.Equal(
+            [
+                new AgentLeftBehind("deploy", LeftAgentFate.ChangedHere), new AgentLeftBehind("gone", LeftAgentFate.Removed),
+                new AgentLeftBehind("lint", LeftAgentFate.StillLinked), new AgentLeftBehind("mine", LeftAgentFate.FolderHasOwn),
+            ],
+            result.LeftAgents);
+        Assert.Equal(1, _agentApi.ListCalls);
+    }
+
+    [Fact]
+    public async Task No_agent_left_behind_costs_no_agent_list()
+    {
+        _api.ProjectBefore = Guid.NewGuid();
+        _api.Unlinked = new ProjectLinkChange { Outcome = "unlinked", Project = new RemoteProject { ProjectId = Guid.NewGuid(), Name = "notes" } };
+        AgentCopy("elsewhere", Guid.NewGuid());
+
+        var result = await Sut().UnlinkAsync(Registry, _folder, CancellationToken.None);
+
+        Assert.Null(result.LeftAgents);
+        Assert.Null(result.LeftFrom);
+        Assert.Equal(0, _agentApi.ListCalls);
+    }
+
+    [Fact]
+    public void Each_agent_fate_says_what_happens_next()
+    {
+        Assert.StartsWith("unchanged here, so it stays widget's agent and `protostar agents pull` keeps it up to date from there.",
+            ProjectPresenter.Fate(new AgentLeftBehind("lint", LeftAgentFate.StillLinked), "widget", "notes"));
+        Assert.Equal(
+            "changed here since it was pulled, so it now belongs to notes: the next backup (the capture hook at the end of a session, " +
+            "`protostar agents push` or `protostar setup`) backs it up there as a new agent.",
+            ProjectPresenter.Fate(new AgentLeftBehind("deploy", LeftAgentFate.ChangedHere), "widget", "notes"));
+    }
+
+    // A harness whose only agents are the test's, so no real harness folder is needed.
+    private sealed class AgentHarness(List<DiscoveredAgent> agents) : IHarness, IAgentCapability
+    {
+        public string Id => "fake";
+        public string DisplayName => "Fake";
+
+        public bool TryLocate(string? rootOverride, out HarnessLocation location)
+        {
+            location = new HarnessLocation("/cfg", "/cfg/settings.json");
+            return true;
+        }
+
+        public IReadOnlyList<DiscoveredAgent> DiscoverAgents(HarnessLocation location, string? projectStart) => agents;
+
+        public string GlobalAgentsDirectory(HarnessLocation location) => "/cfg/agents";
+
+        public string ProjectAgentsDirectory(string projectRoot) => Path.Combine(projectRoot, ".claude", "agents");
     }
 
     private sealed class RecordingResolver : IProjectFactsResolver
