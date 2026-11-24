@@ -33,7 +33,11 @@ namespace Protostar.Cli.Skills;
 /// A project skill copy recorded under a project other than its folder's (pulled while the folder was linked elsewhere)
 /// is settled by <see cref="LinkedSkillCopy"/>, the rule <c>skills remote</c> and <c>pull</c> use too: still that project's
 /// skill, so unchanged, or this folder's project's, so pushed there as a new skill (base 0). The command asks the registry
-/// which project the folder is in to decide; the hook does not list or resolve, and keeps taking the ledger's word.
+/// which project the folder is in to decide. A recorded base is a version of the project the record names, so it is sent
+/// only to that project (#138): the hook, which does not list, asks which project the folder is in, once per folder, but
+/// only for an edited copy it is about to upload anyway, and sends a copy recorded under another project with no base.
+/// When the registry cannot say which project the folder is in, such a copy is not sent at all. The hook still costs
+/// nothing for an unchanged skill.
 /// </para>
 /// </remarks>
 internal sealed class SkillPushService : ISkillPushService
@@ -223,6 +227,9 @@ internal sealed class SkillPushService : ISkillPushService
 
         var gone = new HashSet<int>();
         var disowned = new Dictionary<int, string>();
+
+        // Which project each project skill's folder is in, asked at most once per folder.
+        var heres = new Dictionary<string, (bool Known, Guid? Id)>(StringComparer.Ordinal);
         if (mustList)
         {
             var list = await _registry.ListSkillsAsync(registry, session.AccessToken, cancellationToken);
@@ -234,8 +241,6 @@ internal sealed class SkillPushService : ISkillPushService
                 return SkillPushRunResult.Fail(SkillPushRunFailure.ListFailed, list.Error, registry);
             }
 
-            // Which project each project skill's folder is in, asked at most once per folder.
-            var heres = new Dictionary<string, (bool Known, Guid? Id)>(StringComparer.Ordinal);
             if (match)
                 await MatchUnsyncedAsync(registry, session.AccessToken, selected, pending, entries, gone, list, heres, request.Force, cancellationToken);
 
@@ -246,14 +251,19 @@ internal sealed class SkillPushService : ISkillPushService
                 // elsewhere): still that project's skill, or this folder's project's and never synced there (LinkedSkillCopy).
                 // A copy of a skill removed from the registry is reported as such below, like any other.
                 var held = new Dictionary<int, RegistrySkill>();
-                foreach (var (index, _, hash) in pending.Concat(unconfirmed))
+                foreach (var (index, _, hash) in pending.Concat(unconfirmed).ToList())
                 {
                     var skill = selected[index];
                     if (skill.Scope != SkillScope.Project || Synced(registry, skill) is not { ProjectId: not null })
                         continue;
                     var here = await FolderProjectAsync(registry, session.AccessToken, skill, heres, cancellationToken);
                     if (!here.Known)
+                    {
+                        // The record's base is a version of the project it names, which may not be the folder's now (#138).
+                        if (pending.RemoveAll(p => p.Index == index) > 0)
+                            entries[index] = new SkillPushEntry(skill, Unchecked(Synced(registry, skill)!));
                         continue;
+                    }
 
                     // A record of a skill a link moved follows it first (to this folder's project, as a rule), so a move is never
                     // mistaken for a copy left behind by an unlink.
@@ -327,6 +337,12 @@ internal sealed class SkillPushService : ISkillPushService
                     return check;
                 warning = check.Warning;
             }
+
+            // A recorded base is a version of the project the record names. The command settled that above; the hook, which
+            // lists nothing, asks which project the folder is in now, once per folder and only for a copy it is about to send
+            // anyway, so a base from a project the folder has since left is never sent to the one it is in (#138).
+            if (!verify && request.As is null)
+                await SettleHookBasesAsync(registry, session.AccessToken, selected, pending, entries, gone, disowned, heres, cancellationToken);
 
             foreach (var (index, files, hash) in pending.OrderBy(p => p.Index))
             {
@@ -448,6 +464,41 @@ internal sealed class SkillPushService : ISkillPushService
         var resolved = await _projects.ResolveProjectAsync(registry, accessToken, project.MachineId, project.Facts, cancellationToken);
         return asked[folder] = resolved.Ok ? (true, resolved.Value!.ProjectId) : (false, null);
     }
+
+    // The hook's half of LinkedSkillCopy: a pending project skill copy whose record names a project other than its folder's
+    // is pushed with no base (disowned), as the command pushes it, so the registry refuses it as changed in both places when
+    // the folder's project has a skill of that name. Without the skill list the hook cannot tell the other project's name,
+    // and an edited copy (the only kind the hook sends) is never still that project's. When the folder's project cannot be
+    // told, the copy is not sent: its base cannot be shown to be this project's, and the next run asks again.
+    private async Task SettleHookBasesAsync(
+        Uri registry, string accessToken, List<DiscoveredSkill> selected, List<(int Index, IReadOnlyList<SkillUploadFile> Files, string Hash)> pending,
+        SkillPushEntry?[] entries, HashSet<int> gone, Dictionary<int, string> disowned, Dictionary<string, (bool Known, Guid? Id)> heres,
+        CancellationToken cancellationToken)
+    {
+        foreach (var (index, _, hash) in pending.ToList())
+        {
+            var skill = selected[index];
+            if (skill.Scope != SkillScope.Project || gone.Contains(index) || Synced(registry, skill) is not { ProjectId: not null } recorded)
+                continue;
+
+            var here = await FolderProjectAsync(registry, accessToken, skill, heres, cancellationToken);
+            if (!here.Known)
+            {
+                pending.RemoveAll(p => p.Index == index);
+                entries[index] = new SkillPushEntry(skill, Unchecked(recorded));
+            }
+            else if (LinkedSkillCopy.NamesOtherProject(recorded, here.Id))
+            {
+                disowned[index] = LinkedSkillCopy.WhyNotStill(recorded, hash, []);
+            }
+        }
+    }
+
+    // A copy not sent because the registry could not say which project its folder is in, so its recorded base went unchecked.
+    private static SkillPushOutcome Unchecked(SkillLedgerEntry recorded) =>
+        new(SkillPushStatus.Failed, null,
+            $"Could not tell which project this folder is in now, so this copy's base (v{recorded.Version ?? 0}, recorded against the project it last synced in) " +
+            "could not be checked against it. Nothing was sent; the next push tries again.");
 
     // The registry's removal of the skill this copy last synced as, when the copy came from it (RegistrySkillList.RemovalOf).
     private RegistryRemovedSkill? Removal(Uri registry, DiscoveredSkill skill, RegistrySkillList list) =>

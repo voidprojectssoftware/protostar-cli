@@ -53,7 +53,7 @@ internal static class LinkedSkillCopy
         var reason = hash != recorded.ContentHash ? "it has changed here since"
             : owner is null ? "that project no longer has it"
             : $"this folder's project has its own '{recorded.Name}'";
-        return $"Last synced as {from}'s skill, which this folder is no longer in (it was linked there when this copy was pulled), but {reason}, so it now belongs to this folder's project";
+        return $"Last synced as {from}'s skill, which this folder is no longer in (it was in that project when this copy last synced), but {reason}, so it now belongs to this folder's project";
     }
 
     /// <summary>What <see cref="StillOf"/> and <see cref="WhyNotStill"/> settle for a copy left behind by a link or unlink, as one value.</summary>
