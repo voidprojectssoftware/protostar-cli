@@ -5,7 +5,7 @@ namespace Protostar.Cli.Agents;
 
 /// <summary>Backs up local custom agents to the registry: <c>protostar agents push</c> and the capture hook's background push.</summary>
 /// <remarks>
-/// The agents' copy of <see cref="Skills.ISkillPushService"/> (ADR 0003), without <c>--as</c>. Returns data only; <see cref="AgentPushPresenter"/> renders it.
+/// The agents' copy of <see cref="Skills.ISkillPushService"/> (ADR 0003). Returns data only; <see cref="AgentPushPresenter"/> renders it.
 /// </remarks>
 internal interface IAgentPushService
 {
@@ -50,8 +50,14 @@ internal interface IAgentPushService
 /// refused is reported from the ledger without asking again, and a file without a name or description is left out (the
 /// command reports it).
 /// </param>
+/// <param name="As">
+/// Push the one selected agent as a new registry agent of this name (keep both): its <c>name</c> line is set to it, and the
+/// file is moved to <c>&lt;As&gt;.md</c> beside it, here and as the path the registry keeps, so the original agent can be
+/// pulled back to the path it had.
+/// </param>
 internal sealed record AgentPushRequest(
-    IReadOnlyList<string> Names, string? HarnessId, string? HarnessHome, string? ProjectStart, string? Registry, bool Force = false, bool FromHook = false);
+    IReadOnlyList<string> Names, string? HarnessId, string? HarnessHome, string? ProjectStart, string? Registry, bool Force = false, bool FromHook = false,
+    string? As = null);
 
 /// <summary>Why a push run stopped before uploading anything.</summary>
 internal enum AgentPushRunFailure
@@ -82,6 +88,12 @@ internal enum AgentPushRunFailure
 
     /// <summary>The registry speaks another API major or does not support agents; the detail says which.</summary>
     Incompatible,
+
+    /// <summary>
+    /// <c>--as</c> needs exactly one local agent to push under a new name that nothing in its scope, here or in the registry,
+    /// already answers to, and a free file name for it; see the detail.
+    /// </summary>
+    InvalidAs,
 
     /// <summary>The registry would not list the agents needed to confirm what the ledger says; see the detail.</summary>
     ListFailed,

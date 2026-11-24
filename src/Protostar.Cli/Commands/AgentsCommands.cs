@@ -53,6 +53,10 @@ internal sealed class AgentsPushCommand : AsyncCommand<AgentsPushCommand.Setting
         [Description("Upload even if unchanged since the last backup, replace the registry's version when it changed elsewhere since this copy was synced (keep mine), and restore an agent deleted or renamed in the registry.")]
         public bool Force { get; init; }
 
+        [CommandOption("--as <NEW-NAME>")]
+        [Description("Push the one named agent as a new registry agent with this name, and move the file here to NEW-NAME.md to match (keep both).")]
+        public string? As { get; init; }
+
         [CommandOption("--from-hook", IsHidden = true)]
         [Description("Run as the capture hook's background push: detached, ledger trusted, output to capture.log.")]
         public bool FromHook { get; init; }
@@ -67,7 +71,8 @@ internal sealed class AgentsPushCommand : AsyncCommand<AgentsPushCommand.Setting
             settings.PersonalOnly ? null : settings.Project ?? Directory.GetCurrentDirectory(),
             settings.Registry,
             settings.Force && !settings.FromHook,
-            settings.FromHook);
+            settings.FromHook,
+            settings.FromHook ? null : settings.As);
 
         if (settings.FromHook)
         {

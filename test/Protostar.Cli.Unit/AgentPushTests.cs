@@ -396,5 +396,7 @@ public sealed class AgentPushTests : IDisposable
         public void Record(Uri registry, string filePath, AgentLedgerEntry entry) => _entries[filePath] = entry;
 
         public IReadOnlyDictionary<string, AgentLedgerEntry> Entries(Uri registry) => _entries;
+
+        public void Forget(Uri registry, string filePath) => _entries.Remove(filePath);
     }
 }

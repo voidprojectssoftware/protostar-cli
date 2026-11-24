@@ -170,9 +170,14 @@ internal enum AgentPushStatus
 /// <param name="ProjectName">That project's display name.</param>
 /// <param name="Remembered">True when a refusal was answered from the ledger without asking the registry again.</param>
 /// <param name="RenamedTo">For a removal by rename, the agent's name now.</param>
+/// <param name="LeftProject">
+/// For a project agent the registry filed under <paramref name="ProjectId"/> although its copy last synced as an agent of
+/// another project, that other project: the copy was pulled while its folder was linked there, and changed after an unlink.
+/// <c>null</c> otherwise.
+/// </param>
 internal sealed record AgentPushOutcome(
     AgentPushStatus Status, int? Version, string? Message, Guid? ProjectId = null, string? ProjectName = null, bool Remembered = false,
-    string? RenamedTo = null)
+    string? RenamedTo = null, Guid? LeftProject = null)
 {
     /// <summary>True when the agent is now safely in the registry.</summary>
     public bool Succeeded => Status is AgentPushStatus.Created or AgentPushStatus.Unchanged;

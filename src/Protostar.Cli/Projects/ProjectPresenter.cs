@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Protostar.Cli.Agents;
 using Protostar.Cli.Registry;
 using Protostar.Cli.Skills;
 using Spectre.Console;
@@ -75,6 +76,8 @@ internal static class ProjectPresenter
 
         if (result.LeftSkills is { } left)
             RenderLeftSkills(left, result.LeftFrom ?? "the earlier project", change.Project.Name);
+        if (result.LeftAgents is { } leftAgents)
+            RenderLeftAgents(leftAgents, result.LeftFrom ?? "the earlier project", change.Project.Name);
         return 0;
     }
 
@@ -104,6 +107,35 @@ internal static class ProjectPresenter
             LeftSkillFate.GoneFromProject => $"{from} no longer has it, so it now belongs to {here}: {next} backs it up there as a new skill.",
             LeftSkillFate.Removed => "deleted or renamed in the registry since it was pulled, so it is not backed up. `protostar skills remote` says what to do with it.",
             _ => "the registry did not list its skills, so this could not be worked out. `protostar skills remote` says what becomes of it.",
+        };
+    }
+
+    // The project agents that stay in the folder as the earlier project's, and what becomes of each: the skills' list, for agents.
+    private static void RenderLeftAgents(IReadOnlyList<AgentLeftBehind> left, string from, string here)
+    {
+        var (agents, stay, they) = left.Count == 1 ? ("1 agent", "stays", "It") : ($"{left.Count} agents", "stay", "They");
+        AnsiConsole.MarkupLine($"{agents} of project [bold]{Markup.Escape(from)}[/] {stay} in this folder. " +
+            $"{they} synced here as that project's and did not move with the folder:");
+        var grid = Grid();
+        foreach (var agent in left)
+            grid.AddRow($"  [bold]{Markup.Escape(agent.Name)}[/]", Markup.Escape(Fate(agent, from, here)));
+        AnsiConsole.Write(grid);
+    }
+
+    internal static string Fate(AgentLeftBehind agent, string from, string here)
+    {
+        const string next = "the next backup (the capture hook at the end of a session, `protostar agents push` or `protostar setup`)";
+        return agent.Fate switch
+        {
+            LeftAgentFate.StillLinked =>
+                $"unchanged here, so it stays {from}'s agent and `protostar agents pull` keeps it up to date from there. " +
+                $"If you change it here, {next} backs it up as a new agent of {here} instead.",
+            LeftAgentFate.ChangedHere => $"changed here since it was pulled, so it now belongs to {here}: {next} backs it up there as a new agent.",
+            LeftAgentFate.FolderHasOwn =>
+                $"{here} has its own '{agent.Name}', and this copy now counts as a copy of that one. Run `protostar agents remote` to compare them.",
+            LeftAgentFate.GoneFromProject => $"{from} no longer has it, so it now belongs to {here}: {next} backs it up there as a new agent.",
+            LeftAgentFate.Removed => "deleted or renamed in the registry since it was pulled, so it is not backed up. `protostar agents remote` says what to do with it.",
+            _ => "the registry did not list its agents, so this could not be worked out. `protostar agents remote` says what becomes of it.",
         };
     }
 

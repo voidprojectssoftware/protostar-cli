@@ -22,7 +22,8 @@ internal interface IProjectService
     /// The folder's project skills may move with it; this machine's skill ledger records of them then name their new
     /// project (<see cref="MovedSkillLedger.Follow"/>), and so do its project agents' records (<see cref="MovedAgentLedger.Follow"/>).
     /// The same holds for <see cref="UnlinkAsync"/>. Project skills that synced as the earlier project's and stay behind are
-    /// listed in the result with what becomes of each (<see cref="ProjectLinkResult.LeftSkills"/>).
+    /// listed in the result with what becomes of each (<see cref="ProjectLinkResult.LeftSkills"/>), and so are project agents
+    /// (<see cref="ProjectLinkResult.LeftAgents"/>).
     /// </remarks>
     Task<ProjectLinkResult> LinkAsync(string? registry, string directory, string project, CancellationToken cancellationToken);
 
@@ -63,10 +64,14 @@ internal sealed record ProjectShowResult(ProjectFacts Facts, Uri? Registry, Remo
 /// The project skills in the folder that synced as the folder's earlier project's and did not move with it, so stay
 /// behind (<see cref="LinkedSkillCopy"/>); <c>null</c> when the project did not change or none were left.
 /// </param>
-/// <param name="LeftFrom">The earlier project's name, when <paramref name="LeftSkills"/> is set.</param>
+/// <param name="LeftAgents">
+/// The project agents in the folder that synced as the folder's earlier project's and did not move with it, so stay
+/// behind (<see cref="LinkedAgentCopy"/>); <c>null</c> when the project did not change or none were left.
+/// </param>
+/// <param name="LeftFrom">The earlier project's name, when <paramref name="LeftSkills"/> or <paramref name="LeftAgents"/> is set.</param>
 internal sealed record ProjectLinkResult(
     ProjectFacts Facts, Uri? Registry, ProjectLinkChange? Change, ProjectFailure Failure, string? Detail,
-    IReadOnlyList<SkillLeftBehind>? LeftSkills = null, string? LeftFrom = null);
+    IReadOnlyList<SkillLeftBehind>? LeftSkills = null, string? LeftFrom = null, IReadOnlyList<AgentLeftBehind>? LeftAgents = null);
 
 /// <summary>Production <see cref="IProjectService"/>.</summary>
 internal sealed class ProjectService : IProjectService
@@ -80,11 +85,16 @@ internal sealed class ProjectService : IProjectService
     private readonly IAgentLedger _agentLedger;
     private readonly ISkillService _skills;
     private readonly IRegistryApi _registry;
+    private readonly IHarnessCatalog _catalog;
+    private readonly IAgentApi _agents;
 
     public ProjectService(
         IProjectFactsResolver facts, IAccessTokenProvider tokens, IRegistryCapabilities capabilities, IProjectApi api, IMachineIdentity machine, ISkillLedger ledger,
-        IAgentLedger agentLedger, ISkillService skills, IRegistryApi registry)
+        IAgentLedger agentLedger, ISkillService skills, IRegistryApi registry,
+        IHarnessCatalog catalog, IAgentApi agents)
     {
+        _catalog = catalog;
+        _agents = agents;
         _agentLedger = agentLedger;
         _skills = skills;
         _registry = registry;
@@ -143,8 +153,11 @@ internal sealed class ProjectService : IProjectService
         var left = before.Value is { ProjectId: { } earlier } && earlier != changed.Value.Project.ProjectId
             ? await LeftBehindAsync(uri!, token!, directory, earlier, changed.Value, cancellationToken)
             : [];
+        var leftAgents = before.Value is { ProjectId: { } agentsEarlier } && agentsEarlier != changed.Value.Project.ProjectId
+            ? await AgentsLeftBehindAsync(uri!, token!, directory, agentsEarlier, changed.Value, cancellationToken)
+            : [];
         return new ProjectLinkResult(facts, uri, changed.Value, ProjectFailure.None, null,
-            left.Count > 0 ? left : null, left.Count > 0 ? before.Value!.Name : null);
+            left.Count > 0 ? left : null, left.Count + leftAgents.Count > 0 ? before.Value!.Name : null, leftAgents.Count > 0 ? leftAgents : null);
     }
 
     // The folder's project skills whose records still name the project it was in: pulled while linked there, they stay
@@ -167,6 +180,41 @@ internal sealed class ProjectService : IProjectService
             .Select(c => new SkillLeftBehind(c.Skill.Name, LinkedSkillCopy.FateOf(c.Recorded!, HashOrNull(c.Skill.Path), change.Project.ProjectId, list)))
             .OrderBy(s => s.Name, StringComparer.OrdinalIgnoreCase)
             .ToList();
+    }
+
+    // The folder's project agents whose records still name the project it was in, settled by the agents' copy of the rule
+    // (LinkedAgentCopy), as LeftBehindAsync does for skills. Costs one list request, and only when there is such a copy.
+    private async Task<IReadOnlyList<AgentLeftBehind>> AgentsLeftBehindAsync(
+        Uri registry, string token, string directory, Guid earlier, ProjectLinkChange change, CancellationToken cancellationToken)
+    {
+        var start = Path.GetFullPath(directory);
+        var copies = _catalog.All
+            .Where(h => h is IAgentCapability)
+            .SelectMany(h => h.TryLocate(null, out var location) ? ((IAgentCapability)h).DiscoverAgents(location, start) : [])
+            .Where(a => a.Scope == AgentScope.Project && a.Name is { } name && !change.MovedAgents.Contains(name, StringComparer.Ordinal))
+            .Select(a => (Agent: a, Recorded: _agentLedger.Get(registry, a.Path)))
+            .Where(c => c.Recorded is { ContentHash.Length: > 0 } recorded && recorded.ProjectId == earlier)
+            .ToList();
+        if (copies.Count == 0)
+            return [];
+
+        var list = await _agents.ListAgentsAsync(registry, token, cancellationToken);
+        return copies
+            .Select(c => new AgentLeftBehind(c.Agent.Name!, LinkedAgentCopy.FateOf(c.Recorded!, AgentHashOrNull(c.Agent.Path), change.Project.ProjectId, list)))
+            .OrderBy(a => a.Name, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
+
+    private static string? AgentHashOrNull(string path)
+    {
+        try
+        {
+            return AgentPushService.Hash(File.ReadAllBytes(path));
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return null;
+        }
     }
 
     // An unreadable copy hashes to nothing, which no record matches: it counts as changed, as push would find it.
