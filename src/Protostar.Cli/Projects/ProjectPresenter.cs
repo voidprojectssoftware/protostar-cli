@@ -81,8 +81,9 @@ internal static class ProjectPresenter
     // The project skills that stay in the folder as the earlier project's, and what becomes of each (cli#129).
     private static void RenderLeftSkills(IReadOnlyList<SkillLeftBehind> left, string from, string here)
     {
-        var skills = left.Count == 1 ? "1 skill" : $"{left.Count} skills";
-        AnsiConsole.MarkupLine($"{skills} of project [bold]{Markup.Escape(from)}[/] stay in this folder. They were pulled from there and only skills pushed from here move with it:");
+        var (skills, stay, they) = left.Count == 1 ? ("1 skill", "stays", "It") : ($"{left.Count} skills", "stay", "They");
+        AnsiConsole.MarkupLine($"{skills} of project [bold]{Markup.Escape(from)}[/] {stay} in this folder. " +
+            $"{they} synced here as that project's and did not move with the folder:");
         var grid = Grid();
         foreach (var skill in left)
             grid.AddRow($"  [bold]{Markup.Escape(skill.Name)}[/]", Markup.Escape(Fate(skill, from, here)));
@@ -99,7 +100,7 @@ internal static class ProjectPresenter
                 $"If you change it here, {next} backs it up as a new skill of {here} instead.",
             LeftSkillFate.ChangedHere => $"changed here since it was pulled, so it now belongs to {here}: {next} backs it up there as a new skill.",
             LeftSkillFate.FolderHasOwn =>
-                $"{here} has its own '{skill.Name}', so this copy now counts as that one's. `protostar skills remote` compares them before anything is backed up.",
+                $"{here} has its own '{skill.Name}', and this copy now counts as a copy of that one. Run `protostar skills remote` to compare them.",
             LeftSkillFate.GoneFromProject => $"{from} no longer has it, so it now belongs to {here}: {next} backs it up there as a new skill.",
             LeftSkillFate.Removed => "deleted or renamed in the registry since it was pulled, so it is not backed up. `protostar skills remote` says what to do with it.",
             _ => "the registry did not list its skills, so this could not be worked out. `protostar skills remote` says what becomes of it.",

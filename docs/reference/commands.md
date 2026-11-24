@@ -53,7 +53,9 @@ See [Set up a machine](../get-started/set-up-a-machine.md).
 Answer "is this machine syncing?" in one place: the registry in use and where it
 came from, whether you are signed in, whether each harness has the capture hooks,
 when the hooks last backed up skills, sessions and memory in the background, the
-failures since then with the newest error, sessions whose backup failed and wait
+failures since then with the newest error, the newest note about a backup that
+worked but needs telling (such as a skill filed in a different project after
+`project unlink`), sessions whose backup failed and wait
 for a retry, and the session bytes not backed up yet.
 
 It works offline. Everything comes from this machine except one quick check that
@@ -92,7 +94,7 @@ With `--json`, standard output holds one object: `ok` (boolean), `registry`,
 (`state`: `signedOut`, `signedIn`, `notChecked`, `rejected`, `unreachable`; and
 `login`), `hooks` (`harness`, `settingsPath`, `installed`, `error`), `backups` (one
 per `kind`: `skills`, `sessions`, `memory`, with `failing`, `lastSuccessAt`,
-`lastFailureAt`, `failuresSinceSuccess`, `lastReason`, `lastError`),
+`lastFailureAt`, `failuresSinceSuccess`, `lastReason`, `lastError`, `lastNoteAt`, `lastNote`),
 `failedSessions` (`id`, `harness`, `path`, `failedAt`), `pending` (`bytes`,
 `transcripts`) and `problems`, the stable reasons for a non-zero exit:
 `notSignedIn`, `sessionRejected`, `registryUnreachable`, `noHarness`,
@@ -1124,6 +1126,32 @@ project no longer has it, or this folder's own project has a skill of that name)
 it belongs to this folder's project instead: `skills remote` shows it as only here,
 and `skills push` backs it up as a new skill of this folder's project.
 
+`unlink` (and a `link` that changes the folder's project) lists these skills and
+what becomes of each, in place of **Skills moved** when none moved:
+
+```console
+$ protostar project unlink
+Unlinked this folder. It now belongs to notes.
+Folder         /home/alice/notes
+Project        notes
+...
+2 skills of project github.com/example/demo-app stay in this folder. They synced here as that project's and did not move with the folder:
+  deploy  unchanged here, so it stays github.com/example/demo-app's skill and
+          `protostar skills pull` keeps it up to date from there. If you change
+          it here, the next backup (the capture hook, `protostar skills push` or
+          `protostar setup`) backs it up as a new skill of notes instead.
+  lint    changed here since it was pulled, so it now belongs to notes: the next
+          backup (the capture hook, `protostar skills push` or `protostar
+          setup`) backs it up there as a new skill.
+```
+
+Other cases say that this folder's project has its own skill of that name (run
+`skills remote` to compare them), that the linked project no longer has it,
+or that it was deleted or renamed in the registry. Only skills are listed; agents
+follow their own rule (cli#133). When the capture hook later backs such a copy up
+into this folder's project, its line names the project, and the line is also
+written to `~/.protostar/capture.log` and shown as a note by `protostar status`.
+
 ## `protostar auth`
 
 Authenticate to the protostar registry.
@@ -1185,15 +1213,19 @@ The hook never blocks or fails your session: it gives up after 15 seconds,
 counted from when it starts reading the event from the harness, and always exits
 `0`. A harness that never finishes sending the event gets a logged line saying so
 and nothing backed up. It writes one line to the session transcript, and problems you
-may need to act on (not signed in, registry unreachable, skill refused) are also
-appended to `~/.protostar/capture.log`, by the hook or by the background push.
+may need to act on (not signed in, registry unreachable, skill refused, a skill
+backed up into a different project than it last synced in) are also appended to
+`~/.protostar/capture.log`, by the hook or by the background push.
 
 Each skill backup and each background push also appends one JSON line to
 `~/.protostar/capture-records.jsonl`, which [`status`](#protostar-status) reads:
 when it finished (`at`), the `kind` (`skills`, `sessions`, `memory`), whether it
 worked (`ok`), the `registry`, how many `items` it handled, the session `bytes`
 sent, and for a failure the `reason` (`notSignedIn`, `sessionExpired`,
-`registryUnreachable`, `refused`, `other`) and the `error` message. Records hold no
+`registryUnreachable`, `refused`, `other`) and the `error` message. A skill backup
+that worked but filed a copy in a project other than the one it last synced in
+(after a `project unlink`) also carries a `note`, the hook's line, which `status`
+shows under the **Skills** row. Records hold no
 transcript or memory content. A run that tried nothing (a throttled `Stop`, a
 project with no memory, an ignored event) writes none. Writing a record is best
 effort and takes no lock; at 256 KiB the file is renamed to
